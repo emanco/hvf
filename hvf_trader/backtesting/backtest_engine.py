@@ -285,10 +285,11 @@ class BacktestEngine:
             for j in sorted(triggered, reverse=True):
                 armed_patterns.pop(j)
 
-            # ─── Scan for new patterns (every bar) ───────────────────────
+            # ─── Scan for new patterns (every 4 bars to limit CPU) ────────
+            if bar_idx % 4 != 0:
+                continue
             window_start = max(0, bar_idx - 499)
-            window_df = df_1h.iloc[window_start:bar_idx + 1].copy()
-            window_df = window_df.reset_index(drop=True)
+            window_df = df_1h.iloc[window_start:bar_idx + 1].reset_index(drop=True)
 
             if len(window_df) >= 100:
                 all_candidates: list[dict] = []
@@ -358,8 +359,9 @@ class BacktestEngine:
                                 "score": p.score, "pat_key": pat_key,
                             })
 
-                # London Sweep Detection
-                if "LONDON_SWEEP" in self.enabled_patterns:
+                # London Sweep Detection (only during London hours 6-11 UTC)
+                bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 0
+                if "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
                     ls_pats = detect_london_sweep_patterns(window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in ls_pats:
                         pat_key = (round(p.entry_price, 5), round(p.asian_high, 5), p.direction, "LONDON_SWEEP")

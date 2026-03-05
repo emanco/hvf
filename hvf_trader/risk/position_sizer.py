@@ -95,7 +95,7 @@ def calculate_lot_size(
     # Floor to nearest 0.01 (micro-lot precision)
     lot_size = math.floor(raw_lot_size * 100) / 100.0
 
-    logger.info(
+    logger.debug(
         "Position sizing: symbol=%s equity=%.2f risk_pct=%.2f%% "
         "stop_distance=%.5f stop_pips=%.1f pip_value_per_lot=%.4f "
         "risk_amount=%.2f raw_lots=%.4f floored_lots=%.2f",

@@ -151,20 +151,10 @@ def main():
             df_1h, df_4h, symbol, 500.0, ALL_PATTERNS, "All Patterns"
         )
 
-        # ─── Walk-forward: All patterns ─────────────────────────────
-        logger.info(f"\nRunning walk-forward for {symbol} (all patterns)...")
-        wf_result = run_walk_forward(
-            df_1h, symbol, df_4h,
-            train_months=6,
-            test_months=2,
-            starting_equity=500.0,
-            enabled_patterns=ALL_PATTERNS,
-        )
-
+        # ─── Walk-forward: skipped for now (run separately) ─────────
         results[symbol] = {
             "hvf_only": hvf_result,
             "all_patterns": all_result,
-            "walk_forward": wf_result,
         }
 
     mt5.shutdown()
@@ -177,7 +167,6 @@ def main():
     for symbol, res in results.items():
         hvf = res["hvf_only"]
         all_p = res["all_patterns"]
-        wf = res["walk_forward"]
 
         logger.info(f"\n{symbol}:")
         logger.info(f"  HVF-only:      {hvf.total_trades} trades, "
@@ -188,10 +177,6 @@ def main():
                      f"WR={all_p.win_rate:.0f}%, PF={all_p.profit_factor:.2f}, "
                      f"PnL={all_p.total_pnl_pips:+.1f} pips, "
                      f"MaxDD={all_p.max_drawdown_pct:.1f}%")
-        logger.info(f"  Walk-Forward:  {wf.total_oos_trades} OOS trades, "
-                     f"WR={wf.oos_win_rate:.0f}%, PF={wf.oos_profit_factor:.2f}, "
-                     f"Positive windows={wf.oos_positive_windows}/{len(wf.windows)} "
-                     f"({wf.oos_positive_window_pct:.0f}%)")
 
         # Improvement delta
         if hvf.total_trades > 0:
@@ -214,7 +199,6 @@ def main():
             for symbol, res in results.items():
                 hvf = res["hvf_only"]
                 all_p = res["all_patterns"]
-                wf = res["walk_forward"]
                 emoji = "\u2705" if all_p.profit_factor > 1.0 else "\u274C"
 
                 lines.append(f"<b>{symbol}</b>")
@@ -230,10 +214,7 @@ def main():
                 for t in all_p.trades:
                     by_type[t.pattern_type] = by_type.get(t.pattern_type, 0) + 1
                 breakdown = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
-                lines.append(f"  Breakdown: {breakdown}")
-
-                lines.append(f"  WF: {wf.oos_positive_windows}/{len(wf.windows)} "
-                             f"positive OOS windows\n")
+                lines.append(f"  Breakdown: {breakdown}\n")
 
             loop.run_until_complete(bot.send_message(
                 chat_id=chat_id,

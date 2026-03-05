@@ -173,7 +173,7 @@ def _compute_klos_score(
         key_levels_4h, key_levels_d1, current_atr,
     )
     if obstruction:
-        logger.info("KLOS %s %s: %s", pattern.symbol, pattern.direction, obstruction)
+        logger.debug("KLOS %s %s: %s", pattern.symbol, pattern.direction, obstruction)
 
     return confluence + rejection
 

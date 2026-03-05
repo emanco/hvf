@@ -77,7 +77,7 @@ def prioritize_signals(
             symbol_counts[sig.symbol] = count + 1
 
     if selected:
-        logger.info(
+        logger.debug(
             "Prioritized %d signal(s) from %d candidates: %s",
             len(selected),
             len(signals),
