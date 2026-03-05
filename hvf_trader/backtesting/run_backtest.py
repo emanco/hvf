@@ -63,7 +63,7 @@ def main():
 
     results = {}
 
-    for symbol in ["EURUSD", "GBPUSD"]:
+    for symbol in ["EURUSD", "GBPUSD", "AUDUSD", "USDJPY"]:
         logger.info(f"\n{'='*60}")
         logger.info(f"BACKTEST: {symbol}")
         logger.info(f"{'='*60}")

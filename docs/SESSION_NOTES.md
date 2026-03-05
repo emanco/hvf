@@ -4,7 +4,7 @@
 - HVF (Hunt Volatility Funnel) automated forex trading bot
 - Deployed to VPS: 198.244.245.3 (SSH alias: `hvf-vps`, Windows Server, PowerShell)
 - MT5 demo: IC Markets, login 52774919 (runs headless via Python, no GUI needed)
-- Starting capital: £500, instruments: EURUSD + GBPUSD
+- Starting capital: £500, instruments: EURUSD only (GBPUSD at ~£750, AUDUSD at £1K+, USDJPY at £3K+)
 - Tech: Python, MetaTrader5 lib, SQLAlchemy, Telegram alerts
 - Repo: https://github.com/emanco/hvf.git (branch: main)
 
@@ -81,11 +81,13 @@ MAX_CONCURRENT_TRADES = 2
 ```
 
 ## Known Limitations & Open Issues
-1. **Trade frequency improved but still low**: 17 trades across 2+ years (EURUSD 11, GBPUSD 6)
+1. **Trade frequency still low**: 18 trades across 2+ years (EURUSD 11, GBPUSD 6, AUDUSD 1, USDJPY 0)
 2. **GBPUSD net negative**: PF 0.76, -10.2 pips. Many patterns blocked by position sizing (lots=0.00)
 3. **Walk-forward weak**: EURUSD 7 OOS trades/57% WR/PF 0.48, GBPUSD 3 OOS trades/33% WR/PF 0.12
 4. **All trades LONG**: no SHORT patterns detected in 2+ years of data
-5. **Demo validation not started**: need the bot running live on demo to accumulate 20+ trades
+5. **USDJPY untradeable at £500**: pip_value_per_lot=1000, all lot sizes floor to 0.00
+6. **AUDUSD too infrequent**: only 1 trade in available history (~1 year of data)
+7. **Demo validation not started**: need the bot running live on demo to accumulate 20+ trades
 
 ## What Was Tried During Debugging & Tuning
 - diagnose1-6.py scripts (now deleted) traced the pipeline stage by stage
@@ -98,10 +100,14 @@ MAX_CONCURRENT_TRADES = 2
   - Marginal kills were 0 for all except stale — filters overlap heavily
   - Led to 3 relaxations: convergence 1.5→1.2, EMA200 to scorer, RRR 1.5→1.0
   - Result: trade count tripled (5→17), EURUSD PF 3.16
+- **4-pair diversification test** (Run 3): tested EURUSD, GBPUSD, AUDUSD, USDJPY
+  - AUDUSD: 1 trade (+25.4 pips), too infrequent to matter
+  - USDJPY: 0 trades, all lots floor to 0.00 at £500 (pip_value_per_lot=1000)
+  - Conclusion: stick with EURUSD-only at £500, scale instruments with account growth
 
 ## Potential Next Steps (not yet requested)
 - **Visual validation**: plot detected patterns on candlestick charts to verify quality
 - **Start demo run**: launch main.py on VPS to accumulate live demo trades
 - **Unit tests**: pytest suite for zigzag, detector, scorer, position sizer
-- **Further frequency improvements**: lower zigzag multiplier (try 1.5), add H4 timeframe, add AUDUSD/USDJPY
+- **Further frequency improvements**: lower zigzag multiplier (try 1.5), add H4 timeframe
 - **Investigate GBPUSD losses**: why PF < 1? Position sizing or pattern quality?
