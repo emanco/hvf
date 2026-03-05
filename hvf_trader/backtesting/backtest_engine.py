@@ -166,6 +166,8 @@ class BacktestEngine:
         highest_since_partial: dict[int, float] = {}  # trade_idx -> price
         lowest_since_partial: dict[int, float] = {}
         trade_counter = 0
+        # Track triggered patterns to prevent re-entry on the same pattern
+        triggered_pattern_keys: set[tuple] = set()
 
         # Minimum lookback for indicators and zigzag
         min_lookback = 250
@@ -212,8 +214,20 @@ class BacktestEngine:
                         confirmed = True
 
                 if confirmed and len(open_trades) < config.MAX_CONCURRENT_TRADES:
+                    # Sanity check: don't enter if price already past target_1
+                    actual_entry = bar["close"]
+                    if pattern.direction == "LONG" and actual_entry >= pattern.target_1:
+                        triggered.append(j)
+                        continue
+                    if pattern.direction == "SHORT" and actual_entry <= pattern.target_1:
+                        triggered.append(j)
+                        continue
+
                     # Position sizing
-                    stop_dist = abs(pattern.entry_price - pattern.stop_loss)
+                    stop_dist = abs(actual_entry - pattern.stop_loss)
+                    if stop_dist <= 0:
+                        triggered.append(j)
+                        continue
                     lot_size = calculate_lot_size(
                         self.equity, self.risk_pct, stop_dist, symbol
                     )
@@ -223,7 +237,7 @@ class BacktestEngine:
                         trade = BacktestTrade(
                             symbol=symbol,
                             direction=pattern.direction,
-                            entry_price=bar["close"],  # Use actual close, not theoretical
+                            entry_price=actual_entry,
                             stop_loss=pattern.stop_loss,
                             target_1=pattern.target_1,
                             target_2=pattern.target_2,
@@ -235,6 +249,13 @@ class BacktestEngine:
                         )
                         open_trades.append(trade)
                         trade_counter += 1
+                        # Record this pattern as triggered so it's not re-armed
+                        pat_key = (
+                            round(pattern.h3.price, 5),
+                            round(pattern.l3.price, 5),
+                            pattern.direction,
+                        )
+                        triggered_pattern_keys.add(pat_key)
                         triggered.append(j)
 
             for j in sorted(triggered, reverse=True):
@@ -260,7 +281,17 @@ class BacktestEngine:
                     )
 
                     for pattern in patterns:
-                        # Check if this pattern is already armed (by pivot prices)
+                        pat_key = (
+                            round(pattern.h3.price, 5),
+                            round(pattern.l3.price, 5),
+                            pattern.direction,
+                        )
+
+                        # Skip if this pattern already triggered a trade
+                        if pat_key in triggered_pattern_keys:
+                            continue
+
+                        # Skip if already armed
                         already_armed = any(
                             abs(a["pattern"].h3.price - pattern.h3.price) < pip_value
                             and abs(a["pattern"].l3.price - pattern.l3.price) < pip_value

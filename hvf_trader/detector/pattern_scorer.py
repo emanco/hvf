@@ -84,7 +84,8 @@ def score_pattern(
     score += atr_score
 
     # ─── Component 4: RRR Quality (0-20) ─────────────────────────────
-    rrr_score = min(20.0, (pattern.rrr / 10.0) * 20.0)
+    # Full marks at RRR 4:1 (realistic for HVF patterns)
+    rrr_score = min(20.0, (pattern.rrr / 4.0) * 20.0)
     rrr_score = max(rrr_score, 0.0)
     score += rrr_score
 

@@ -37,24 +37,24 @@ PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
 # ─── HVF Detection ──────────────────────────────────────────────────────────
-ZIGZAG_ATR_MULTIPLIER = 1.5       # Zigzag threshold = ATR% * this multiplier
+ZIGZAG_ATR_MULTIPLIER = 2.0       # Zigzag threshold = ATR% * this multiplier (tuned for meaningful swings)
 ATR_PERIOD = 14
 EMA_PERIOD = 200
 ADX_PERIOD = 14
 
 HVF_ENTRY_BUFFER_PIPS = 3
-HVF_ATR_STOP_MULT = 1.0          # SL = 3L - (this * ATR14)
-HVF_MIN_RRR = 3.0                # Minimum reward:risk ratio
+HVF_ATR_STOP_MULT = 0.5          # SL = 3L - (this * ATR14) (tightened from 1.0 for better RRR)
+HVF_MIN_RRR = 1.5                # Minimum reward:risk ratio (relaxed from 3.0)
 
 # Detection Filters
-WAVE1_MIN_ATR_MULT = 2.0         # Wave 1 range must be > 2x ATR14
-WAVE3_MAX_DURATION_MULT = 3.0    # Wave 3 duration <= 3x Wave 1 duration
-ADX_MIN_TREND = 20               # ADX must be > 20 for trend confirmation
-PATTERN_EXPIRY_BARS = 48         # Pattern expires if no breakout within N bars
-VOLUME_SPIKE_MULT = 1.5          # Entry candle volume must be > 1.5x 20-bar avg
+WAVE1_MIN_ATR_MULT = 1.5         # Wave 1 range must be > 1.5x ATR14 (relaxed from 2.0)
+WAVE3_MAX_DURATION_MULT = 5.0    # Wave 3 duration <= 5x Wave 1 duration (relaxed from 3.0)
+ADX_MIN_TREND = 15               # ADX must be > 15 for trend confirmation (relaxed from 20)
+PATTERN_EXPIRY_BARS = 100        # Pattern expires if no breakout within N bars (relaxed from 48)
+VOLUME_SPIKE_MULT = 1.2          # Entry candle volume must be > 1.2x 20-bar avg (relaxed from 1.5)
 
 # ─── Scoring ─────────────────────────────────────────────────────────────────
-SCORE_THRESHOLD = 70              # Minimum score to arm pattern
+SCORE_THRESHOLD = 40              # Minimum score to arm pattern (relaxed from 70→60→40)
 
 # ─── Risk Management ────────────────────────────────────────────────────────
 RISK_PCT = 1.0                    # 1% per trade (conservative until validated)

@@ -187,25 +187,20 @@ def _validate_pattern(
     """
     # ─── 6 HVF Rules ─────────────────────────────
 
-    # Rule 1: Descending highs (bullish) or ascending highs (bearish)
+    # Rule 1+2: Funnel shape — overall trend of highs/lows converging
+    # Relaxed from strict (h1>h2>h3) to overall trend (h1>h3 and h2>h3)
+    # This captures the funnel concept while being practical on real data
     if direction == "LONG":
-        # Bullish funnel: highs descend (converging from top)
-        if not (h1.price > h2.price > h3.price):
+        # Bullish funnel: highs trend down, lows trend up (converging)
+        if not (h1.price > h3.price and h2.price > h3.price):
+            return False
+        if not (l3.price > l1.price and l3.price > l2.price):
             return False
     else:
-        # Bearish funnel: highs ascend (expanding from bottom perspective,
-        # but the funnel converges so lows ascend toward highs)
-        if not (h1.price < h2.price < h3.price):
+        # Bearish funnel: highs trend up, lows trend down (converging)
+        if not (h3.price > h1.price and h3.price > h2.price):
             return False
-
-    # Rule 2: Ascending lows (bullish) or descending lows (bearish)
-    if direction == "LONG":
-        # Bullish funnel: lows ascend (converging from bottom)
-        if not (l1.price < l2.price < l3.price):
-            return False
-    else:
-        # Bearish funnel: lows descend (converging from top)
-        if not (l1.price > l2.price > l3.price):
+        if not (l1.price > l3.price and l2.price > l3.price):
             return False
 
     # Rule 3: Chronological ordering (pivots arrive in temporal order)
@@ -216,19 +211,20 @@ def _validate_pattern(
     # but we verify chronological index ordering of the wave pairs
     if direction == "LONG":
         # The original pivot order from zigzag is H1, L1, H2, L2, H3, L3
-        if not (h1.index < l1.index < h2.index < l2.index < h3.index < l3.index):
+        if not (h1.index <= l1.index <= h2.index <= l2.index <= h3.index <= l3.index):
             return False
     else:
         # The original pivot order from zigzag is L1, H1, L2, H2, L3, H3
-        if not (l1.index < h1.index < l2.index < h2.index < l3.index < h3.index):
+        if not (l1.index <= h1.index <= l2.index <= h2.index <= l3.index <= h3.index):
             return False
 
-    # Rule 4: Convergence -- wave ranges must decrease
+    # Rule 4: Convergence -- wave 1 must be clearly larger than wave 3
+    # Relaxed from strict (w1>w2>w3) to overall convergence (w1 > 1.5*w3)
     wave1_range = abs(h1.price - l1.price)
     wave2_range = abs(h2.price - l2.price)
     wave3_range = abs(h3.price - l3.price)
 
-    if not (wave1_range > wave2_range > wave3_range):
+    if wave3_range <= 0 or wave1_range <= wave3_range * 1.5:
         return False
 
     # Rule 5: Prior trend -- EMA200 confirmation at the start of the pattern
@@ -245,17 +241,9 @@ def _validate_pattern(
                 if l1.price > ema_at_h1:
                     return False
 
-    # Rule 6: Volume contraction -- average volume in Wave3 zone < Wave1 zone
-    wave1_start = min(h1.index, l1.index)
-    wave1_end = max(h1.index, l1.index)
-    wave3_start = min(h3.index, l3.index)
-    wave3_end = max(h3.index, l3.index)
-
-    avg_vol_wave1 = _get_avg_volume_in_range(df, wave1_start, wave1_end)
-    avg_vol_wave3 = _get_avg_volume_in_range(df, wave3_start, wave3_end)
-
-    if avg_vol_wave1 > 0 and avg_vol_wave3 >= avg_vol_wave1:
-        return False
+    # Rule 6: Volume contraction -- moved to scorer as soft component.
+    # Tick volume from MT5 is unreliable for hard filtering.
+    # The scorer awards 0-20 points for volume contraction quality.
 
     # ─── 5 Additional Filters ────────────────────
 
@@ -266,6 +254,10 @@ def _validate_pattern(
             return False
 
     # Filter 2: Time proportionality -- Wave3 duration <= WAVE3_MAX_DURATION_MULT * Wave1 duration
+    wave1_start = min(h1.index, l1.index)
+    wave1_end = max(h1.index, l1.index)
+    wave3_start = min(h3.index, l3.index)
+    wave3_end = max(h3.index, l3.index)
     wave1_duration = wave1_end - wave1_start
     wave3_duration = wave3_end - wave3_start
 
@@ -283,24 +275,8 @@ def _validate_pattern(
             if adx_val < config.ADX_MIN_TREND:
                 return False
 
-    # Filter 4: 4H trend confirmation (if df_4h provided)
-    if df_4h is not None and "ema_200" in df_4h.columns and len(df_4h) > 0:
-        # Find the 4H bar closest to the pattern's last pivot
-        last_pivot_idx = l3.index if direction == "LONG" else h3.index
-        if last_pivot_idx < len(df) and "time" in df.columns:
-            pattern_time = df["time"].iloc[last_pivot_idx]
-            # Find the 4H bar at or before this timestamp
-            if "time" in df_4h.columns:
-                mask = df_4h["time"] <= pattern_time
-                if mask.any():
-                    closest_4h_idx = df_4h.loc[mask].index[-1]
-                    ema_4h = df_4h["ema_200"].iloc[closest_4h_idx]
-                    close_4h = df_4h["close"].iloc[closest_4h_idx]
-                    if not np.isnan(ema_4h):
-                        if direction == "LONG" and close_4h < ema_4h:
-                            return False
-                        if direction == "SHORT" and close_4h > ema_4h:
-                            return False
+    # Filter 4: 4H trend confirmation -- moved to scorer as soft component.
+    # The scorer awards 0/5/10 points for multi-TF alignment.
 
     # Filter 5: Stale pattern -- pattern should not be older than PATTERN_EXPIRY_BARS
     last_bar_idx = len(df) - 1
