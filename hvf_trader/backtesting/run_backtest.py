@@ -1,7 +1,7 @@
 """
-Run walk-forward backtest on EURUSD and GBPUSD.
+Run multi-pattern backtest on EURUSD and GBPUSD.
 Pulls 2+ years of history from MT5, runs detection + backtest + walk-forward.
-Sends results to Telegram.
+Compares HVF-only vs all-patterns performance.
 """
 
 import sys
@@ -30,6 +30,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+ALL_PATTERNS = ["HVF", "VIPER", "KZ_HUNT", "LONDON_SWEEP"]
+
 
 def fetch_history(symbol, timeframe_name, timeframe_mt5, bars=20000):
     """Fetch historical data from MT5."""
@@ -43,6 +45,59 @@ def fetch_history(symbol, timeframe_name, timeframe_mt5, bars=20000):
                 f"{df['time'].iloc[0].strftime('%Y-%m-%d')} to "
                 f"{df['time'].iloc[-1].strftime('%Y-%m-%d')}")
     return df
+
+
+def run_single_backtest(df_1h, df_4h, symbol, equity, enabled_patterns, label):
+    """Run backtest with specific pattern set and return result."""
+    logger.info(f"\n--- {symbol} {label} ({', '.join(enabled_patterns)}) ---")
+    engine = BacktestEngine(starting_equity=equity, enabled_patterns=enabled_patterns)
+    result = engine.run(df_1h, symbol, df_4h)
+
+    logger.info(f"Total trades: {result.total_trades}")
+    logger.info(f"Win rate: {result.win_rate:.1f}%")
+    logger.info(f"Profit factor: {result.profit_factor:.2f}")
+    logger.info(f"Total PnL (pips): {result.total_pnl_pips:.1f}")
+    logger.info(f"Total PnL (currency): {result.total_pnl_currency:.2f}")
+    logger.info(f"Max drawdown: {result.max_drawdown_pct:.1f}%")
+    logger.info(f"Avg score: {result.avg_score:.1f}")
+
+    if result.trades:
+        # Per-pattern breakdown
+        by_type = {}
+        for t in result.trades:
+            pt = t.pattern_type
+            if pt not in by_type:
+                by_type[pt] = {"trades": [], "wins": 0, "pnl": 0.0}
+            by_type[pt]["trades"].append(t)
+            by_type[pt]["pnl"] += t.pnl_pips
+            if t.pnl_pips > 0:
+                by_type[pt]["wins"] += 1
+
+        logger.info(f"\nPer-pattern breakdown:")
+        for pt, data in sorted(by_type.items()):
+            n = len(data["trades"])
+            wr = data["wins"] / n * 100 if n > 0 else 0
+            logger.info(f"  {pt}: {n} trades, WR={wr:.0f}%, PnL={data['pnl']:+.1f} pips")
+
+        # Direction breakdown
+        longs = [t for t in result.trades if t.direction == "LONG"]
+        shorts = [t for t in result.trades if t.direction == "SHORT"]
+        logger.info(f"\nDirection breakdown:")
+        logger.info(f"  LONG:  {len(longs)} trades, "
+                     f"PnL={sum(t.pnl_pips for t in longs):+.1f} pips")
+        logger.info(f"  SHORT: {len(shorts)} trades, "
+                     f"PnL={sum(t.pnl_pips for t in shorts):+.1f} pips")
+
+        logger.info(f"\nTrade details:")
+        for i, t in enumerate(result.trades):
+            logger.info(
+                f"  #{i+1}: [{t.pattern_type}] {t.direction} "
+                f"entry={t.entry_price:.5f} exit={t.exit_price:.5f} "
+                f"pips={t.pnl_pips:+.1f} reason={t.exit_reason} "
+                f"score={t.score:.0f}"
+            )
+
+    return result
 
 
 def main():
@@ -63,7 +118,7 @@ def main():
 
     results = {}
 
-    for symbol in ["EURUSD", "GBPUSD", "AUDUSD", "USDJPY"]:
+    for symbol in ["EURUSD", "GBPUSD"]:
         logger.info(f"\n{'='*60}")
         logger.info(f"BACKTEST: {symbol}")
         logger.info(f"{'='*60}")
@@ -86,62 +141,64 @@ def main():
         df_1h = df_1h.dropna(subset=["atr", "ema_200", "adx"]).reset_index(drop=True)
         logger.info(f"{symbol} H1 after indicator warmup: {len(df_1h)} bars")
 
-        # Run simple backtest first
-        logger.info(f"\nRunning full-period backtest for {symbol}...")
-        engine = BacktestEngine(starting_equity=500.0)
-        bt_result = engine.run(df_1h, symbol, df_4h)
+        # ─── Run 1: HVF-only (baseline) ────────────────────────────
+        hvf_result = run_single_backtest(
+            df_1h, df_4h, symbol, 500.0, ["HVF"], "HVF-only"
+        )
 
-        logger.info(f"\n--- {symbol} Full Backtest Results ---")
-        logger.info(f"Total trades: {bt_result.total_trades}")
-        logger.info(f"Win rate: {bt_result.win_rate:.1f}%")
-        logger.info(f"Profit factor: {bt_result.profit_factor:.2f}")
-        logger.info(f"Total PnL (pips): {bt_result.total_pnl_pips:.1f}")
-        logger.info(f"Total PnL (currency): {bt_result.total_pnl_currency:.2f}")
-        logger.info(f"Max drawdown: {bt_result.max_drawdown_pct:.1f}%")
-        logger.info(f"Avg score: {bt_result.avg_score:.1f}")
+        # ─── Run 2: All patterns ────────────────────────────────────
+        all_result = run_single_backtest(
+            df_1h, df_4h, symbol, 500.0, ALL_PATTERNS, "All Patterns"
+        )
 
-        if bt_result.trades:
-            logger.info(f"\nTrade details:")
-            for i, t in enumerate(bt_result.trades):
-                logger.info(
-                    f"  #{i+1}: {t.direction} entry={t.entry_price:.5f} "
-                    f"exit={t.exit_price:.5f} pips={t.pnl_pips:+.1f} "
-                    f"reason={t.exit_reason} score={t.score:.0f}"
-                )
-
-        # Run walk-forward
-        logger.info(f"\nRunning walk-forward for {symbol}...")
+        # ─── Walk-forward: All patterns ─────────────────────────────
+        logger.info(f"\nRunning walk-forward for {symbol} (all patterns)...")
         wf_result = run_walk_forward(
             df_1h, symbol, df_4h,
             train_months=6,
             test_months=2,
             starting_equity=500.0,
+            enabled_patterns=ALL_PATTERNS,
         )
 
         results[symbol] = {
-            "backtest": bt_result,
+            "hvf_only": hvf_result,
+            "all_patterns": all_result,
             "walk_forward": wf_result,
         }
 
     mt5.shutdown()
 
-    # Print summary
+    # Print comparison summary
     logger.info(f"\n\n{'='*60}")
-    logger.info("FINAL SUMMARY")
+    logger.info("COMPARISON SUMMARY: HVF-only vs All Patterns")
     logger.info(f"{'='*60}")
 
     for symbol, res in results.items():
-        bt = res["backtest"]
+        hvf = res["hvf_only"]
+        all_p = res["all_patterns"]
         wf = res["walk_forward"]
+
         logger.info(f"\n{symbol}:")
-        logger.info(f"  Backtest: {bt.total_trades} trades, "
-                     f"WR={bt.win_rate:.0f}%, PF={bt.profit_factor:.2f}, "
-                     f"PnL={bt.total_pnl_pips:+.1f} pips, "
-                     f"MaxDD={bt.max_drawdown_pct:.1f}%")
-        logger.info(f"  Walk-Forward: {wf.total_oos_trades} OOS trades, "
+        logger.info(f"  HVF-only:      {hvf.total_trades} trades, "
+                     f"WR={hvf.win_rate:.0f}%, PF={hvf.profit_factor:.2f}, "
+                     f"PnL={hvf.total_pnl_pips:+.1f} pips, "
+                     f"MaxDD={hvf.max_drawdown_pct:.1f}%")
+        logger.info(f"  All Patterns:  {all_p.total_trades} trades, "
+                     f"WR={all_p.win_rate:.0f}%, PF={all_p.profit_factor:.2f}, "
+                     f"PnL={all_p.total_pnl_pips:+.1f} pips, "
+                     f"MaxDD={all_p.max_drawdown_pct:.1f}%")
+        logger.info(f"  Walk-Forward:  {wf.total_oos_trades} OOS trades, "
                      f"WR={wf.oos_win_rate:.0f}%, PF={wf.oos_profit_factor:.2f}, "
                      f"Positive windows={wf.oos_positive_windows}/{len(wf.windows)} "
                      f"({wf.oos_positive_window_pct:.0f}%)")
+
+        # Improvement delta
+        if hvf.total_trades > 0:
+            trade_delta = all_p.total_trades - hvf.total_trades
+            pnl_delta = all_p.total_pnl_pips - hvf.total_pnl_pips
+            logger.info(f"  Delta:         {trade_delta:+d} trades, "
+                         f"{pnl_delta:+.1f} pips")
 
     # Send to Telegram
     try:
@@ -153,16 +210,28 @@ def main():
             bot = Bot(token=token)
             loop = asyncio.new_event_loop()
 
-            lines = ["<b>\U0001F4CA Backtest Results</b>\n"]
+            lines = ["<b>\U0001F4CA Multi-Pattern Backtest Results</b>\n"]
             for symbol, res in results.items():
-                bt = res["backtest"]
+                hvf = res["hvf_only"]
+                all_p = res["all_patterns"]
                 wf = res["walk_forward"]
-                emoji = "\u2705" if bt.profit_factor > 1.0 else "\u274C"
+                emoji = "\u2705" if all_p.profit_factor > 1.0 else "\u274C"
+
                 lines.append(f"<b>{symbol}</b>")
-                lines.append(f"  {emoji} {bt.total_trades} trades, "
-                             f"WR={bt.win_rate:.0f}%, PF={bt.profit_factor:.2f}")
-                lines.append(f"  PnL: {bt.total_pnl_pips:+.1f} pips, "
-                             f"MaxDD: {bt.max_drawdown_pct:.1f}%")
+                lines.append(f"  HVF-only: {hvf.total_trades}T, "
+                             f"PF={hvf.profit_factor:.2f}, "
+                             f"PnL={hvf.total_pnl_pips:+.1f}p")
+                lines.append(f"  {emoji} All: {all_p.total_trades}T, "
+                             f"PF={all_p.profit_factor:.2f}, "
+                             f"PnL={all_p.total_pnl_pips:+.1f}p")
+
+                # Per-pattern counts
+                by_type = {}
+                for t in all_p.trades:
+                    by_type[t.pattern_type] = by_type.get(t.pattern_type, 0) + 1
+                breakdown = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+                lines.append(f"  Breakdown: {breakdown}")
+
                 lines.append(f"  WF: {wf.oos_positive_windows}/{len(wf.windows)} "
                              f"positive OOS windows\n")
 

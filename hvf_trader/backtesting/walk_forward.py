@@ -118,6 +118,7 @@ def run_walk_forward(
     test_months: int = None,
     starting_equity: float = 500.0,
     step_months: int = None,
+    enabled_patterns: list[str] = None,
 ) -> WalkForwardResult:
     """
     Run walk-forward analysis with sliding windows.
@@ -185,7 +186,7 @@ def run_walk_forward(
 
         # Run backtest on train period (for reference/comparison)
         if len(train_df) > 250:
-            engine = BacktestEngine(starting_equity=starting_equity)
+            engine = BacktestEngine(starting_equity=starting_equity, enabled_patterns=enabled_patterns)
             window.train_result = engine.run(train_df, symbol, train_4h)
             logger.info(
                 f"Train {train_start.strftime('%Y-%m')}→{train_end.strftime('%Y-%m')}: "
@@ -196,7 +197,7 @@ def run_walk_forward(
 
         # Run backtest on test period (out-of-sample)
         if len(test_df) > 250:
-            engine = BacktestEngine(starting_equity=starting_equity)
+            engine = BacktestEngine(starting_equity=starting_equity, enabled_patterns=enabled_patterns)
             window.test_result = engine.run(test_df, symbol, test_4h)
             logger.info(
                 f"Test {test_start.strftime('%Y-%m')}→{test_end.strftime('%Y-%m')}: "
