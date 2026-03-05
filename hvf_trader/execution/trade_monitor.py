@@ -1,0 +1,331 @@
+"""
+30-second loop: partials, trailing stops, invalidation, target monitoring.
+"""
+
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+except ImportError:
+    MT5_AVAILABLE = False
+    mt5 = None
+
+from hvf_trader import config
+
+
+class TradeMonitor:
+    def __init__(self, order_manager, trade_logger, connector=None):
+        """
+        Args:
+            order_manager: OrderManager instance
+            trade_logger: TradeLogger instance
+            connector: MT5Connector instance
+        """
+        self.order_manager = order_manager
+        self.trade_logger = trade_logger
+        self.connector = connector
+        self._running = False
+        self._highest_since_partial = {}  # ticket -> highest price since partial close
+        self._lowest_since_partial = {}   # ticket -> lowest price since partial (for shorts)
+
+    def start(self):
+        """Start the trade monitoring loop."""
+        self._running = True
+        logger.info("Trade monitor started")
+        while self._running:
+            try:
+                self._monitor_cycle()
+            except Exception as e:
+                logger.error(f"Trade monitor error: {e}", exc_info=True)
+                self.trade_logger.log_event(
+                    "ERROR", details=f"Trade monitor: {e}", severity="ERROR"
+                )
+            time.sleep(config.TRADE_MONITOR_INTERVAL_SEC)
+
+    def stop(self):
+        """Stop the monitoring loop."""
+        self._running = False
+        logger.info("Trade monitor stopped")
+
+    def _monitor_cycle(self):
+        """Single monitoring cycle: check all open trades."""
+        open_trades = self.trade_logger.get_open_trades()
+        if not open_trades:
+            return
+
+        for trade_record in open_trades:
+            try:
+                self._check_trade(trade_record)
+            except Exception as e:
+                logger.error(
+                    f"Error monitoring trade {trade_record.id}: {e}",
+                    exc_info=True,
+                )
+
+    def _check_trade(self, trade_record):
+        """
+        Check a single open trade for:
+        1. Invalidation (price revisits below 3L for longs / above 3H for shorts)
+        2. Target 1 hit (partial close + move SL to breakeven)
+        3. Trailing stop update (after partial)
+        4. Target 2 hit (full close)
+        """
+        ticket = trade_record.mt5_ticket
+        if ticket is None:
+            return
+
+        position = self.order_manager.get_position_by_ticket(ticket)
+        if position is None:
+            # Position may have been closed by SL/TP on server side
+            self._handle_server_close(trade_record)
+            return
+
+        current_price = position["price_current"]
+        direction = trade_record.direction
+
+        # Get associated pattern for invalidation check
+        pattern = None
+        if trade_record.pattern_id:
+            from hvf_trader.database.models import get_session, PatternRecord
+            session = get_session()
+            pattern = session.query(PatternRecord).get(trade_record.pattern_id)
+            session.close()
+
+        # ─── Check invalidation ──────────────────────────────────────────
+        if pattern and not trade_record.partial_closed:
+            invalidated = False
+            if direction == "LONG" and current_price <= pattern.l3_price:
+                invalidated = True
+            elif direction == "SHORT" and current_price >= pattern.h3_price:
+                invalidated = True
+
+            if invalidated:
+                logger.warning(
+                    f"Trade {ticket} invalidated: price revisited "
+                    f"{'3L' if direction == 'LONG' else '3H'}"
+                )
+                self._close_trade(
+                    trade_record, ticket, position, "INVALIDATION"
+                )
+                return
+
+        # ─── Check target 2 (full close) ─────────────────────────────────
+        target_2_hit = False
+        if direction == "LONG" and current_price >= trade_record.target_2:
+            target_2_hit = True
+        elif direction == "SHORT" and current_price <= trade_record.target_2:
+            target_2_hit = True
+
+        if target_2_hit:
+            logger.info(f"Trade {ticket} hit target 2 @ {current_price}")
+            self._close_trade(trade_record, ticket, position, "TARGET_2")
+            return
+
+        # ─── Check target 1 (partial close) ──────────────────────────────
+        if not trade_record.partial_closed and trade_record.target_1:
+            target_1_hit = False
+            if direction == "LONG" and current_price >= trade_record.target_1:
+                target_1_hit = True
+            elif direction == "SHORT" and current_price <= trade_record.target_1:
+                target_1_hit = True
+
+            if target_1_hit:
+                logger.info(f"Trade {ticket} hit target 1 @ {current_price}")
+                self._handle_partial_close(trade_record, ticket, position)
+                return
+
+        # ─── Trailing stop (after partial close) ─────────────────────────
+        if trade_record.partial_closed:
+            self._update_trailing_stop(trade_record, ticket, position, current_price)
+
+    def _handle_partial_close(self, trade_record, ticket, position):
+        """Close 50% of position and move SL to breakeven."""
+        direction = trade_record.direction
+        close_price = position["price_current"]
+
+        # Partial close
+        new_ticket = self.order_manager.partial_close(
+            ticket, trade_record.symbol, direction, config.PARTIAL_CLOSE_PCT
+        )
+
+        if new_ticket is not None:
+            # Update trade record
+            self.trade_logger.log_partial_close(trade_record.id, close_price)
+
+            # Move SL to breakeven (entry price)
+            breakeven_sl = trade_record.entry_price
+            self.order_manager.modify_stop_loss(
+                ticket, trade_record.symbol, breakeven_sl
+            )
+            self.trade_logger.log_trade_update(
+                trade_record.id, trailing_sl=breakeven_sl
+            )
+
+            # Initialize tracking for trailing stop
+            if direction == "LONG":
+                self._highest_since_partial[ticket] = close_price
+            else:
+                self._lowest_since_partial[ticket] = close_price
+
+            self.trade_logger.log_event(
+                "PARTIAL_CLOSE",
+                symbol=trade_record.symbol,
+                trade_id=trade_record.id,
+                details=f"Closed {config.PARTIAL_CLOSE_PCT*100}% @ {close_price}, "
+                        f"SL moved to breakeven {breakeven_sl}",
+            )
+            logger.info(
+                f"Partial close complete: ticket={ticket}, "
+                f"SL→breakeven={breakeven_sl}"
+            )
+
+    def _update_trailing_stop(self, trade_record, ticket, position, current_price):
+        """
+        Trail SL at 1.5x ATR below highest price since partial (LONG)
+        or above lowest price since partial (SHORT).
+        Trailing SL only moves in trade's favour — never backwards.
+        """
+        direction = trade_record.direction
+
+        # Get current ATR from latest data
+        from hvf_trader.data.data_fetcher import fetch_and_prepare
+        df = fetch_and_prepare(trade_record.symbol, config.PRIMARY_TIMEFRAME, bars=20)
+        if df is None or df.empty:
+            return
+        current_atr = df["atr"].iloc[-1]
+        trail_distance = config.TRAILING_STOP_ATR_MULT * current_atr
+
+        if direction == "LONG":
+            # Track highest price
+            prev_highest = self._highest_since_partial.get(ticket, current_price)
+            highest = max(prev_highest, current_price)
+            self._highest_since_partial[ticket] = highest
+
+            new_sl = highest - trail_distance
+            current_sl = trade_record.trailing_sl or trade_record.entry_price
+
+            # Only move SL up, never down
+            if new_sl > current_sl:
+                if self.order_manager.modify_stop_loss(
+                    ticket, trade_record.symbol, new_sl
+                ):
+                    self.trade_logger.log_trade_update(
+                        trade_record.id, trailing_sl=new_sl
+                    )
+                    self.trade_logger.log_event(
+                        "SL_MODIFIED",
+                        symbol=trade_record.symbol,
+                        trade_id=trade_record.id,
+                        details=f"Trailing SL: {current_sl:.5f} → {new_sl:.5f}",
+                    )
+        else:  # SHORT
+            # Track lowest price
+            prev_lowest = self._lowest_since_partial.get(ticket, current_price)
+            lowest = min(prev_lowest, current_price)
+            self._lowest_since_partial[ticket] = lowest
+
+            new_sl = lowest + trail_distance
+            current_sl = trade_record.trailing_sl or trade_record.entry_price
+
+            # Only move SL down, never up
+            if new_sl < current_sl:
+                if self.order_manager.modify_stop_loss(
+                    ticket, trade_record.symbol, new_sl
+                ):
+                    self.trade_logger.log_trade_update(
+                        trade_record.id, trailing_sl=new_sl
+                    )
+                    self.trade_logger.log_event(
+                        "SL_MODIFIED",
+                        symbol=trade_record.symbol,
+                        trade_id=trade_record.id,
+                        details=f"Trailing SL: {current_sl:.5f} → {new_sl:.5f}",
+                    )
+
+    def _close_trade(self, trade_record, ticket, position, reason):
+        """Close a trade fully and update records."""
+        direction = trade_record.direction
+        close_price = position["price_current"]
+
+        success = self.order_manager.close_position(
+            ticket, trade_record.symbol, direction, f"HVF {reason}"
+        )
+
+        if success:
+            pnl = position["profit"]
+            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+            if direction == "LONG":
+                pnl_pips = (close_price - trade_record.entry_price) / pip_value
+            else:
+                pnl_pips = (trade_record.entry_price - close_price) / pip_value
+
+            self.trade_logger.log_trade_close(
+                trade_record.id, close_price, pnl, pnl_pips, reason
+            )
+            self.trade_logger.log_event(
+                "TRADE_CLOSED",
+                symbol=trade_record.symbol,
+                trade_id=trade_record.id,
+                details=f"Reason={reason}, PnL={pnl:.2f}, Pips={pnl_pips:.1f}",
+            )
+
+            # Clean up tracking dicts
+            self._highest_since_partial.pop(ticket, None)
+            self._lowest_since_partial.pop(ticket, None)
+
+    def _handle_server_close(self, trade_record):
+        """
+        Handle case where position was closed server-side (SL/TP hit).
+        Check MT5 deal history to get close details.
+        """
+        if not MT5_AVAILABLE:
+            return
+
+        ticket = trade_record.mt5_ticket
+        from datetime import timedelta
+
+        # Search recent deals for this position
+        now = datetime.now(timezone.utc)
+        from_date = now - timedelta(days=1)
+        deals = mt5.history_deals_get(from_date, now, position=ticket)
+
+        if not deals:
+            logger.warning(f"Position {ticket} disappeared but no deals found")
+            self.trade_logger.log_trade_update(
+                trade_record.id, status="CLOSED", close_reason="UNKNOWN"
+            )
+            return
+
+        # Find the closing deal (the one that reduces/closes position)
+        for deal in deals:
+            if deal.entry == 1:  # DEAL_ENTRY_OUT = close
+                close_price = deal.price
+                pnl = deal.profit
+                pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+                direction = trade_record.direction
+
+                if direction == "LONG":
+                    pnl_pips = (close_price - trade_record.entry_price) / pip_value
+                else:
+                    pnl_pips = (trade_record.entry_price - close_price) / pip_value
+
+                reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
+                self.trade_logger.log_trade_close(
+                    trade_record.id, close_price, pnl, pnl_pips, reason
+                )
+                self.trade_logger.log_event(
+                    "TRADE_CLOSED",
+                    symbol=trade_record.symbol,
+                    trade_id=trade_record.id,
+                    details=f"Server-side close: {reason}, PnL={pnl:.2f}",
+                )
+
+                self._highest_since_partial.pop(ticket, None)
+                self._lowest_since_partial.pop(ticket, None)
+                break
