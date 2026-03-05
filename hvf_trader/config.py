@@ -44,7 +44,7 @@ ADX_PERIOD = 14
 
 HVF_ENTRY_BUFFER_PIPS = 3
 HVF_ATR_STOP_MULT = 0.5          # SL = 3L - (this * ATR14) (tightened from 1.0 for better RRR)
-HVF_MIN_RRR = 1.5                # Minimum reward:risk ratio (relaxed from 3.0)
+HVF_MIN_RRR = 1.0                # Minimum reward:risk ratio (relaxed from 3.0→1.5→1.0)
 
 # Detection Filters
 WAVE1_MIN_ATR_MULT = 1.5         # Wave 1 range must be > 1.5x ATR14 (relaxed from 2.0)

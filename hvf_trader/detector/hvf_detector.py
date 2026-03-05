@@ -219,27 +219,17 @@ def _validate_pattern(
             return False
 
     # Rule 4: Convergence -- wave 1 must be clearly larger than wave 3
-    # Relaxed from strict (w1>w2>w3) to overall convergence (w1 > 1.5*w3)
+    # Relaxed from strict (w1>w2>w3) to overall convergence (w1 > 1.2*w3)
     wave1_range = abs(h1.price - l1.price)
     wave2_range = abs(h2.price - l2.price)
     wave3_range = abs(h3.price - l3.price)
 
-    if wave3_range <= 0 or wave1_range <= wave3_range * 1.5:
+    if wave3_range <= 0 or wave1_range <= wave3_range * 1.2:
         return False
 
-    # Rule 5: Prior trend -- EMA200 confirmation at the start of the pattern
-    if "ema_200" in df.columns and h1.index < len(df):
-        ema_at_h1 = df["ema_200"].iloc[h1.index]
-        if not np.isnan(ema_at_h1):
-            if direction == "LONG":
-                # Bullish: price should have been above EMA200 (prior uptrend
-                # that is now consolidating into the funnel)
-                if h1.price < ema_at_h1:
-                    return False
-            else:
-                # Bearish: price should have been below EMA200 (prior downtrend)
-                if l1.price > ema_at_h1:
-                    return False
+    # Rule 5: Prior trend -- moved to scorer as soft component.
+    # EMA200 alignment awards 0-10 points instead of hard-gating.
+    # This allows counter-trend patterns to still qualify if other factors are strong.
 
     # Rule 6: Volume contraction -- moved to scorer as soft component.
     # Tick volume from MT5 is unreliable for hard filtering.

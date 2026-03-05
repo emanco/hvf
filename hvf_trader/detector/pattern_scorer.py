@@ -15,30 +15,30 @@ def score_pattern(
     df_4h: pd.DataFrame = None,
 ) -> float:
     """
-    Score a validated HVF pattern on 6 components.
+    Score a validated HVF pattern on 7 components.
 
     Components:
-    1. Funnel tightness (0-25):  25 * (1 - (h3-l3)/(h1-l1))
-    2. Volume contraction (0-20): 20 * (1 - wave3_avg_vol/wave1_avg_vol), clamped 0-20
-    3. ATR contraction (0-20): 20 * (1 - atr_at_wave3/atr_at_wave1), clamped 0-20
-    4. RRR quality (0-20): min(20, (rrr / 10) * 20) -- 10:1+ gets full marks
-    5. Multi-TF confirmation (0-10): 10 if 4H trend agrees, 5 if neutral, 0 if against
-    6. Session quality (0-5): 5 London/NY overlap, 3 London or NY, 1 Asian, 0 off-hours
+    1. Funnel tightness (0-20):  20 * (1 - (h3-l3)/(h1-l1))
+    2. Volume contraction (0-15): 15 * (1 - wave3_avg_vol/wave1_avg_vol), clamped 0-15
+    3. ATR contraction (0-15): 15 * (1 - atr_at_wave3/atr_at_wave1), clamped 0-15
+    4. RRR quality (0-20): min(20, (rrr / 4) * 20) -- 4:1+ gets full marks
+    5. EMA200 prior trend (0-10): 10 if price on correct side, 5 near, 0 wrong side
+    6. Multi-TF confirmation (0-10): 10 if 4H trend agrees, 5 if neutral, 0 if against
+    7. Session quality (0-10): 10 London/NY overlap, 6 London or NY, 2 Asian, 0 off-hours
 
     Returns:
         Float score 0-100
     """
     score = 0.0
 
-    # ─── Component 1: Funnel Tightness (0-25) ────────────────────────
+    # ─── Component 1: Funnel Tightness (0-20) ────────────────────────
     wave1_range = abs(pattern.h1.price - pattern.l1.price)
     wave3_range = abs(pattern.h3.price - pattern.l3.price)
 
     if wave1_range > 0:
         tightness_ratio = wave3_range / wave1_range
-        # Clamp ratio to [0, 1] before computing score
         tightness_ratio = min(max(tightness_ratio, 0.0), 1.0)
-        tightness_score = 25.0 * (1.0 - tightness_ratio)
+        tightness_score = 20.0 * (1.0 - tightness_ratio)
     else:
         tightness_score = 0.0
     score += tightness_score
@@ -59,15 +59,15 @@ def score_pattern(
         if wave1_vol > 0:
             vol_ratio = wave3_vol / wave1_vol
             vol_ratio = min(max(vol_ratio, 0.0), 1.0)
-            vol_score = 20.0 * (1.0 - vol_ratio)
+            vol_score = 15.0 * (1.0 - vol_ratio)
         else:
             vol_score = 0.0
     else:
         vol_score = 0.0
-    vol_score = min(max(vol_score, 0.0), 20.0)
+    vol_score = min(max(vol_score, 0.0), 15.0)
     score += vol_score
 
-    # ─── Component 3: ATR Contraction (0-20) ─────────────────────────
+    # ─── Component 3: ATR Contraction (0-15) ─────────────────────────
     if "atr" in df.columns:
         atr_wave1 = _safe_atr_at_pivot(df, wave1_end)
         atr_wave3 = _safe_atr_at_pivot(df, wave3_end)
@@ -75,12 +75,12 @@ def score_pattern(
         if atr_wave1 > 0:
             atr_ratio = atr_wave3 / atr_wave1
             atr_ratio = min(max(atr_ratio, 0.0), 1.0)
-            atr_score = 20.0 * (1.0 - atr_ratio)
+            atr_score = 15.0 * (1.0 - atr_ratio)
         else:
             atr_score = 0.0
     else:
         atr_score = 0.0
-    atr_score = min(max(atr_score, 0.0), 20.0)
+    atr_score = min(max(atr_score, 0.0), 15.0)
     score += atr_score
 
     # ─── Component 4: RRR Quality (0-20) ─────────────────────────────
@@ -89,11 +89,15 @@ def score_pattern(
     rrr_score = max(rrr_score, 0.0)
     score += rrr_score
 
-    # ─── Component 5: Multi-TF Confirmation (0-10) ───────────────────
+    # ─── Component 5: EMA200 Prior Trend (0-10) ──────────────────────
+    ema_trend_score = _compute_ema200_trend_score(pattern, df)
+    score += ema_trend_score
+
+    # ─── Component 6: Multi-TF Confirmation (0-10) ───────────────────
     mtf_score = _compute_multi_tf_score(pattern, df, df_4h)
     score += mtf_score
 
-    # ─── Component 6: Session Quality (0-5) ──────────────────────────
+    # ─── Component 7: Session Quality (0-10) ──────────────────────────
     if pattern.detected_at is not None:
         session_score = _get_session_score(pattern.detected_at)
     else:
@@ -101,6 +105,33 @@ def score_pattern(
     score += session_score
 
     return round(score, 2)
+
+
+def _compute_ema200_trend_score(pattern: HVFPattern, df: pd.DataFrame) -> float:
+    """
+    Score EMA200 prior trend alignment.
+    10 if price clearly on correct side of EMA200.
+    5 if near EMA200 (within 0.5%).
+    0 if on wrong side.
+    """
+    if "ema_200" not in df.columns or pattern.h1.index >= len(df):
+        return 5.0  # Neutral when no data
+
+    ema_at_h1 = df["ema_200"].iloc[pattern.h1.index]
+    if np.isnan(ema_at_h1) or ema_at_h1 == 0:
+        return 5.0
+
+    if pattern.direction == "LONG":
+        distance_pct = ((pattern.h1.price - ema_at_h1) / ema_at_h1) * 100.0
+    else:
+        distance_pct = ((ema_at_h1 - pattern.l1.price) / ema_at_h1) * 100.0
+
+    if distance_pct > 0.5:
+        return 10.0  # Clearly on correct side
+    elif distance_pct > -0.5:
+        return 5.0   # Near EMA — neutral
+    else:
+        return 0.0   # Wrong side
 
 
 def _safe_mean(series: pd.Series, start_idx: int, end_idx: int) -> float:
@@ -202,9 +233,9 @@ def _get_session_score(timestamp: pd.Timestamp) -> float:
     asian = config.ASIAN_OPEN <= hour < config.ASIAN_CLOSE
 
     if london_ny_overlap:
-        return 5.0
+        return 10.0
     elif london or ny:
-        return 3.0
+        return 6.0
     elif asian:
-        return 1.0
+        return 2.0
     return 0.0
