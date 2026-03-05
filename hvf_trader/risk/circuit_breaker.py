@@ -22,6 +22,10 @@ _LIMIT_MAP = {
     "MONTHLY": config.MONTHLY_LOSS_LIMIT_PCT,
 }
 
+# Per-pattern consecutive loss tracking
+_PATTERN_LOSS_PAUSE_THRESHOLD = 3  # 3 consecutive losses → 48h pause
+_PATTERN_PAUSE_HOURS = 48
+
 
 class CircuitBreaker:
     """
@@ -42,6 +46,9 @@ class CircuitBreaker:
         self.trade_logger = trade_logger
         self._tripped: dict[str, bool] = {lvl: False for lvl in _LEVELS}
         self._resumes_at: dict[str, datetime | None] = {lvl: None for lvl in _LEVELS}
+        # Per-pattern consecutive loss tracking
+        self._pattern_consecutive_losses: dict[str, int] = {}
+        self._pattern_paused_until: dict[str, datetime | None] = {}
         self._load_state()
 
     # ------------------------------------------------------------------
@@ -199,6 +206,69 @@ class CircuitBreaker:
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Per-pattern circuit breaker
+    # ------------------------------------------------------------------
+
+    def check_pattern(self, pattern_type: str) -> tuple[bool, str]:
+        """
+        Check if a specific pattern type is paused due to consecutive losses.
+
+        Returns:
+            (is_clear, reason) -- True if pattern is allowed to trade.
+        """
+        now = datetime.now(timezone.utc)
+        paused_until = self._pattern_paused_until.get(pattern_type)
+
+        if paused_until is not None:
+            if now >= paused_until:
+                # Pause expired — reset
+                self._pattern_consecutive_losses[pattern_type] = 0
+                self._pattern_paused_until[pattern_type] = None
+                logger.info(
+                    "Pattern circuit breaker RESET for %s", pattern_type
+                )
+                return True, ""
+            else:
+                return (
+                    False,
+                    f"{pattern_type} paused until {paused_until.isoformat()} "
+                    f"({self._pattern_consecutive_losses.get(pattern_type, 0)} "
+                    f"consecutive losses)",
+                )
+
+        return True, ""
+
+    def record_pattern_result(self, pattern_type: str, is_win: bool):
+        """
+        Record a trade result for per-pattern consecutive loss tracking.
+
+        Args:
+            pattern_type: "HVF", "VIPER", "KZ_HUNT", "LONDON_SWEEP"
+            is_win: True if trade was profitable
+        """
+        if is_win:
+            self._pattern_consecutive_losses[pattern_type] = 0
+            return
+
+        # Loss
+        current = self._pattern_consecutive_losses.get(pattern_type, 0) + 1
+        self._pattern_consecutive_losses[pattern_type] = current
+
+        if current >= _PATTERN_LOSS_PAUSE_THRESHOLD:
+            pause_until = datetime.now(timezone.utc) + timedelta(
+                hours=_PATTERN_PAUSE_HOURS
+            )
+            self._pattern_paused_until[pattern_type] = pause_until
+            logger.warning(
+                "PATTERN CIRCUIT BREAKER TRIPPED: %s -- %d consecutive losses. "
+                "Paused for %dh until %s",
+                pattern_type,
+                current,
+                _PATTERN_PAUSE_HOURS,
+                pause_until.isoformat(),
+            )
 
     @property
     def is_tripped(self) -> bool:

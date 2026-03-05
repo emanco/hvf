@@ -164,6 +164,26 @@ def add_indicators(
 
     df["adx"] = dx.ewm(alpha=alpha, adjust=False).mean()
 
+    # ─── RSI ───────────────────────────────────────────────────────────────────
+    rsi_period = config.RSI_PERIOD if hasattr(config, "RSI_PERIOD") else 14
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1.0 / rsi_period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / rsi_period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    df["rsi"] = 100.0 - (100.0 / (1.0 + rs))
+
+    # ─── MACD ──────────────────────────────────────────────────────────────────
+    macd_fast = config.MACD_FAST if hasattr(config, "MACD_FAST") else 12
+    macd_slow = config.MACD_SLOW if hasattr(config, "MACD_SLOW") else 26
+    macd_signal_period = config.MACD_SIGNAL if hasattr(config, "MACD_SIGNAL") else 9
+    ema_fast = close.ewm(span=macd_fast, adjust=False).mean()
+    ema_slow = close.ewm(span=macd_slow, adjust=False).mean()
+    df["macd"] = ema_fast - ema_slow
+    df["macd_signal"] = df["macd"].ewm(span=macd_signal_period, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
+
     return df
 
 

@@ -53,11 +53,48 @@ ADX_MIN_TREND = 15               # ADX must be > 15 for trend confirmation (rela
 PATTERN_EXPIRY_BARS = 100        # Pattern expires if no breakout within N bars (relaxed from 48)
 VOLUME_SPIKE_MULT = 1.2          # Entry candle volume must be > 1.2x 20-bar avg (relaxed from 1.5)
 
+# ─── KLOS (Key Levels of Significance) ────────────────────────────────────────
+KLOS_CLUSTER_ATR_MULT = 0.3       # Cluster nearby levels within 0.3 * ATR
+KLOS_PROXIMITY_ATR_MULT = 0.3     # Entry aligns with key level within 0.3 * ATR
+KLOS_REJECTION_ATR_MULT = 0.5     # Opposing key level penalty zone = 0.5 * ATR
+KLOS_4H_PIVOT_COUNT = 50          # Number of 4H pivots to consider
+KLOS_D1_PIVOT_COUNT = 20          # Number of D1 pivots to consider
+
 # ─── Scoring ─────────────────────────────────────────────────────────────────
 SCORE_THRESHOLD = 40              # Minimum score to arm pattern (relaxed from 70→60→40)
 
+# Per-pattern score thresholds
+SCORE_THRESHOLD_BY_PATTERN = {
+    "HVF": 40,
+    "VIPER": 50,
+    "KZ_HUNT": 50,
+    "LONDON_SWEEP": 50,
+}
+
+# ─── Multi-Pattern Indicators ───────────────────────────────────────────────
+RSI_PERIOD = 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+# ─── Kill Zones (UTC hours) ─────────────────────────────────────────────────
+KILL_ZONES_UTC = {
+    "london": (8, 11),          # London open session
+    "ny_morning": (13, 16),     # NY morning / London-NY overlap
+    "ny_evening": (16, 20),     # NY afternoon session
+    "asian": (0, 4),            # Asian session (Tokyo/Sydney)
+}
+
 # ─── Risk Management ────────────────────────────────────────────────────────
 RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
+
+# Per-pattern risk percentages
+RISK_PCT_BY_PATTERN = {
+    "HVF": 1.0,
+    "VIPER": 0.75,
+    "KZ_HUNT": 0.5,
+    "LONDON_SWEEP": 0.5,
+}
 DAILY_LOSS_LIMIT_PCT = 3.0        # Pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 5.0       # Pause until Monday 00:00 UTC
 MONTHLY_LOSS_LIMIT_PCT = 10.0     # Pause until 1st 00:00 UTC

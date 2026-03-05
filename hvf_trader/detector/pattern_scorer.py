@@ -1,33 +1,39 @@
 """
-6-component pattern scorer (0-100).
-Score >= 70 to arm the pattern.
+8-component HVF pattern scorer (0-100, with KLOS adjustments).
+Score >= SCORE_THRESHOLD to arm the pattern.
 """
+import logging
+
 import numpy as np
 import pandas as pd
 
 from hvf_trader.detector.hvf_detector import HVFPattern
 from hvf_trader import config
 
+logger = logging.getLogger(__name__)
+
 
 def score_pattern(
     pattern: HVFPattern,
     df: pd.DataFrame,
     df_4h: pd.DataFrame = None,
+    df_d1: pd.DataFrame = None,
 ) -> float:
     """
-    Score a validated HVF pattern on 7 components.
+    Score a validated HVF pattern on 8 components.
 
     Components:
-    1. Funnel tightness (0-20):  20 * (1 - (h3-l3)/(h1-l1))
-    2. Volume contraction (0-15): 15 * (1 - wave3_avg_vol/wave1_avg_vol), clamped 0-15
-    3. ATR contraction (0-15): 15 * (1 - atr_at_wave3/atr_at_wave1), clamped 0-15
-    4. RRR quality (0-20): min(20, (rrr / 4) * 20) -- 4:1+ gets full marks
-    5. EMA200 prior trend (0-10): 10 if price on correct side, 5 near, 0 wrong side
-    6. Multi-TF confirmation (0-10): 10 if 4H trend agrees, 5 if neutral, 0 if against
-    7. Session quality (0-10): 10 London/NY overlap, 6 London or NY, 2 Asian, 0 off-hours
+    1. Funnel tightness (0-20)
+    2. Volume contraction (0-15)
+    3. ATR contraction (0-15)
+    4. RRR quality (0-20)
+    5. EMA200 prior trend (0-10)
+    6. Multi-TF confirmation (0-10)
+    7. Session quality (0-10)
+    8. KLOS key level confluence (bonus 0-10, penalty -10 to 0)
 
     Returns:
-        Float score 0-100
+        Float score clamped to 0-100
     """
     score = 0.0
 
@@ -43,7 +49,7 @@ def score_pattern(
         tightness_score = 0.0
     score += tightness_score
 
-    # ─── Component 2: Volume Contraction (0-20) ──────────────────────
+    # ─── Component 2: Volume Contraction (0-15) ──────────────────────
     vol_col = "tick_volume" if "tick_volume" in df.columns else "volume"
     has_volume = vol_col in df.columns
 
@@ -84,7 +90,6 @@ def score_pattern(
     score += atr_score
 
     # ─── Component 4: RRR Quality (0-20) ─────────────────────────────
-    # Full marks at RRR 4:1 (realistic for HVF patterns)
     rrr_score = min(20.0, (pattern.rrr / 4.0) * 20.0)
     rrr_score = max(rrr_score, 0.0)
     score += rrr_score
@@ -104,7 +109,73 @@ def score_pattern(
         session_score = 0.0
     score += session_score
 
-    return round(score, 2)
+    # ─── Component 8: KLOS Key Level Confluence (bonus/penalty) ───────
+    klos_score = _compute_klos_score(pattern, df, df_4h, df_d1)
+    score += klos_score
+
+    return round(min(max(score, 0.0), 100.0), 2)
+
+
+def _compute_klos_score(
+    pattern: HVFPattern,
+    df: pd.DataFrame,
+    df_4h: pd.DataFrame = None,
+    df_d1: pd.DataFrame = None,
+) -> float:
+    """
+    KLOS scoring: confluence bonus (0-10) and rejection penalty (-10 to 0).
+    """
+    try:
+        from hvf_trader.detector.klos import (
+            identify_key_levels,
+            score_klos_confluence,
+            score_klos_rejection,
+            check_target_obstruction,
+        )
+    except ImportError:
+        return 0.0
+
+    # Get current ATR at the pattern's last pivot
+    last_pivot_idx = (
+        pattern.l3.index if pattern.direction == "LONG" else pattern.h3.index
+    )
+    current_atr = _safe_atr_at_pivot(df, last_pivot_idx) if "atr" in df.columns else 0.0
+    if current_atr <= 0:
+        return 0.0
+
+    key_levels_4h = []
+    key_levels_d1 = []
+
+    if df_4h is not None and "atr" in df_4h.columns:
+        key_levels_4h = identify_key_levels(
+            df_4h, "H4", n_pivots=config.KLOS_4H_PIVOT_COUNT
+        )
+    if df_d1 is not None and "atr" in df_d1.columns:
+        key_levels_d1 = identify_key_levels(
+            df_d1, "D1", n_pivots=config.KLOS_D1_PIVOT_COUNT
+        )
+
+    if not key_levels_4h and not key_levels_d1:
+        return 0.0
+
+    confluence = score_klos_confluence(
+        pattern.entry_price, pattern.direction,
+        key_levels_4h, key_levels_d1, current_atr,
+    )
+    rejection = score_klos_rejection(
+        pattern.entry_price, pattern.direction,
+        key_levels_4h, key_levels_d1, current_atr,
+    )
+
+    # Log target obstruction warning (metadata only)
+    obstruction = check_target_obstruction(
+        pattern.entry_price, pattern.target_2, pattern.direction,
+        key_levels_4h, key_levels_d1, current_atr,
+    )
+    if obstruction:
+        logger.info("KLOS %s %s: %s", pattern.symbol, pattern.direction, obstruction)
+
+    return confluence + rejection
 
 
 def _compute_ema200_trend_score(pattern: HVFPattern, df: pd.DataFrame) -> float:
@@ -124,7 +195,8 @@ def _compute_ema200_trend_score(pattern: HVFPattern, df: pd.DataFrame) -> float:
     if pattern.direction == "LONG":
         distance_pct = ((pattern.h1.price - ema_at_h1) / ema_at_h1) * 100.0
     else:
-        distance_pct = ((ema_at_h1 - pattern.l1.price) / ema_at_h1) * 100.0
+        # For SHORT: h1 should be below EMA200 for bearish trend alignment
+        distance_pct = ((ema_at_h1 - pattern.h1.price) / ema_at_h1) * 100.0
 
     if distance_pct > 0.5:
         return 10.0  # Clearly on correct side
@@ -224,18 +296,31 @@ def _compute_multi_tf_score(
 
 
 def _get_session_score(timestamp: pd.Timestamp) -> float:
-    """Score based on trading session at pattern detection time."""
+    """Score based on Kill Zone at pattern detection time."""
     hour = timestamp.hour  # UTC
 
-    london_ny_overlap = config.NY_OPEN <= hour < config.LONDON_CLOSE  # 13-16 UTC
+    # Kill Zone scoring (higher granularity than simple session)
+    kz = get_current_kill_zone(hour)
+    if kz == "ny_morning":
+        return 10.0  # London-NY overlap = highest liquidity
+    elif kz == "london":
+        return 8.0
+    elif kz == "ny_evening":
+        return 6.0
+    elif kz == "asian":
+        return 3.0
+
+    # Outside KZ: check broad sessions
     london = config.LONDON_OPEN <= hour < config.LONDON_CLOSE
     ny = config.NY_OPEN <= hour < config.NY_CLOSE
-    asian = config.ASIAN_OPEN <= hour < config.ASIAN_CLOSE
-
-    if london_ny_overlap:
-        return 10.0
-    elif london or ny:
-        return 6.0
-    elif asian:
-        return 2.0
+    if london or ny:
+        return 4.0
     return 0.0
+
+
+def get_current_kill_zone(hour: int) -> str | None:
+    """Return the name of the current Kill Zone for a UTC hour, or None."""
+    for kz_name, (start, end) in config.KILL_ZONES_UTC.items():
+        if start <= hour < end:
+            return kz_name
+    return None

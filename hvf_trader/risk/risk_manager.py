@@ -74,6 +74,7 @@ class RiskManager:
         open_trades: list,
         news_within_window: bool = False,
         exchange_rate_to_account: float = 1.0,
+        pattern_type: str = "HVF",
     ) -> RiskCheckResult:
         """
         Run 8 sequential pre-trade checks. ALL must pass.
@@ -153,10 +154,19 @@ class RiskManager:
         if not corr_ok:
             return self._fail("correlation_check", corr_reason)
 
-        # --- 7. Position sizing ---
+        # --- 6b. Same-instrument blocking ---
+        for trade in open_trades:
+            if trade.get("symbol", "") == symbol:
+                return self._fail(
+                    "same_instrument",
+                    f"Already have open trade on {symbol}",
+                )
+
+        # --- 7. Position sizing (per-pattern risk%) ---
+        risk_pct = config.RISK_PCT_BY_PATTERN.get(pattern_type, config.RISK_PCT)
         lot_size = calculate_lot_size(
             equity=equity,
-            risk_pct=config.RISK_PCT,
+            risk_pct=risk_pct,
             stop_distance_price=stop_distance,
             symbol=symbol,
             exchange_rate_to_account=exchange_rate_to_account,

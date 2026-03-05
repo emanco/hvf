@@ -197,10 +197,10 @@ def _validate_pattern(
         if not (l3.price > l1.price and l3.price > l2.price):
             return False
     else:
-        # Bearish funnel: highs trend up, lows trend down (converging)
-        if not (h3.price > h1.price and h3.price > h2.price):
+        # Bearish funnel: highs descend, lows ascend (same convergence shape as bullish)
+        if not (h1.price > h3.price and h2.price > h3.price):
             return False
-        if not (l1.price > l3.price and l2.price > l3.price):
+        if not (l3.price > l1.price and l3.price > l2.price):
             return False
 
     # Rule 3: Chronological ordering (pivots arrive in temporal order)

@@ -14,6 +14,14 @@ from hvf_trader import config
 from hvf_trader.detector.zigzag import compute_zigzag
 from hvf_trader.detector.hvf_detector import detect_hvf_patterns, HVFPattern
 from hvf_trader.detector.pattern_scorer import score_pattern
+from hvf_trader.detector.viper_detector import detect_viper_patterns
+from hvf_trader.detector.viper_scorer import score_viper
+from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns
+from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
+from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns
+from hvf_trader.detector.london_sweep_scorer import score_london_sweep
+from hvf_trader.detector.killzone_tracker import KillZoneTracker
+from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.risk.position_sizer import calculate_lot_size, validate_lot_size
 
 logger = logging.getLogger(__name__)
@@ -32,6 +40,7 @@ class BacktestTrade:
     entry_time: pd.Timestamp
     score: float
     rrr: float
+    pattern_type: str = "HVF"
 
     # Filled on close
     exit_price: float = 0.0
@@ -125,11 +134,14 @@ class BacktestEngine:
         starting_equity: float = 500.0,
         risk_pct: float = None,
         score_threshold: float = None,
+        enabled_patterns: list[str] = None,
     ):
         self.starting_equity = starting_equity
         self.risk_pct = risk_pct or config.RISK_PCT
         self.score_threshold = score_threshold or config.SCORE_THRESHOLD
         self.equity = starting_equity
+        # Which pattern types to detect. Default: HVF only (backward compatible)
+        self.enabled_patterns = enabled_patterns or ["HVF"]
 
     def run(
         self,
@@ -161,13 +173,15 @@ class BacktestEngine:
         )
 
         self.equity = self.starting_equity
-        armed_patterns: list[dict] = []  # {pattern, armed_bar, pattern_id}
+        armed_patterns: list[dict] = []  # {pattern, armed_bar, pattern_id, pattern_type}
         open_trades: list[BacktestTrade] = []
         highest_since_partial: dict[int, float] = {}  # trade_idx -> price
         lowest_since_partial: dict[int, float] = {}
         trade_counter = 0
         # Track triggered patterns to prevent re-entry on the same pattern
         triggered_pattern_keys: set[tuple] = set()
+        # KZ tracker for Kill Zone Hunt
+        kz_tracker = KillZoneTracker() if "KZ_HUNT" in self.enabled_patterns else None
 
         # Minimum lookback for indicators and zigzag
         min_lookback = 250
@@ -192,29 +206,41 @@ class BacktestEngine:
                 highest_since_partial.pop(i, None)
                 lowest_since_partial.pop(i, None)
 
+            # ─── Update KZ tracker ─────────────────────────────────────
+            if kz_tracker and "time" in df_1h.columns:
+                kz_tracker.update(bar["time"], bar["high"], bar["low"], bar_idx)
+
             # ─── Check armed patterns for entry ──────────────────────────
             triggered = []
             for j, arm in enumerate(armed_patterns):
                 pattern = arm["pattern"]
                 armed_bar = arm["armed_bar"]
+                pat_type = arm.get("pattern_type", "HVF")
 
                 # Check expiry
                 if bar_idx - armed_bar > config.PATTERN_EXPIRY_BARS:
                     triggered.append(j)
                     continue
 
-                # Check entry confirmation: candle close past entry level
+                # Check entry confirmation based on pattern type
                 vol_avg = df_1h["tick_volume"].iloc[max(0, bar_idx - 20):bar_idx].mean()
                 confirmed = False
-                if pattern.direction == "LONG":
-                    if bar["close"] > pattern.entry_price and bar["tick_volume"] > vol_avg * config.VOLUME_SPIKE_MULT:
-                        confirmed = True
+
+                if pat_type == "HVF":
+                    if pattern.direction == "LONG":
+                        if bar["close"] > pattern.entry_price and bar["tick_volume"] > vol_avg * config.VOLUME_SPIKE_MULT:
+                            confirmed = True
+                    else:
+                        if bar["close"] < pattern.entry_price and bar["tick_volume"] > vol_avg * config.VOLUME_SPIKE_MULT:
+                            confirmed = True
                 else:
-                    if bar["close"] < pattern.entry_price and bar["tick_volume"] > vol_avg * config.VOLUME_SPIKE_MULT:
-                        confirmed = True
+                    # Viper, KZ Hunt, London Sweep: simple price confirmation
+                    if pattern.direction == "LONG":
+                        confirmed = bar["close"] > pattern.entry_price
+                    else:
+                        confirmed = bar["close"] < pattern.entry_price
 
                 if confirmed and len(open_trades) < config.MAX_CONCURRENT_TRADES:
-                    # Sanity check: don't enter if price already past target_1
                     actual_entry = bar["close"]
                     if pattern.direction == "LONG" and actual_entry >= pattern.target_1:
                         triggered.append(j)
@@ -223,13 +249,14 @@ class BacktestEngine:
                         triggered.append(j)
                         continue
 
-                    # Position sizing
+                    # Position sizing (per-pattern risk%)
                     stop_dist = abs(actual_entry - pattern.stop_loss)
                     if stop_dist <= 0:
                         triggered.append(j)
                         continue
+                    risk_pct = config.RISK_PCT_BY_PATTERN.get(pat_type, self.risk_pct)
                     lot_size = calculate_lot_size(
-                        self.equity, self.risk_pct, stop_dist, symbol
+                        self.equity, risk_pct, stop_dist, symbol
                     )
                     lot_size = validate_lot_size(lot_size)
 
@@ -246,69 +273,123 @@ class BacktestEngine:
                             entry_time=bar["time"],
                             score=pattern.score,
                             rrr=pattern.rrr,
+                            pattern_type=pat_type,
                         )
                         open_trades.append(trade)
                         trade_counter += 1
-                        # Record this pattern as triggered so it's not re-armed
-                        pat_key = (
-                            round(pattern.h3.price, 5),
-                            round(pattern.l3.price, 5),
-                            pattern.direction,
-                        )
-                        triggered_pattern_keys.add(pat_key)
+                        pat_key = arm.get("pat_key")
+                        if pat_key:
+                            triggered_pattern_keys.add(pat_key)
                         triggered.append(j)
 
             for j in sorted(triggered, reverse=True):
                 armed_patterns.pop(j)
 
             # ─── Scan for new patterns (every bar) ───────────────────────
-            # Use a rolling window of data up to current bar
             window_start = max(0, bar_idx - 499)
             window_df = df_1h.iloc[window_start:bar_idx + 1].copy()
             window_df = window_df.reset_index(drop=True)
 
-            # Only scan if we have enough data
             if len(window_df) >= 100:
-                pivots = compute_zigzag(window_df, config.ZIGZAG_ATR_MULTIPLIER)
-                if len(pivots) >= 6:
-                    # Only check the most recent pivots
-                    patterns = detect_hvf_patterns(
-                        df=window_df,
-                        symbol=symbol,
-                        timeframe=config.PRIMARY_TIMEFRAME,
-                        pivots=pivots,
-                        df_4h=df_4h,
-                    )
+                all_candidates: list[dict] = []
 
-                    for pattern in patterns:
-                        pat_key = (
-                            round(pattern.h3.price, 5),
-                            round(pattern.l3.price, 5),
-                            pattern.direction,
+                # HVF Detection
+                if "HVF" in self.enabled_patterns:
+                    pivots = compute_zigzag(window_df, config.ZIGZAG_ATR_MULTIPLIER)
+                    if len(pivots) >= 6:
+                        hvf_patterns = detect_hvf_patterns(
+                            df=window_df, symbol=symbol,
+                            timeframe=config.PRIMARY_TIMEFRAME,
+                            pivots=pivots, df_4h=df_4h,
                         )
+                        for p in hvf_patterns:
+                            pat_key = (round(p.h3.price, 5), round(p.l3.price, 5), p.direction, "HVF")
+                            if pat_key in triggered_pattern_keys:
+                                continue
+                            already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
+                            if already_armed:
+                                continue
+                            p.score = score_pattern(p, window_df, df_4h)
+                            threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("HVF", self.score_threshold)
+                            if p.score >= threshold:
+                                all_candidates.append({
+                                    "pattern": p, "pattern_type": "HVF",
+                                    "symbol": symbol, "direction": p.direction,
+                                    "score": p.score, "pat_key": pat_key,
+                                })
 
-                        # Skip if this pattern already triggered a trade
+                # Viper Detection
+                if "VIPER" in self.enabled_patterns:
+                    viper_pats = detect_viper_patterns(window_df, symbol, config.PRIMARY_TIMEFRAME)
+                    for p in viper_pats:
+                        pat_key = (round(p.entry_price, 5), round(p.stop_loss, 5), p.direction, "VIPER")
                         if pat_key in triggered_pattern_keys:
                             continue
-
-                        # Skip if already armed
-                        already_armed = any(
-                            abs(a["pattern"].h3.price - pattern.h3.price) < pip_value
-                            and abs(a["pattern"].l3.price - pattern.l3.price) < pip_value
-                            for a in armed_patterns
-                        )
+                        already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
                         if already_armed:
                             continue
-
-                        score = score_pattern(pattern, window_df, df_4h)
-                        pattern.score = score
-
-                        if score >= self.score_threshold:
-                            armed_patterns.append({
-                                "pattern": pattern,
-                                "armed_bar": bar_idx,
-                                "pattern_id": trade_counter,
+                        p.score = score_viper(p, window_df)
+                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
+                        if p.score >= threshold:
+                            all_candidates.append({
+                                "pattern": p, "pattern_type": "VIPER",
+                                "symbol": symbol, "direction": p.direction,
+                                "score": p.score, "pat_key": pat_key,
                             })
+
+                # KZ Hunt Detection
+                if "KZ_HUNT" in self.enabled_patterns and kz_tracker:
+                    kz_pats = detect_kz_hunt_patterns(
+                        window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
+                    )
+                    for p in kz_pats:
+                        pat_key = (round(p.entry_price, 5), round(p.kz_high, 5), p.direction, "KZ_HUNT")
+                        if pat_key in triggered_pattern_keys:
+                            continue
+                        already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
+                        if already_armed:
+                            continue
+                        p.score = score_kz_hunt(p, window_df)
+                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("KZ_HUNT", 50)
+                        if p.score >= threshold:
+                            all_candidates.append({
+                                "pattern": p, "pattern_type": "KZ_HUNT",
+                                "symbol": symbol, "direction": p.direction,
+                                "score": p.score, "pat_key": pat_key,
+                            })
+
+                # London Sweep Detection
+                if "LONDON_SWEEP" in self.enabled_patterns:
+                    ls_pats = detect_london_sweep_patterns(window_df, symbol, config.PRIMARY_TIMEFRAME)
+                    for p in ls_pats:
+                        pat_key = (round(p.entry_price, 5), round(p.asian_high, 5), p.direction, "LONDON_SWEEP")
+                        if pat_key in triggered_pattern_keys:
+                            continue
+                        already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
+                        if already_armed:
+                            continue
+                        p.score = score_london_sweep(p, window_df)
+                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
+                        if p.score >= threshold:
+                            all_candidates.append({
+                                "pattern": p, "pattern_type": "LONDON_SWEEP",
+                                "symbol": symbol, "direction": p.direction,
+                                "score": p.score, "pat_key": pat_key,
+                            })
+
+                # Prioritize and arm
+                prioritized = prioritize_signals(all_candidates)
+                for sig in prioritized:
+                    armed_patterns.append({
+                        "pattern": sig.pattern,
+                        "armed_bar": bar_idx,
+                        "pattern_id": trade_counter,
+                        "pattern_type": sig.pattern_type,
+                        "pat_key": next(
+                            (c["pat_key"] for c in all_candidates
+                             if c["pattern"] is sig.pattern), None
+                        ),
+                    })
 
         # Close any remaining open trades at last bar
         last_bar = df_1h.iloc[-1]

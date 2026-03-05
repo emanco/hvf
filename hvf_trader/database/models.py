@@ -57,6 +57,8 @@ class PatternRecord(Base):
 
     score = Column(Float)
     status = Column(String(20))  # DETECTED, ARMED, TRIGGERED, EXPIRED, INVALIDATED
+    pattern_type = Column(String(20), default="HVF")  # HVF, VIPER, KZ_HUNT, LONDON_SWEEP
+    pattern_metadata = Column(Text, nullable=True)  # JSON for pattern-specific data
 
     # Trade levels
     entry_price = Column(Float, nullable=True)
@@ -86,6 +88,8 @@ class TradeRecord(Base):
     pattern_id = Column(Integer, ForeignKey("pattern_records.id"), nullable=True)
     symbol = Column(String(20), nullable=False, index=True)
     direction = Column(String(10), nullable=False)  # 'LONG' or 'SHORT'
+    pattern_type = Column(String(20), default="HVF")  # HVF, VIPER, KZ_HUNT, LONDON_SWEEP
+    pattern_metadata = Column(Text, nullable=True)  # JSON for pattern-specific data
     mt5_ticket = Column(Integer, nullable=True, unique=True)
 
     entry_price = Column(Float, nullable=False)
