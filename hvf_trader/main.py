@@ -5,11 +5,17 @@ Graceful shutdown on SIGINT/SIGTERM
 """
 
 import logging
+import os
 import signal
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Ensure the parent of hvf_trader/ is on sys.path so package imports work
+# regardless of the working directory (e.g. running from C:\hvf_trader\ on VPS)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hvf_trader import config
 from hvf_trader.database.models import init_db, get_engine, get_session

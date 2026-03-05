@@ -354,6 +354,28 @@ class TradeLogger:
             .all()
         )
 
+    def get_pnl_since(self, since_dt: datetime) -> float:
+        """Sum P&L of all trades closed since a given datetime.
+
+        Args:
+            since_dt: Start of the window (inclusive).
+
+        Returns:
+            Total realized P&L since since_dt, or 0.0 if no trades.
+        """
+        now = datetime.now(timezone.utc)
+        results = (
+            self._session.query(TradeRecord.pnl)
+            .filter(
+                TradeRecord.status == "CLOSED",
+                TradeRecord.closed_at >= since_dt,
+                TradeRecord.closed_at <= now,
+                TradeRecord.pnl.isnot(None),
+            )
+            .all()
+        )
+        return sum(r.pnl for r in results)
+
     def get_daily_pnl(self) -> float:
         """Sum P&L of all trades closed today (UTC midnight to now).
 
