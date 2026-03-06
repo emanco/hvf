@@ -285,17 +285,26 @@ class BacktestEngine:
             for j in sorted(triggered, reverse=True):
                 armed_patterns.pop(j)
 
-            # ─── Scan for new patterns (every 4 bars to limit CPU) ────────
-            if bar_idx % 4 != 0:
+            # ─── Scan for new patterns ──────────────────────────────────
+            # HVF every 4 bars (needs 500-bar zigzag history)
+            # Other patterns every 24 bars with 200-bar window (cheaper)
+            scan_hvf = (bar_idx % 4 == 0) and "HVF" in self.enabled_patterns
+            scan_others = (bar_idx % 24 == 0) and len(self.enabled_patterns) > 1
+            if not scan_hvf and not scan_others:
                 continue
             window_start = max(0, bar_idx - 499)
             window_df = df_1h.iloc[window_start:bar_idx + 1].reset_index(drop=True)
+            # Smaller window for non-HVF detectors (built only when needed)
+            small_window_df = None
+            if scan_others:
+                small_window_start = max(0, bar_idx - 199)
+                small_window_df = df_1h.iloc[small_window_start:bar_idx + 1].reset_index(drop=True)
 
             if len(window_df) >= 100:
                 all_candidates: list[dict] = []
 
-                # HVF Detection
-                if "HVF" in self.enabled_patterns:
+                # HVF Detection (every 4 bars)
+                if scan_hvf:
                     pivots = compute_zigzag(window_df, config.ZIGZAG_ATR_MULTIPLIER)
                     if len(pivots) >= 6:
                         hvf_patterns = detect_hvf_patterns(
@@ -319,9 +328,9 @@ class BacktestEngine:
                                     "score": p.score, "pat_key": pat_key,
                                 })
 
-                # Viper Detection
-                if "VIPER" in self.enabled_patterns:
-                    viper_pats = detect_viper_patterns(window_df, symbol, config.PRIMARY_TIMEFRAME)
+                # Viper Detection (every 24 bars, 200-bar window)
+                if scan_others and "VIPER" in self.enabled_patterns:
+                    viper_pats = detect_viper_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in viper_pats:
                         pat_key = (round(p.entry_price, 5), round(p.stop_loss, 5), p.direction, "VIPER")
                         if pat_key in triggered_pattern_keys:
@@ -329,7 +338,7 @@ class BacktestEngine:
                         already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
                         if already_armed:
                             continue
-                        p.score = score_viper(p, window_df)
+                        p.score = score_viper(p, small_window_df)
                         threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
                         if p.score >= threshold:
                             all_candidates.append({
@@ -338,10 +347,10 @@ class BacktestEngine:
                                 "score": p.score, "pat_key": pat_key,
                             })
 
-                # KZ Hunt Detection
-                if "KZ_HUNT" in self.enabled_patterns and kz_tracker:
+                # KZ Hunt Detection (every 24 bars, 200-bar window)
+                if scan_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker:
                     kz_pats = detect_kz_hunt_patterns(
-                        window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
+                        small_window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
                     )
                     for p in kz_pats:
                         pat_key = (round(p.entry_price, 5), round(p.kz_high, 5), p.direction, "KZ_HUNT")
@@ -350,7 +359,7 @@ class BacktestEngine:
                         already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
                         if already_armed:
                             continue
-                        p.score = score_kz_hunt(p, window_df)
+                        p.score = score_kz_hunt(p, small_window_df)
                         threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("KZ_HUNT", 50)
                         if p.score >= threshold:
                             all_candidates.append({
@@ -359,10 +368,10 @@ class BacktestEngine:
                                 "score": p.score, "pat_key": pat_key,
                             })
 
-                # London Sweep Detection (only during London hours 6-11 UTC)
+                # London Sweep Detection (every 24 bars, 200-bar window, London hours 6-11 UTC)
                 bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 0
-                if "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
-                    ls_pats = detect_london_sweep_patterns(window_df, symbol, config.PRIMARY_TIMEFRAME)
+                if scan_others and "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
+                    ls_pats = detect_london_sweep_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in ls_pats:
                         pat_key = (round(p.entry_price, 5), round(p.asian_high, 5), p.direction, "LONDON_SWEEP")
                         if pat_key in triggered_pattern_keys:
@@ -370,7 +379,7 @@ class BacktestEngine:
                         already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
                         if already_armed:
                             continue
-                        p.score = score_london_sweep(p, window_df)
+                        p.score = score_london_sweep(p, small_window_df)
                         threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
                         if p.score >= threshold:
                             all_candidates.append({

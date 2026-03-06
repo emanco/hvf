@@ -66,11 +66,11 @@ try:
         logger.info(f"\n{'='*60}")
         logger.info(f"BACKTEST: {symbol}")
 
-        rates_1h = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 20000)
+        rates_1h = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 10000)
         df_1h = pd.DataFrame(rates_1h)
         df_1h["time"] = pd.to_datetime(df_1h["time"], unit="s", utc=True)
 
-        rates_4h = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 5000)
+        rates_4h = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H4, 0, 2500)
         df_4h = pd.DataFrame(rates_4h)
         df_4h["time"] = pd.to_datetime(df_4h["time"], unit="s", utc=True)
 
@@ -101,10 +101,19 @@ try:
 
         # All patterns
         logger.info(f"\n--- {symbol} All Patterns ---")
-        eng2 = BacktestEngine(starting_equity=500.0, enabled_patterns=ALL_PATTERNS)
-        all_r = eng2.run(df_1h, symbol, df_4h)
-        logger.info(f"ALL: {all_r.total_trades}T, WR={all_r.win_rate:.0f}%, "
-                     f"PF={all_r.profit_factor:.2f}, PnL={all_r.total_pnl_pips:+.1f}p")
+        try:
+            eng2 = BacktestEngine(starting_equity=500.0, enabled_patterns=ALL_PATTERNS)
+            all_r = eng2.run(df_1h, symbol, df_4h)
+            logger.info(f"ALL: {all_r.total_trades}T, WR={all_r.win_rate:.0f}%, "
+                         f"PF={all_r.profit_factor:.2f}, PnL={all_r.total_pnl_pips:+.1f}p")
+        except Exception as e:
+            logger.error(f"ALL PATTERNS CRASHED: {e}")
+            import traceback as tb
+            logger.error(tb.format_exc())
+            with open("C:/hvf_trader/bt_status.txt", "a") as f:
+                f.write(f"{symbol} ALL PATTERNS ERROR: {e}\n")
+                f.flush()
+            continue
 
         by_type = {}
         for t in all_r.trades:
