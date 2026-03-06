@@ -32,7 +32,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "GBPUSD"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP"]
 # Which pattern detectors to run live. Others remain available for backtesting.
 ENABLED_PATTERNS = ["HVF"]  # Add "VIPER", "KZ_HUNT", "LONDON_SWEEP" when tuned
 PRIMARY_TIMEFRAME = "H1"
@@ -146,6 +146,10 @@ PIP_VALUES = {
     "EURUSD": 0.0001,
     "GBPUSD": 0.0001,
     "AUDUSD": 0.0001,
+    "NZDUSD": 0.0001,
+    "USDCAD": 0.0001,
+    "USDCHF": 0.0001,
+    "EURGBP": 0.0001,
     "USDJPY": 0.01,
     "GBPJPY": 0.01,
     "XAUUSD": 0.01,
