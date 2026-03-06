@@ -57,7 +57,7 @@ class KillZoneTracker:
         hour = bar_time.hour
 
         for kz_name, (kz_start, kz_end) in config.KILL_ZONES_UTC.items():
-            in_kz = kz_start <= hour < kz_end
+            in_kz = kz_start <= hour <= kz_end
 
             if in_kz:
                 if kz_name not in self._active:

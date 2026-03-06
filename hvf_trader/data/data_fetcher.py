@@ -151,6 +151,8 @@ def add_indicators(
     # Directional Indicators
     plus_di = 100.0 * smoothed_plus_dm / smoothed_tr
     minus_di = 100.0 * smoothed_minus_dm / smoothed_tr
+    df["plus_di"] = plus_di
+    df["minus_di"] = minus_di
 
     # DX and ADX
     di_sum = plus_di + minus_di

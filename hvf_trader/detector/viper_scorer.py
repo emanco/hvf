@@ -1,5 +1,5 @@
 """
-Viper pattern scorer (0-100) — v2 with EMA200 trend component.
+Viper pattern scorer (0-100) — v3 with EMA200 trend + regime filter.
 
 Components:
 1. Impulse strength (0-20): how far above 2.5*ATR threshold
@@ -8,6 +8,7 @@ Components:
 4. MACD alignment (0-15): MACD histogram direction and strength
 5. EMA200 trend (0-10): distance from EMA confirms trend strength
 6. Session quality (0-15): Kill Zone scoring
+7. Regime strength (-15 to +10): EMA slope + DI direction alignment
 """
 import numpy as np
 import pandas as pd
@@ -120,6 +121,58 @@ def score_viper(pattern: ViperPattern, df: pd.DataFrame) -> float:
     else:
         session_score = 0.0
     score += session_score
+
+    # ─── 7. Regime Strength (-15 to +10) ────────────────────────────────
+    regime_score = 0.0
+    if "ema_200" in df.columns and len(df) > config.VIPER_REGIME_EMA_LOOKBACK:
+        idx = min(pattern.retrace_end_idx, len(df) - 1)
+        lookback = config.VIPER_REGIME_EMA_LOOKBACK
+
+        # EMA200 slope over lookback period
+        ema_now = df["ema_200"].iloc[idx]
+        ema_prev = df["ema_200"].iloc[max(0, idx - lookback)]
+        if not np.isnan(ema_now) and not np.isnan(ema_prev) and ema_prev > 0:
+            ema_slope = (ema_now - ema_prev) / ema_prev
+
+            # DI direction (if available)
+            di_favors_short = True  # Default: neutral
+            if "plus_di" in df.columns and "minus_di" in df.columns:
+                pdi = df["plus_di"].iloc[idx]
+                mdi = df["minus_di"].iloc[idx]
+                if not np.isnan(pdi) and not np.isnan(mdi):
+                    di_favors_short = mdi > pdi
+
+            # ADX strength
+            adx_val = df["adx"].iloc[idx] if "adx" in df.columns else 20.0
+            adx_strong = adx_val > config.VIPER_REGIME_ADX_THRESHOLD if not np.isnan(adx_val) else False
+
+            slope_threshold = config.VIPER_REGIME_EMA_SLOPE_THRESHOLD
+
+            if pattern.direction == "SHORT":
+                if ema_slope > slope_threshold and not di_favors_short:
+                    regime_score = -15.0  # Strong adverse regime
+                elif ema_slope > slope_threshold or not di_favors_short:
+                    regime_score = -8.0
+                elif abs(ema_slope) <= slope_threshold and not adx_strong:
+                    regime_score = -3.0   # No clear trend
+                elif ema_slope < -slope_threshold and di_favors_short:
+                    regime_score = 10.0 if adx_strong else 5.0
+                else:
+                    regime_score = 0.0
+            else:
+                # LONG (not currently used, but symmetric for future)
+                if ema_slope < -slope_threshold and di_favors_short:
+                    regime_score = -15.0
+                elif ema_slope < -slope_threshold or di_favors_short:
+                    regime_score = -8.0
+                elif abs(ema_slope) <= slope_threshold and not adx_strong:
+                    regime_score = -3.0
+                elif ema_slope > slope_threshold and not di_favors_short:
+                    regime_score = 10.0 if adx_strong else 5.0
+                else:
+                    regime_score = 0.0
+
+    score += regime_score
 
     return round(min(max(score, 0.0), 100.0), 2)
 

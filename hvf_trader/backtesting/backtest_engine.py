@@ -306,9 +306,12 @@ class BacktestEngine:
             window_df = df_1h.iloc[window_start:bar_idx + 1].reset_index(drop=True)
             # Smaller window for non-HVF detectors (built when Viper or others need it)
             small_window_df = None
+            kz_window_df = None
             if scan_viper or scan_slow_others:
                 small_window_start = max(0, bar_idx - 199)
                 small_window_df = df_1h.iloc[small_window_start:bar_idx + 1].reset_index(drop=True)
+                # KZ Hunt needs original indices (kz_tracker stores df_1h bar_idx)
+                kz_window_df = df_1h.iloc[small_window_start:bar_idx + 1]
 
             if len(window_df) >= 100:
                 all_candidates: list[dict] = []
@@ -364,9 +367,13 @@ class BacktestEngine:
                 # KZ Hunt Detection (every 24 bars, 200-bar window)
                 if scan_slow_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker:
                     kz_pats = detect_kz_hunt_patterns(
-                        small_window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
+                        kz_window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
                     )
                     for p in kz_pats:
+                        # Direction filter (LONG-only KZ Hunt)
+                        allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("KZ_HUNT")
+                        if allowed_dir and p.direction != allowed_dir:
+                            continue
                         pat_key = (round(p.entry_price, 5), round(p.kz_high, 5), p.direction, "KZ_HUNT")
                         if pat_key in triggered_pattern_keys:
                             continue

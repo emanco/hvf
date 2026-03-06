@@ -105,20 +105,24 @@ def detect_kz_hunt_patterns(
     if not completed_kzs:
         return []
 
-    last_bar = len(df) - 1
+    last_bar = df.index[-1]
 
     # Check each completed KZ for rejection patterns in the bars after it ended
     for kz_name, kz_levels in completed_kzs.items():
         kz_range = kz_levels.high - kz_levels.low
         if kz_range <= 0:
             continue
+        if kz_levels.bar_count < 2:
+            continue
 
-        # Scan bars after KZ ended (within 10 bars)
+        # Scan bars after KZ ended (within 30 bars)
         search_start = max(kz_levels.high_idx, kz_levels.low_idx) + 1
-        search_end = min(search_start + 10, last_bar + 1)
+        search_end = min(search_start + 30, last_bar + 1)
 
         for i in range(search_start, search_end):
-            bar = df.iloc[i]
+            if i not in df.index:
+                continue
+            bar = df.loc[i]
             atr = bar.get("atr", 0)
             if np.isnan(atr) or atr <= 0:
                 continue
@@ -126,48 +130,45 @@ def detect_kz_hunt_patterns(
             # Check for rejection candle at KZ HIGH (bearish rejection → SHORT)
             if bar["high"] >= kz_levels.high - (0.3 * atr):
                 if _is_rejection_candle(bar, "BEARISH"):
-                    # EMA200 alignment check
-                    if _ema_aligns(df, i, "SHORT"):
-                        pattern = KZHuntPattern(
-                            symbol=symbol,
-                            timeframe=timeframe,
-                            direction="SHORT",
-                            kz_name=kz_name,
-                            kz_high=kz_levels.high,
-                            kz_low=kz_levels.low,
-                            kz_range=kz_range,
-                            rejection_bar_idx=i,
-                            rejection_price=bar["close"],
-                            detected_at=bar["time"] if "time" in df.columns else None,
-                        )
-                        pattern.compute_levels(float(atr))
-                        if pattern.rrr >= config.HVF_MIN_RRR:
-                            patterns.append(pattern)
+                    pattern = KZHuntPattern(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        direction="SHORT",
+                        kz_name=kz_name,
+                        kz_high=kz_levels.high,
+                        kz_low=kz_levels.low,
+                        kz_range=kz_range,
+                        rejection_bar_idx=i,
+                        rejection_price=bar["close"],
+                        detected_at=bar["time"] if "time" in df.columns else None,
+                    )
+                    pattern.compute_levels(float(atr))
+                    if pattern.rrr >= config.HVF_MIN_RRR:
+                        patterns.append(pattern)
 
             # Check for rejection candle at KZ LOW (bullish rejection → LONG)
             if bar["low"] <= kz_levels.low + (0.3 * atr):
                 if _is_rejection_candle(bar, "BULLISH"):
-                    if _ema_aligns(df, i, "LONG"):
-                        pattern = KZHuntPattern(
-                            symbol=symbol,
-                            timeframe=timeframe,
-                            direction="LONG",
-                            kz_name=kz_name,
-                            kz_high=kz_levels.high,
-                            kz_low=kz_levels.low,
-                            kz_range=kz_range,
-                            rejection_bar_idx=i,
-                            rejection_price=bar["close"],
-                            detected_at=bar["time"] if "time" in df.columns else None,
-                        )
-                        pattern.compute_levels(float(atr))
-                        if pattern.rrr >= config.HVF_MIN_RRR:
-                            patterns.append(pattern)
+                    pattern = KZHuntPattern(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        direction="LONG",
+                        kz_name=kz_name,
+                        kz_high=kz_levels.high,
+                        kz_low=kz_levels.low,
+                        kz_range=kz_range,
+                        rejection_bar_idx=i,
+                        rejection_price=bar["close"],
+                        detected_at=bar["time"] if "time" in df.columns else None,
+                    )
+                    pattern.compute_levels(float(atr))
+                    if pattern.rrr >= config.HVF_MIN_RRR:
+                        patterns.append(pattern)
 
-    # Filter stale
+    # Filter stale (last_bar is an original df index, not positional)
     patterns = [
         p for p in patterns
-        if (last_bar - p.rejection_bar_idx) <= config.PATTERN_EXPIRY_BARS
+        if (last_bar - p.rejection_bar_idx) <= config.PATTERN_FRESHNESS_BARS.get("KZ_HUNT", config.PATTERN_EXPIRY_BARS)
     ]
 
     patterns.sort(

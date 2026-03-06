@@ -132,8 +132,12 @@ class HVFTrader:
 
         self.trade_logger.log_event("STARTUP", details=f"Environment={config.ENVIRONMENT}")
 
-        # Load armed patterns from DB
-        self._armed_patterns = self.trade_logger.get_armed_patterns()
+        # Load armed patterns from DB (wrap PatternRecord objects into expected dict format)
+        db_armed = self.trade_logger.get_armed_patterns()
+        self._armed_patterns = [
+            {"record": rec, "pattern_type": rec.pattern_type or "HVF", "pattern_obj": None}
+            for rec in db_armed
+        ]
         logger.info(f"Loaded {len(self._armed_patterns)} armed patterns from DB")
 
         # Start threads
@@ -289,6 +293,10 @@ class HVFTrader:
                 df_1h, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
             )
             for p in kz_patterns:
+                # Direction filter (LONG-only KZ Hunt)
+                allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("KZ_HUNT")
+                if allowed_dir and p.direction != allowed_dir:
+                    continue
                 p.score = score_kz_hunt(p, df_1h)
                 threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("KZ_HUNT", 50)
                 if p.score >= threshold:
@@ -440,12 +448,22 @@ class HVFTrader:
                 )
                 vol_avg = get_volume_average(df, 20)
                 confirmed = check_entry_confirmation(hvf_pattern, latest_bar, vol_avg)
-            elif pattern_type == "VIPER":
-                confirmed = check_viper_entry_confirmation(pattern_obj, latest_bar)
-            elif pattern_type == "KZ_HUNT":
-                confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
-            elif pattern_type == "LONDON_SWEEP":
-                confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
+            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP"):
+                # pattern_obj may be None for DB-loaded patterns; use record for price check
+                if pattern_obj is not None:
+                    if pattern_type == "VIPER":
+                        confirmed = check_viper_entry_confirmation(pattern_obj, latest_bar)
+                    elif pattern_type == "KZ_HUNT":
+                        confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
+                    else:
+                        confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
+                else:
+                    close_price = latest_bar.get("close")
+                    if close_price is not None and record.entry_price:
+                        if direction == "LONG":
+                            confirmed = float(close_price) > record.entry_price
+                        else:
+                            confirmed = float(close_price) < record.entry_price
 
             if confirmed:
                 self._attempt_entry(record, pattern_obj, df, pattern_type)
@@ -468,6 +486,10 @@ class HVFTrader:
         """Run pre-trade risk checks and execute if all pass."""
         symbol = pattern_record.symbol
         direction = pattern_record.direction
+
+        # For DB-loaded patterns, pattern_obj may be None — use record as fallback
+        if pattern is None:
+            pattern = pattern_record
 
         account = self.connector.get_account_info()
         if not account:

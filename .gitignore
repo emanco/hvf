@@ -10,3 +10,7 @@ venv/
 .pytest_cache/
 logs/
 *.log
+.DS_Store
+run_bt_*.py
+setup_task.ps1
+bt_*.txt

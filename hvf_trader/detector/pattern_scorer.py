@@ -321,6 +321,6 @@ def _get_session_score(timestamp: pd.Timestamp) -> float:
 def get_current_kill_zone(hour: int) -> str | None:
     """Return the name of the current Kill Zone for a UTC hour, or None."""
     for kz_name, (start, end) in config.KILL_ZONES_UTC.items():
-        if start <= hour < end:
+        if start <= hour <= end:
             return kz_name
     return None

@@ -32,9 +32,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF"]
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["HVF", "VIPER"]  # Viper runs SHORT-only (see ALLOWED_DIRECTIONS_BY_PATTERN)
+ENABLED_PATTERNS = ["HVF", "VIPER", "KZ_HUNT"]  # Viper SHORT-only, KZ Hunt both directions
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -87,6 +87,11 @@ RSI_PERIOD = 14
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
+
+# ─── Viper Regime Filter ──────────────────────────────────────────────────
+VIPER_REGIME_EMA_LOOKBACK = 20     # Bars to measure EMA200 slope
+VIPER_REGIME_EMA_SLOPE_THRESHOLD = 0.0002  # Minimum slope for penalty/bonus
+VIPER_REGIME_ADX_THRESHOLD = 20    # ADX below this = weak trend
 
 # ─── Kill Zones (UTC hours) ─────────────────────────────────────────────────
 KILL_ZONES_UTC = {
