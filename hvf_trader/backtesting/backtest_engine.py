@@ -193,8 +193,12 @@ class BacktestEngine:
             # ─── Manage open trades ──────────────────────────────────────
             closed_trades = []
             for i, trade in enumerate(open_trades):
+                trail_mult = config.TRAILING_STOP_ATR_MULT_BY_PATTERN.get(
+                    trade.pattern_type, config.TRAILING_STOP_ATR_MULT
+                )
                 closed = self._manage_trade(
-                    trade, bar, i, highest_since_partial, lowest_since_partial, pip_value
+                    trade, bar, i, highest_since_partial, lowest_since_partial, pip_value,
+                    trail_mult=trail_mult,
                 )
                 if closed:
                     self.equity += trade.pnl_currency
@@ -217,8 +221,9 @@ class BacktestEngine:
                 armed_bar = arm["armed_bar"]
                 pat_type = arm.get("pattern_type", "HVF")
 
-                # Check expiry
-                if bar_idx - armed_bar > config.PATTERN_EXPIRY_BARS:
+                # Check expiry (per-pattern freshness)
+                expiry = config.PATTERN_FRESHNESS_BARS.get(pat_type, config.PATTERN_EXPIRY_BARS)
+                if bar_idx - armed_bar > expiry:
                     triggered.append(j)
                     continue
 
@@ -287,16 +292,21 @@ class BacktestEngine:
 
             # ─── Scan for new patterns ──────────────────────────────────
             # HVF every 4 bars (needs 500-bar zigzag history)
-            # Other patterns every 24 bars with 200-bar window (cheaper)
+            # Viper every 4 bars (momentum patterns need fast detection)
+            # Other patterns every 24 bars with 200-bar window
             scan_hvf = (bar_idx % 4 == 0) and "HVF" in self.enabled_patterns
-            scan_others = (bar_idx % 24 == 0) and len(self.enabled_patterns) > 1
-            if not scan_hvf and not scan_others:
+            scan_viper = (bar_idx % 8 == 0) and "VIPER" in self.enabled_patterns
+            non_hvf_patterns = [p for p in self.enabled_patterns if p != "HVF"]
+            slow_patterns = [p for p in non_hvf_patterns if p != "VIPER"]
+            scan_slow_others = (bar_idx % 24 == 0) and len(slow_patterns) > 0
+            scan_others = scan_viper or scan_slow_others
+            if not scan_hvf and not scan_viper and not scan_slow_others:
                 continue
             window_start = max(0, bar_idx - 499)
             window_df = df_1h.iloc[window_start:bar_idx + 1].reset_index(drop=True)
-            # Smaller window for non-HVF detectors (built only when needed)
+            # Smaller window for non-HVF detectors (built when Viper or others need it)
             small_window_df = None
-            if scan_others:
+            if scan_viper or scan_slow_others:
                 small_window_start = max(0, bar_idx - 199)
                 small_window_df = df_1h.iloc[small_window_start:bar_idx + 1].reset_index(drop=True)
 
@@ -328,10 +338,14 @@ class BacktestEngine:
                                     "score": p.score, "pat_key": pat_key,
                                 })
 
-                # Viper Detection (every 24 bars, 200-bar window)
-                if scan_others and "VIPER" in self.enabled_patterns:
+                # Viper Detection (every 8 bars, 200-bar window)
+                if scan_viper:
                     viper_pats = detect_viper_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in viper_pats:
+                        # Direction filter (SHORT-only Viper)
+                        allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("VIPER")
+                        if allowed_dir and p.direction != allowed_dir:
+                            continue
                         pat_key = (round(p.entry_price, 5), round(p.stop_loss, 5), p.direction, "VIPER")
                         if pat_key in triggered_pattern_keys:
                             continue
@@ -348,7 +362,7 @@ class BacktestEngine:
                             })
 
                 # KZ Hunt Detection (every 24 bars, 200-bar window)
-                if scan_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker:
+                if scan_slow_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker:
                     kz_pats = detect_kz_hunt_patterns(
                         small_window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
                     )
@@ -370,7 +384,7 @@ class BacktestEngine:
 
                 # London Sweep Detection (every 24 bars, 200-bar window, London hours 6-11 UTC)
                 bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 0
-                if scan_others and "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
+                if scan_slow_others and "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
                     ls_pats = detect_london_sweep_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in ls_pats:
                         pat_key = (round(p.entry_price, 5), round(p.asian_high, 5), p.direction, "LONDON_SWEEP")
@@ -424,6 +438,7 @@ class BacktestEngine:
         highest_since_partial: dict,
         lowest_since_partial: dict,
         pip_value: float,
+        trail_mult: float = None,
     ) -> bool:
         """
         Manage an open trade for a single bar.
@@ -445,19 +460,20 @@ class BacktestEngine:
 
         # ─── Check stop loss ─────────────────────────────────────────
         current_sl = trade.stop_loss
+        _trail_mult = trail_mult if trail_mult is not None else config.TRAILING_STOP_ATR_MULT
         if trade.partial_closed:
-            # Use trailing SL if available
+            # Use trailing SL if available (pattern-specific multiplier)
             if trade.direction == "LONG":
                 trail_highest = highest_since_partial.get(trade_idx, trade.entry_price)
                 atr = bar.get("atr", 0)
                 if atr > 0:
-                    trailing_sl = trail_highest - config.TRAILING_STOP_ATR_MULT * atr
+                    trailing_sl = trail_highest - _trail_mult * atr
                     current_sl = max(current_sl, trailing_sl)
             else:
                 trail_lowest = lowest_since_partial.get(trade_idx, trade.entry_price)
                 atr = bar.get("atr", 0)
                 if atr > 0:
-                    trailing_sl = trail_lowest + config.TRAILING_STOP_ATR_MULT * atr
+                    trailing_sl = trail_lowest + _trail_mult * atr
                     current_sl = min(current_sl, trailing_sl)
 
         sl_hit = False

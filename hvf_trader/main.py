@@ -270,6 +270,10 @@ class HVFTrader:
         if "VIPER" in config.ENABLED_PATTERNS:
             viper_patterns = detect_viper_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
             for p in viper_patterns:
+                # Direction filter (SHORT-only Viper)
+                allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("VIPER")
+                if allowed_dir and p.direction != allowed_dir:
+                    continue
                 p.score = score_viper(p, df_1h)
                 threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
                 if p.score >= threshold:

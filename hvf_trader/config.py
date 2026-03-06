@@ -34,7 +34,7 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 # ─── Instruments ─────────────────────────────────────────────────────────────
 INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP"]
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["HVF"]  # Add "VIPER", "KZ_HUNT", "LONDON_SWEEP" when tuned
+ENABLED_PATTERNS = ["HVF", "VIPER"]  # Viper runs SHORT-only (see ALLOWED_DIRECTIONS_BY_PATTERN)
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -68,9 +68,18 @@ SCORE_THRESHOLD = 40              # Minimum score to arm pattern (relaxed from 7
 # Per-pattern score thresholds
 SCORE_THRESHOLD_BY_PATTERN = {
     "HVF": 40,
-    "VIPER": 50,
+    "VIPER": 60,
     "KZ_HUNT": 50,
     "LONDON_SWEEP": 50,
+}
+
+# Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
+# forex downside momentum is sharper and more persistent than upside.
+ALLOWED_DIRECTIONS_BY_PATTERN = {
+    "HVF": None,          # Both LONG and SHORT
+    "VIPER": "SHORT",     # SHORT-only — LONGs are net negative across all pairs
+    "KZ_HUNT": None,
+    "LONDON_SWEEP": None,
 }
 
 # ─── Multi-Pattern Indicators ───────────────────────────────────────────────
@@ -109,6 +118,22 @@ PARTIAL_CLOSE_PCT = 0.50          # Close 50% at target_1
 TRAILING_STOP_ATR_MULT = 1.5     # Trail SL at 1.5x ATR below highest since partial
 TARGET_1_MULT = 0.5              # target_1 = midpoint + full_range * 0.5
 TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
+
+# Per-pattern trailing stop multipliers (Viper needs more room than HVF)
+TRAILING_STOP_ATR_MULT_BY_PATTERN = {
+    "HVF": 1.5,
+    "VIPER": 2.5,        # Wider trail — continuation trades need room to breathe
+    "KZ_HUNT": 1.5,
+    "LONDON_SWEEP": 1.5,
+}
+
+# Per-pattern freshness (max bars from detection to arming)
+PATTERN_FRESHNESS_BARS = {
+    "HVF": 100,           # Breakouts can take time
+    "VIPER": 10,          # Momentum continuation must be recent
+    "KZ_HUNT": 24,
+    "LONDON_SWEEP": 12,
+}
 
 # ─── News Filter ─────────────────────────────────────────────────────────────
 NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact
