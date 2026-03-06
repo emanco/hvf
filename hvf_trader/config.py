@@ -33,6 +33,8 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
 INSTRUMENTS = ["EURUSD", "GBPUSD"]
+# Which pattern detectors to run live. Others remain available for backtesting.
+ENABLED_PATTERNS = ["HVF"]  # Add "VIPER", "KZ_HUNT", "LONDON_SWEEP" when tuned
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 

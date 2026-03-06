@@ -114,6 +114,7 @@ class HVFTrader:
         logger.info("HVF Auto-Trader starting...")
         logger.info(f"Environment: {config.ENVIRONMENT}")
         logger.info(f"Instruments: {config.INSTRUMENTS}")
+        logger.info(f"Enabled patterns: {config.ENABLED_PATTERNS}")
         logger.info(f"Risk: {config.RISK_PCT}% per trade")
         logger.info("=" * 60)
 
@@ -247,37 +248,39 @@ class HVFTrader:
         all_signals: list[dict] = []
 
         # 1. HVF Detector
-        pivots = compute_zigzag(df_1h, config.ZIGZAG_ATR_MULTIPLIER)
-        if len(pivots) >= 6:
-            hvf_patterns = detect_hvf_patterns(
-                df=df_1h, symbol=symbol,
-                timeframe=config.PRIMARY_TIMEFRAME,
-                pivots=pivots, df_4h=df_4h,
-            )
-            for p in hvf_patterns:
-                p.score = score_pattern(p, df_1h, df_4h, df_d1)
-                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("HVF", config.SCORE_THRESHOLD)
+        if "HVF" in config.ENABLED_PATTERNS:
+            pivots = compute_zigzag(df_1h, config.ZIGZAG_ATR_MULTIPLIER)
+            if len(pivots) >= 6:
+                hvf_patterns = detect_hvf_patterns(
+                    df=df_1h, symbol=symbol,
+                    timeframe=config.PRIMARY_TIMEFRAME,
+                    pivots=pivots, df_4h=df_4h,
+                )
+                for p in hvf_patterns:
+                    p.score = score_pattern(p, df_1h, df_4h, df_d1)
+                    threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("HVF", config.SCORE_THRESHOLD)
+                    if p.score >= threshold:
+                        all_signals.append({
+                            "pattern": p, "pattern_type": "HVF",
+                            "symbol": symbol, "direction": p.direction,
+                            "score": p.score,
+                        })
+
+        # 2. Viper Detector
+        if "VIPER" in config.ENABLED_PATTERNS:
+            viper_patterns = detect_viper_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
+            for p in viper_patterns:
+                p.score = score_viper(p, df_1h)
+                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
                 if p.score >= threshold:
                     all_signals.append({
-                        "pattern": p, "pattern_type": "HVF",
+                        "pattern": p, "pattern_type": "VIPER",
                         "symbol": symbol, "direction": p.direction,
                         "score": p.score,
                     })
 
-        # 2. Viper Detector
-        viper_patterns = detect_viper_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
-        for p in viper_patterns:
-            p.score = score_viper(p, df_1h)
-            threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
-            if p.score >= threshold:
-                all_signals.append({
-                    "pattern": p, "pattern_type": "VIPER",
-                    "symbol": symbol, "direction": p.direction,
-                    "score": p.score,
-                })
-
         # 3. KZ Hunt Detector
-        if kz_tracker:
+        if "KZ_HUNT" in config.ENABLED_PATTERNS and kz_tracker:
             kz_patterns = detect_kz_hunt_patterns(
                 df_1h, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
             )
@@ -292,16 +295,17 @@ class HVFTrader:
                     })
 
         # 4. London Sweep Detector
-        ls_patterns = detect_london_sweep_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
-        for p in ls_patterns:
-            p.score = score_london_sweep(p, df_1h)
-            threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
-            if p.score >= threshold:
-                all_signals.append({
-                    "pattern": p, "pattern_type": "LONDON_SWEEP",
-                    "symbol": symbol, "direction": p.direction,
-                    "score": p.score,
-                })
+        if "LONDON_SWEEP" in config.ENABLED_PATTERNS:
+            ls_patterns = detect_london_sweep_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
+            for p in ls_patterns:
+                p.score = score_london_sweep(p, df_1h)
+                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
+                if p.score >= threshold:
+                    all_signals.append({
+                        "pattern": p, "pattern_type": "LONDON_SWEEP",
+                        "symbol": symbol, "direction": p.direction,
+                        "score": p.score,
+                    })
 
         # Prioritize and arm
         prioritized = prioritize_signals(all_signals)
