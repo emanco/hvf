@@ -195,6 +195,46 @@ class TelegramAlerter:
         )
         self.send_message(text)
 
+    def send_performance_summary(self, trade_logger):
+        """Send weekly performance summary with per-pattern breakdown."""
+        trades = trade_logger.get_recent_closed_trades(limit=50)
+        if not trades:
+            return
+
+        # Overall stats
+        wins = [t for t in trades if t.pnl and t.pnl > 0]
+        losses = [t for t in trades if t.pnl and t.pnl <= 0]
+        total_pnl = sum(t.pnl for t in trades if t.pnl)
+        total_pips = sum(t.pnl_pips for t in trades if t.pnl_pips)
+        gross_profit = sum(t.pnl for t in wins) if wins else 0
+        gross_loss = abs(sum(t.pnl for t in losses)) if losses else 0.001
+        pf = gross_profit / gross_loss
+        wr = len(wins) / len(trades) * 100 if trades else 0
+
+        # Per-pattern breakdown
+        by_pattern = {}
+        for t in trades:
+            pt = t.pattern_type or "HVF"
+            by_pattern.setdefault(pt, []).append(t)
+
+        pattern_lines = []
+        for pt, pt_trades in sorted(by_pattern.items()):
+            pt_pnl = sum(t.pnl for t in pt_trades if t.pnl)
+            pt_wins = sum(1 for t in pt_trades if t.pnl and t.pnl > 0)
+            pattern_lines.append(
+                f"  {pt}: {len(pt_trades)}T, {pt_wins}W, PnL {pt_pnl:+.2f}"
+            )
+
+        text = (
+            f"<b>\U0001f4ca Weekly Performance</b>\n"
+            f"Last {len(trades)} trades:\n"
+            f"PnL: <b>{total_pnl:+.2f}</b> ({total_pips:+.1f}p)\n"
+            f"WR: {wr:.0f}% | PF: {pf:.2f}\n\n"
+            f"<b>By Pattern:</b>\n"
+            + "\n".join(pattern_lines)
+        )
+        self.send_message(text)
+
     def alert_shutdown(self, reason: str = "Manual"):
         """Alert on bot shutdown."""
         text = (

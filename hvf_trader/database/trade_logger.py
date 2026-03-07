@@ -442,6 +442,31 @@ class TradeLogger:
         )
         return sum(r.pnl for r in results)
 
+    # ─── Performance Monitor Queries ─────────────────────────────────────
+
+    def get_recent_closed_trades(
+        self,
+        limit: int = 20,
+        pattern_type: str = None,
+        symbol: str = None,
+    ) -> list[TradeRecord]:
+        """Return the most recent closed trades, optionally filtered."""
+        query = self._session.query(TradeRecord).filter(
+            TradeRecord.status == "CLOSED",
+            TradeRecord.pnl.isnot(None),
+        )
+        if pattern_type:
+            query = query.filter(TradeRecord.pattern_type == pattern_type)
+        if symbol:
+            query = query.filter(TradeRecord.symbol == symbol)
+        return query.order_by(TradeRecord.closed_at.desc()).limit(limit).all()
+
+    def get_closed_trade_count(self) -> int:
+        """Return total number of closed trades."""
+        return self._session.query(TradeRecord).filter(
+            TradeRecord.status == "CLOSED",
+        ).count()
+
     # ─── Circuit Breaker ────────────────────────────────────────────────
 
     def get_circuit_breaker_state(self, level: str) -> CircuitBreakerState:

@@ -43,6 +43,7 @@ from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
 from hvf_trader.data.news_filter import has_upcoming_news
 from hvf_trader.risk.risk_manager import RiskManager
 from hvf_trader.risk.circuit_breaker import CircuitBreaker
+from hvf_trader.monitoring.performance_monitor import PerformanceMonitor
 
 logger = logging.getLogger("hvf_trader")
 
@@ -95,6 +96,12 @@ class HVFTrader:
 
         # ─── Alerts ──────────────────────────────────────────────────────
         self.alerter = TelegramAlerter()
+
+        # ─── Performance Monitor ────────────────────────────────────────
+        self.perf_monitor = PerformanceMonitor(
+            trade_logger=self.trade_logger,
+            alerter=self.alerter,
+        )
 
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
@@ -203,12 +210,17 @@ class HVFTrader:
                         monthly_pnl=self.trade_logger.get_monthly_pnl(),
                     )
 
+                # Performance health check (hourly)
+                self.perf_monitor.check_health()
+
                 # Daily summary at 21:00 UTC (after NY close)
                 if now.hour == 21 and (
                     self._last_daily_summary is None
                     or self._last_daily_summary.date() < now.date()
                 ):
                     self.alerter.send_daily_summary(self.trade_logger)
+                    if now.weekday() == 6:  # Sunday — weekly performance summary
+                        self.alerter.send_performance_summary(self.trade_logger)
                     self._last_daily_summary = now
 
             except Exception as e:

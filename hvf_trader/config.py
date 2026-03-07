@@ -153,6 +153,14 @@ DISCONNECT_CLOSE_THRESHOLD_SEC = 900  # 15 min = close all positions on reconnec
 # ─── Trade Monitor ───────────────────────────────────────────────────────────
 TRADE_MONITOR_INTERVAL_SEC = 30   # Check open positions every 30 seconds
 
+# ─── Performance Monitor ───────────────────────────────────────────────────
+PERF_MONITOR_INTERVAL_SEC = 3600      # Check every hour
+PERF_ROLLING_TRADE_COUNT = 20         # Rolling window size
+PERF_MIN_PF_THRESHOLD = 1.0           # Alert if rolling PF < 1.0
+PERF_WIN_RATE_DROP_PCT = 10            # Alert if WR drops >10% from baseline
+PERF_MAX_CONSECUTIVE_LOSSES = 5        # Alert at 5+ consecutive losses
+PERF_ALERT_COOLDOWN_HOURS = 24         # Don't re-alert same issue for 24h
+
 # ─── Logging ─────────────────────────────────────────────────────────────────
 LOG_RETENTION_DAYS = 90
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per log file
