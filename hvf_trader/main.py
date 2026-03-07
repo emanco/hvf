@@ -282,8 +282,8 @@ class HVFTrader:
                             "score": p.score,
                         })
 
-        # 2. Viper Detector
-        if "VIPER" in config.ENABLED_PATTERNS:
+        # 2. Viper Detector (skip excluded symbols)
+        if "VIPER" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("VIPER", []):
             viper_patterns = detect_viper_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
             for p in viper_patterns:
                 # Direction filter (SHORT-only Viper)
@@ -299,8 +299,8 @@ class HVFTrader:
                         "score": p.score,
                     })
 
-        # 3. KZ Hunt Detector
-        if "KZ_HUNT" in config.ENABLED_PATTERNS and kz_tracker:
+        # 3. KZ Hunt Detector (skip excluded symbols)
+        if "KZ_HUNT" in config.ENABLED_PATTERNS and kz_tracker and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("KZ_HUNT", []):
             kz_patterns = detect_kz_hunt_patterns(
                 df_1h, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
             )
@@ -318,8 +318,8 @@ class HVFTrader:
                         "score": p.score,
                     })
 
-        # 4. London Sweep Detector
-        if "LONDON_SWEEP" in config.ENABLED_PATTERNS:
+        # 4. London Sweep Detector (skip excluded symbols)
+        if "LONDON_SWEEP" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("LONDON_SWEEP", []):
             ls_patterns = detect_london_sweep_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
             for p in ls_patterns:
                 p.score = score_london_sweep(p, df_1h)

@@ -82,6 +82,12 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
     "LONDON_SWEEP": None,
 }
 
+# Per-pattern per-symbol exclusions. Viper on EURGBP is net negative (PF 0.71);
+# HVF on EURGBP remains profitable (+10.3p).
+PATTERN_SYMBOL_EXCLUSIONS = {
+    "VIPER": ["EURGBP"],
+}
+
 # ─── Multi-Pattern Indicators ───────────────────────────────────────────────
 RSI_PERIOD = 14
 MACD_FAST = 12
@@ -107,14 +113,14 @@ RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
 # Per-pattern risk percentages
 RISK_PCT_BY_PATTERN = {
     "HVF": 1.0,
-    "VIPER": 0.75,
+    "VIPER": 1.0,          # Bumped from 0.75 — SHORT-only PF 1.50 justifies full sizing
     "KZ_HUNT": 0.5,
     "LONDON_SWEEP": 0.5,
 }
 DAILY_LOSS_LIMIT_PCT = 3.0        # Pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 5.0       # Pause until Monday 00:00 UTC
 MONTHLY_LOSS_LIMIT_PCT = 10.0     # Pause until 1st 00:00 UTC
-MAX_CONCURRENT_TRADES = 2         # With £500 capital
+MAX_CONCURRENT_TRADES = 3         # 3 × 1% = 3% max simultaneous risk, within daily limit
 MAX_SPREAD_PCT_OF_STOP = 0.05     # 5% of stop distance max
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
