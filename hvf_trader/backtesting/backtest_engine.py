@@ -342,7 +342,7 @@ class BacktestEngine:
                                 })
 
                 # Viper Detection (every 8 bars, 200-bar window)
-                if scan_viper:
+                if scan_viper and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("VIPER", []):
                     viper_pats = detect_viper_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in viper_pats:
                         # Direction filter (SHORT-only Viper)
@@ -365,7 +365,7 @@ class BacktestEngine:
                             })
 
                 # KZ Hunt Detection (every 24 bars, 200-bar window)
-                if scan_slow_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker:
+                if scan_slow_others and "KZ_HUNT" in self.enabled_patterns and kz_tracker and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("KZ_HUNT", []):
                     kz_pats = detect_kz_hunt_patterns(
                         kz_window_df, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
                     )
@@ -391,7 +391,7 @@ class BacktestEngine:
 
                 # London Sweep Detection (every 24 bars, 200-bar window, London hours 6-11 UTC)
                 bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 0
-                if scan_slow_others and "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11:
+                if scan_slow_others and "LONDON_SWEEP" in self.enabled_patterns and 6 <= bar_hour <= 11 and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("LONDON_SWEEP", []):
                     ls_pats = detect_london_sweep_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
                     for p in ls_pats:
                         pat_key = (round(p.entry_price, 5), round(p.asian_high, 5), p.direction, "LONDON_SWEEP")
