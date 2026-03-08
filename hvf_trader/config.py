@@ -46,7 +46,13 @@ ADX_PERIOD = 14
 
 HVF_ENTRY_BUFFER_PIPS = 3
 HVF_ATR_STOP_MULT = 0.5          # SL = 3L - (this * ATR14) (tightened from 1.0 for better RRR)
-HVF_MIN_RRR = 1.0                # Minimum reward:risk ratio (relaxed from 3.0→1.5→1.0)
+HVF_MIN_RRR = 1.0                # Global fallback minimum reward:risk ratio
+MIN_RRR_BY_PATTERN = {
+    "HVF": 1.5,            # Tightened from 1.0→1.5 per backtest variant E (+200p/18T vs +154p/35T)
+    "VIPER": 1.0,
+    "KZ_HUNT": 1.0,
+    "LONDON_SWEEP": 1.0,
+}
 
 # Detection Filters
 WAVE1_MIN_ATR_MULT = 1.5         # Wave 1 range must be > 1.5x ATR14 (relaxed from 2.0)

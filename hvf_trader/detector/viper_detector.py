@@ -288,7 +288,7 @@ def _check_bullish_retrace(
     )
     pattern.compute_levels(float(atr))
 
-    if pattern.rrr < config.HVF_MIN_RRR:
+    if pattern.rrr < config.MIN_RRR_BY_PATTERN.get("VIPER", config.HVF_MIN_RRR):
         return None
 
     return pattern
@@ -365,7 +365,7 @@ def _check_bearish_retrace(
     )
     pattern.compute_levels(float(atr))
 
-    if pattern.rrr < config.HVF_MIN_RRR:
+    if pattern.rrr < config.MIN_RRR_BY_PATTERN.get("VIPER", config.HVF_MIN_RRR):
         return None
 
     return pattern

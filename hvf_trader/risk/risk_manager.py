@@ -183,10 +183,11 @@ class RiskManager:
         if stop_distance <= 0:
             return self._fail("rrr_check", "Stop distance is zero or negative")
         rrr = reward_distance / stop_distance
-        if rrr < config.HVF_MIN_RRR:
+        min_rrr = config.MIN_RRR_BY_PATTERN.get(pattern_type, config.HVF_MIN_RRR)
+        if rrr < min_rrr:
             return self._fail(
                 "rrr_check",
-                f"RRR {rrr:.2f} < minimum {config.HVF_MIN_RRR:.2f} "
+                f"RRR {rrr:.2f} < minimum {min_rrr:.2f} "
                 f"(reward={reward_distance:.5f}, risk={stop_distance:.5f})",
             )
 

@@ -230,7 +230,7 @@ def _check_london_sweep(
                     detected_at=bar["time"] if "time" in df.columns else None,
                 )
                 pattern.compute_levels(float(atr))
-                if pattern.rrr >= config.HVF_MIN_RRR:
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("LONDON_SWEEP", config.HVF_MIN_RRR):
                     patterns.append(pattern)
 
         # Check for sweep below Asian low
@@ -252,7 +252,7 @@ def _check_london_sweep(
                     detected_at=bar["time"] if "time" in df.columns else None,
                 )
                 pattern.compute_levels(float(atr))
-                if pattern.rrr >= config.HVF_MIN_RRR:
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("LONDON_SWEEP", config.HVF_MIN_RRR):
                     patterns.append(pattern)
 
     return patterns

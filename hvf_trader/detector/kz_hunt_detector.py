@@ -143,7 +143,7 @@ def detect_kz_hunt_patterns(
                         detected_at=bar["time"] if "time" in df.columns else None,
                     )
                     pattern.compute_levels(float(atr))
-                    if pattern.rrr >= config.HVF_MIN_RRR:
+                    if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
                         patterns.append(pattern)
 
             # Check for rejection candle at KZ LOW (bullish rejection → LONG)
@@ -162,7 +162,7 @@ def detect_kz_hunt_patterns(
                         detected_at=bar["time"] if "time" in df.columns else None,
                     )
                     pattern.compute_levels(float(atr))
-                    if pattern.rrr >= config.HVF_MIN_RRR:
+                    if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
                         patterns.append(pattern)
 
     # Filter stale (last_bar is an original df index, not positional)

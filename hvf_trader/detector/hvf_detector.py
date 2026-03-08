@@ -114,7 +114,7 @@ def detect_hvf_patterns(
                 )
                 current_atr = _get_atr_at_index(df, l3.index)
                 pattern.compute_levels(current_atr)
-                if pattern.rrr >= config.HVF_MIN_RRR:
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("HVF", config.HVF_MIN_RRR):
                     patterns.append(pattern)
 
         # Try BEARISH configuration: L, H, L, H, L, H
@@ -137,7 +137,7 @@ def detect_hvf_patterns(
                 )
                 current_atr = _get_atr_at_index(df, h3.index)
                 pattern.compute_levels(current_atr)
-                if pattern.rrr >= config.HVF_MIN_RRR:
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("HVF", config.HVF_MIN_RRR):
                     patterns.append(pattern)
 
     # Sort by most recent detection first (patterns near the end of data are most actionable)
@@ -187,17 +187,15 @@ def _validate_pattern(
     """
     # ─── 6 HVF Rules ─────────────────────────────
 
-    # Rule 1+2: Funnel shape — overall trend of highs/lows converging
-    # Relaxed from strict (h1>h2>h3) to overall trend (h1>h3 and h2>h3)
-    # This captures the funnel concept while being practical on real data
+    # Rule 1+2: Funnel shape — BOTH sides must converge (highs down AND lows up)
+    # Tested OR logic (either side) but backtest showed 268T/-237p vs AND's 33T/+120p.
+    # The strict dual-sided convergence filters for high-quality symmetric funnels.
     if direction == "LONG":
-        # Bullish funnel: highs trend down, lows trend up (converging)
         if not (h1.price > h3.price and h2.price > h3.price):
             return False
         if not (l3.price > l1.price and l3.price > l2.price):
             return False
     else:
-        # Bearish funnel: highs descend, lows ascend (same convergence shape as bullish)
         if not (h1.price > h3.price and h2.price > h3.price):
             return False
         if not (l3.price > l1.price and l3.price > l2.price):
