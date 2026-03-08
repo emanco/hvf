@@ -114,19 +114,19 @@ RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
 # Per-pattern risk percentages
 RISK_PCT_BY_PATTERN = {
     "HVF": 1.0,
-    "VIPER": 1.0,          # Bumped from 0.75 — SHORT-only PF 1.50 justifies full sizing
-    "KZ_HUNT": 1.0,        # Bumped from 0.5 — volume engine, biggest £ lever
+    "VIPER": 2.0,          # V2 aggressive — PF 1.50+ SHORT-only, push while account is small
+    "KZ_HUNT": 2.0,        # V2 aggressive — volume engine, biggest £ lever
     "LONDON_SWEEP": 0.5,
 }
-DAILY_LOSS_LIMIT_PCT = 3.0        # Pause until midnight UTC
-WEEKLY_LOSS_LIMIT_PCT = 5.0       # Pause until Monday 00:00 UTC
-MONTHLY_LOSS_LIMIT_PCT = 10.0     # Pause until 1st 00:00 UTC
-MAX_CONCURRENT_TRADES = 4         # 4 × 1% = 4% max simultaneous risk, within daily limit
+DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
+WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 UTC
+MONTHLY_LOSS_LIMIT_PCT = 15.0     # V2 aggressive — pause until 1st 00:00 UTC
+MAX_CONCURRENT_TRADES = 6         # V2 aggressive — 6 × 2% = 12% max simultaneous risk
 MAX_SPREAD_PCT_OF_STOP = 0.05     # 5% of stop distance max
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
 # ─── Trade Management ───────────────────────────────────────────────────────
-PARTIAL_CLOSE_PCT = 0.50          # Close 50% at target_1
+PARTIAL_CLOSE_PCT = 0.60          # V2 aggressive — close 60% at target_1 to secure profit early
 TRAILING_STOP_ATR_MULT = 1.5     # Trail SL at 1.5x ATR below highest since partial
 TARGET_1_MULT = 0.5              # target_1 = midpoint + full_range * 0.5
 TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
@@ -134,8 +134,8 @@ TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
 # Per-pattern trailing stop multipliers (Viper needs more room than HVF)
 TRAILING_STOP_ATR_MULT_BY_PATTERN = {
     "HVF": 1.5,
-    "VIPER": 2.5,        # Wider trail — continuation trades need room to breathe
-    "KZ_HUNT": 1.5,
+    "VIPER": 2.0,        # V2 — tighter trail to lock profits faster
+    "KZ_HUNT": 1.0,      # V2 — tight trail on volume engine to secure gains
     "LONDON_SWEEP": 1.5,
 }
 
