@@ -32,7 +32,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
 # Which pattern detectors to run live. Others remain available for backtesting.
 ENABLED_PATTERNS = ["HVF", "VIPER", "KZ_HUNT"]  # Viper SHORT-only, KZ Hunt both directions
 PRIMARY_TIMEFRAME = "H1"
@@ -86,6 +86,7 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
 # and NZDUSD (-197.7p from 40 trades). HVF + KZ Hunt remain profitable on both.
 PATTERN_SYMBOL_EXCLUSIONS = {
     "VIPER": ["EURGBP", "NZDUSD"],
+    "KZ_HUNT": ["EURUSD"],
 }
 
 # ─── Multi-Pattern Indicators ───────────────────────────────────────────────
@@ -114,13 +115,13 @@ RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
 RISK_PCT_BY_PATTERN = {
     "HVF": 1.0,
     "VIPER": 1.0,          # Bumped from 0.75 — SHORT-only PF 1.50 justifies full sizing
-    "KZ_HUNT": 0.5,
+    "KZ_HUNT": 1.0,        # Bumped from 0.5 — volume engine, biggest £ lever
     "LONDON_SWEEP": 0.5,
 }
 DAILY_LOSS_LIMIT_PCT = 3.0        # Pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 5.0       # Pause until Monday 00:00 UTC
 MONTHLY_LOSS_LIMIT_PCT = 10.0     # Pause until 1st 00:00 UTC
-MAX_CONCURRENT_TRADES = 3         # 3 × 1% = 3% max simultaneous risk, within daily limit
+MAX_CONCURRENT_TRADES = 4         # 4 × 1% = 4% max simultaneous risk, within daily limit
 MAX_SPREAD_PCT_OF_STOP = 0.05     # 5% of stop distance max
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
@@ -194,6 +195,7 @@ PIP_VALUES = {
     "USDCAD": 0.0001,
     "USDCHF": 0.0001,
     "EURGBP": 0.0001,
+    "EURAUD": 0.0001,
     "USDJPY": 0.01,
     "GBPJPY": 0.01,
     "XAUUSD": 0.01,
