@@ -34,7 +34,7 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 # ─── Instruments ─────────────────────────────────────────────────────────────
 INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["HVF", "VIPER", "KZ_HUNT"]  # Viper SHORT-only, KZ Hunt both directions
+ENABLED_PATTERNS = ["HVF", "KZ_HUNT"]  # Viper disabled — net negative over 10yr (-160p/683T)
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
