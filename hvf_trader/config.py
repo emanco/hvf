@@ -88,11 +88,12 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
     "LONDON_SWEEP": None,
 }
 
-# Per-pattern per-symbol exclusions. Viper is net negative on EURGBP (PF 0.71)
-# and NZDUSD (-197.7p from 40 trades). HVF + KZ Hunt remain profitable on both.
+# Per-pattern per-symbol exclusions.
+# EURUSD: HVF+Viper are net negative over 10yr (-180p). KZ Hunt is +3616p/PF=1.27.
+# Viper net negative on EURGBP, NZDUSD, EURAUD. HVF net negative on EURGBP over 10yr.
 PATTERN_SYMBOL_EXCLUSIONS = {
-    "VIPER": ["EURGBP", "NZDUSD", "EURAUD"],
-    "KZ_HUNT": ["EURUSD"],
+    "VIPER": ["EURGBP", "NZDUSD", "EURAUD", "EURUSD"],
+    "HVF": ["EURUSD"],
 }
 
 # ─── Multi-Pattern Indicators ───────────────────────────────────────────────
