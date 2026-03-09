@@ -129,7 +129,7 @@ DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 UTC
 MONTHLY_LOSS_LIMIT_PCT = 15.0     # V2 aggressive — pause until 1st 00:00 UTC
 MAX_CONCURRENT_TRADES = 6         # V2 aggressive — 6 × 2% = 12% max simultaneous risk
-MAX_SPREAD_PCT_OF_STOP = 0.05     # 5% of stop distance max
+MAX_SPREAD_PCT_OF_STOP = 0.10     # 10% of stop distance max (5% blocked normal market spreads)
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
 # ─── Trade Management ───────────────────────────────────────────────────────

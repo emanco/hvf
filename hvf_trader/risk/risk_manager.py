@@ -156,7 +156,8 @@ class RiskManager:
 
         # --- 6b. Same-instrument blocking ---
         for trade in open_trades:
-            if trade.get("symbol", "") == symbol:
+            trade_symbol = trade.symbol if hasattr(trade, "symbol") else trade.get("symbol", "")
+            if trade_symbol == symbol:
                 return self._fail(
                     "same_instrument",
                     f"Already have open trade on {symbol}",
@@ -234,8 +235,8 @@ class RiskManager:
             return True, ""
 
         for trade in open_trades:
-            trade_symbol = trade.get("symbol", "")
-            trade_direction = trade.get("direction", "")
+            trade_symbol = trade.symbol if hasattr(trade, "symbol") else trade.get("symbol", "")
+            trade_direction = trade.direction if hasattr(trade, "direction") else trade.get("direction", "")
             if (
                 trade_symbol == correlated_symbol
                 and trade_direction.upper() == direction.upper()
