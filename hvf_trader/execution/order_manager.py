@@ -67,7 +67,14 @@ class OrderManager:
                 return None
 
         order_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
-        price = mt5.symbol_info_tick(symbol).ask if direction == "LONG" else mt5.symbol_info_tick(symbol).bid
+        tick = mt5.symbol_info_tick(symbol)
+        price = tick.ask if direction == "LONG" else tick.bid
+        digits = symbol_info.digits
+
+        # Round prices to symbol precision — unrounded SLs can cause "Invalid stops"
+        price = round(price, digits)
+        stop_loss = round(stop_loss, digits)
+        take_profit = round(take_profit, digits) if take_profit > 0 else 0.0
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -76,7 +83,7 @@ class OrderManager:
             "type": order_type,
             "price": price,
             "sl": stop_loss,
-            "tp": take_profit if take_profit > 0 else 0.0,
+            "tp": take_profit,
             "deviation": 20,
             "magic": magic,
             "comment": comment,
@@ -124,6 +131,9 @@ class OrderManager:
             return False
 
         pos = position[0]
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info:
+            new_sl = round(new_sl, symbol_info.digits)
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "symbol": symbol,
