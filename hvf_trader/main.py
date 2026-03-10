@@ -144,11 +144,13 @@ class HVFTrader:
 
         self.trade_logger.log_event("STARTUP", details=f"Environment={config.ENVIRONMENT}")
 
-        # Load armed patterns from DB, filtering out stale ones
+        # Load armed patterns from DB, filtering out stale and duplicate ones
         db_armed = self.trade_logger.get_armed_patterns()
         now = pd.Timestamp.now(tz="UTC")
         self._armed_patterns = []
+        seen_keys = set()
         stale_count = 0
+        dedup_count = 0
         for rec in db_armed:
             ptype = rec.pattern_type or "HVF"
             max_hours = config.PATTERN_FRESHNESS_BARS.get(ptype, 100)
@@ -158,11 +160,19 @@ class HVFTrader:
                     self.trade_logger.update_pattern_status(rec.id, "EXPIRED")
                     stale_count += 1
                     continue
+            key = (rec.symbol, rec.direction)
+            if key in seen_keys:
+                self.trade_logger.update_pattern_status(rec.id, "EXPIRED")
+                dedup_count += 1
+                continue
+            seen_keys.add(key)
             self._armed_patterns.append(
                 {"record": rec, "pattern_type": ptype, "pattern_obj": None}
             )
         if stale_count:
             logger.info(f"Expired {stale_count} stale armed patterns on startup")
+        if dedup_count:
+            logger.info(f"Expired {dedup_count} duplicate armed patterns on startup")
         logger.info(f"Loaded {len(self._armed_patterns)} armed patterns from DB")
 
         # Start threads
@@ -493,13 +503,14 @@ class HVFTrader:
 
             latest_bar = df.iloc[-1]
 
-            # Check expiry using actual time since detection
+            # Check expiry using actual time since detection (per-pattern freshness)
+            expiry_bars = config.PATTERN_FRESHNESS_BARS.get(pattern_type, config.PATTERN_EXPIRY_BARS)
             if record.detected_at:
                 hours_since = (pd.Timestamp.now(tz="UTC") - pd.Timestamp(record.detected_at, tz="UTC")).total_seconds() / 3600
                 bars_since_detection = int(hours_since)  # H1 bars ≈ hours
             else:
                 bars_since_detection = len(df)
-            if bars_since_detection > config.PATTERN_EXPIRY_BARS:
+            if bars_since_detection > expiry_bars:
                 expired.append(armed)
                 continue
 
