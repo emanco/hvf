@@ -40,6 +40,7 @@ from hvf_trader.detector.london_sweep_scorer import score_london_sweep
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
+from hvf_trader.data.calendar_cache import ensure_fresh_cache
 from hvf_trader.data.news_filter import has_upcoming_news
 from hvf_trader.risk.risk_manager import RiskManager
 from hvf_trader.risk.circuit_breaker import CircuitBreaker
@@ -124,6 +125,9 @@ class HVFTrader:
         logger.info(f"Enabled patterns: {config.ENABLED_PATTERNS}")
         logger.info(f"Risk: {config.RISK_PCT}% per trade")
         logger.info("=" * 60)
+
+        # Refresh economic calendar on startup if stale (>72h or missing)
+        ensure_fresh_cache(max_age_hours=72.0)
 
         # Connect to MT5
         if not self.connector.connect():
@@ -226,6 +230,10 @@ class HVFTrader:
 
                 # Performance health check (hourly)
                 self.perf_monitor.check_health()
+
+                # Refresh economic calendar on Sunday 21:xx UTC (before market open)
+                if now.weekday() == 6 and now.hour == 21:
+                    ensure_fresh_cache(max_age_hours=72.0)
 
                 # Daily summary at 21:00 UTC (after NY close)
                 if now.hour == 21 and (

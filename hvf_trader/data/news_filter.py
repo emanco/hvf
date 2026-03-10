@@ -1,50 +1,53 @@
 """
-MT5 calendar_events() wrapper for filtering high-impact news.
+Economic news filter using cached ForexFactory calendar data.
+
+Checks if high-impact news is within a blocking window for a given symbol.
+Falls back gracefully: if no cache, trading is not blocked.
 """
 
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+
+from hvf_trader import config
+from hvf_trader.data.calendar_cache import load_cached_events
 
 logger = logging.getLogger(__name__)
 
-try:
-    import MetaTrader5 as mt5
-    MT5_AVAILABLE = True
-except ImportError:
-    MT5_AVAILABLE = False
-    mt5 = None
-
-from hvf_trader import config
-
-# Currency mappings for instruments
+# Map instrument symbols to ForexFactory country codes
 SYMBOL_CURRENCIES = {
     "EURUSD": ["EUR", "USD"],
+    "NZDUSD": ["NZD", "USD"],
+    "EURGBP": ["EUR", "GBP"],
+    "USDCHF": ["USD", "CHF"],
+    "EURAUD": ["EUR", "AUD"],
     "GBPUSD": ["GBP", "USD"],
     "AUDUSD": ["AUD", "USD"],
     "USDJPY": ["USD", "JPY"],
     "GBPJPY": ["GBP", "JPY"],
     "XAUUSD": ["XAU", "USD"],
-    "BTCUSD": ["BTC", "USD"],
-    "US30": ["USD"],
 }
 
 
+def _parse_event_time(date_str: str) -> datetime | None:
+    """Parse ForexFactory ISO 8601 date string to UTC datetime."""
+    try:
+        dt = datetime.fromisoformat(date_str)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 def has_upcoming_news(symbol: str, window_minutes: int = None) -> bool:
-    """
-    Check if there's high-impact news within the blocking window for the given symbol.
+    """Check if high-impact news is within the blocking window for a symbol.
 
     Args:
-        symbol: instrument symbol
+        symbol: instrument symbol (e.g. "EURUSD")
         window_minutes: override blocking window (default from config)
 
     Returns:
-        True if high-impact news is upcoming (should block trading)
+        True if high-impact news is upcoming (should block trading).
+        False if no news, no cache, or symbol not mapped (fail-open).
     """
-    if not MT5_AVAILABLE:
-        logger.warning("MT5 not available, skipping news filter")
-        return False
-
     window = window_minutes or config.NEWS_BLOCK_MINUTES
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=window)
@@ -54,65 +57,59 @@ def has_upcoming_news(symbol: str, window_minutes: int = None) -> bool:
     if not currencies:
         return False
 
-    try:
-        events = mt5.calendar_events(window_start, window_end)
-    except Exception as e:
-        logger.warning(f"calendar_events failed: {e}")
-        return False
-
+    events = load_cached_events()
     if not events:
         return False
 
     for event in events:
-        # Check if event affects our currencies
-        event_currency = getattr(event, "currency", "")
-        if event_currency not in currencies:
+        if event.get("impact") != "High":
             continue
 
-        # Check importance (HIGH impact only)
-        importance = getattr(event, "importance", 0)
-        if importance >= 3:  # MT5: 0=none, 1=low, 2=medium, 3=high
-            event_time = getattr(event, "time", None)
-            if event_time:
-                logger.info(
-                    f"High-impact news blocking {symbol}: "
-                    f"{getattr(event, 'name', 'Unknown')} at {event_time}"
-                )
-                return True
+        if event.get("country") not in currencies:
+            continue
+
+        event_time = _parse_event_time(event.get("date", ""))
+        if event_time is None:
+            continue
+
+        if window_start <= event_time <= window_end:
+            logger.info(
+                f"High-impact news blocking {symbol}: "
+                f"{event.get('title', 'Unknown')} ({event['country']}) "
+                f"at {event_time:%H:%M UTC}"
+            )
+            return True
 
     return False
 
 
 def get_upcoming_events(hours_ahead: int = 24) -> list[dict]:
-    """
-    Get all upcoming economic events in the next N hours.
+    """Get upcoming medium+ impact events in the next N hours.
 
     Returns:
-        List of event dicts with keys: time, currency, name, importance
+        List of event dicts with keys: time, currency, title, impact.
     """
-    if not MT5_AVAILABLE:
-        return []
-
     now = datetime.now(timezone.utc)
     end = now + timedelta(hours=hours_ahead)
 
-    try:
-        events = mt5.calendar_events(now, end)
-    except Exception:
-        return []
-
+    events = load_cached_events()
     if not events:
         return []
 
     result = []
     for event in events:
-        importance = getattr(event, "importance", 0)
-        if importance >= 2:  # Medium and high
-            result.append({
-                "time": getattr(event, "time", None),
-                "currency": getattr(event, "currency", ""),
-                "name": getattr(event, "name", ""),
-                "importance": importance,
-            })
+        if event.get("impact") not in ("High", "Medium"):
+            continue
 
-    return sorted(result, key=lambda x: x["time"] if x["time"] else now)
+        event_time = _parse_event_time(event.get("date", ""))
+        if event_time is None or event_time < now or event_time > end:
+            continue
+
+        result.append({
+            "time": event_time,
+            "currency": event.get("country", ""),
+            "title": event.get("title", ""),
+            "impact": event.get("impact", ""),
+        })
+
+    return sorted(result, key=lambda x: x["time"])
