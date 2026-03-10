@@ -188,6 +188,7 @@ class HVFTrader:
         Main loop: runs every 60 seconds, checks for new 1H candle closes.
         On new candle: scan → detect → score → arm → check entry
         """
+        cycle_count = 0
         while self._running:
             try:
                 now = datetime.now(timezone.utc)
@@ -242,6 +243,14 @@ class HVFTrader:
                     "ERROR", details=f"Scanner: {e}", severity="ERROR"
                 )
 
+            # Heartbeat log every 60 cycles (~1 hour)
+            cycle_count += 1
+            if cycle_count % 60 == 0:
+                logger.info(
+                    f"Heartbeat: {cycle_count} cycles, "
+                    f"armed={len(self._armed_patterns)}"
+                )
+
             # Sleep until next cycle (60 seconds)
             time.sleep(60)
 
@@ -264,14 +273,13 @@ class HVFTrader:
         df_4h = fetch_and_prepare(symbol, config.CONFIRMATION_TIMEFRAME, bars=200)
         df_d1 = fetch_and_prepare(symbol, "D1", bars=100)
 
-        # Update KZ tracker with latest bar
-        kz_tracker = self._kz_trackers.get(symbol)
-        if kz_tracker:
-            latest_bar = df_1h.iloc[-1]
-            kz_tracker.update(
-                latest_bar["time"], latest_bar["high"],
-                latest_bar["low"], len(df_1h) - 1,
-            )
+        # Rebuild KZ tracker from recent history so indices match current DataFrame
+        kz_tracker = KillZoneTracker()
+        lookback = min(200, len(df_1h))
+        for i in range(len(df_1h) - lookback, len(df_1h)):
+            bar = df_1h.iloc[i]
+            kz_tracker.update(bar["time"], bar["high"], bar["low"], i)
+        self._kz_trackers[symbol] = kz_tracker
 
         # Collect all signals from all detectors
         all_signals: list[dict] = []
