@@ -130,12 +130,14 @@ class RiskManager:
             )
 
         # --- 4. Spread check ---
-        max_spread = config.MAX_SPREAD_PCT_OF_STOP * stop_distance
-        if current_spread >= max_spread:
+        # Pass if spread is below absolute cap (normal spread) OR below % of stop
+        max_spread_pct = config.MAX_SPREAD_PCT_OF_STOP * stop_distance
+        if current_spread >= max_spread_pct and current_spread >= config.MAX_SPREAD_ABSOLUTE:
             return self._fail(
                 "spread_check",
-                f"Spread {current_spread:.5f} >= {max_spread:.5f} "
-                f"({config.MAX_SPREAD_PCT_OF_STOP * 100:.0f}% of stop distance {stop_distance:.5f})",
+                f"Spread {current_spread:.5f} >= {max_spread_pct:.5f} "
+                f"({config.MAX_SPREAD_PCT_OF_STOP * 100:.0f}% of stop) "
+                f"and >= {config.MAX_SPREAD_ABSOLUTE:.5f} (absolute cap)",
             )
 
         # --- 5. Margin check ---

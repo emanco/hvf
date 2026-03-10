@@ -130,6 +130,7 @@ WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 U
 MONTHLY_LOSS_LIMIT_PCT = 15.0     # V2 aggressive — pause until 1st 00:00 UTC
 MAX_CONCURRENT_TRADES = 6         # V2 aggressive — 6 × 2% = 12% max simultaneous risk
 MAX_SPREAD_PCT_OF_STOP = 0.10     # 10% of stop distance max (5% blocked normal market spreads)
+MAX_SPREAD_ABSOLUTE = 0.00020     # 2 pips — normal spreads always pass regardless of stop size
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
 # ─── Trade Management ───────────────────────────────────────────────────────
