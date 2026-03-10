@@ -354,7 +354,30 @@ class HVFTrader:
 
         # Prioritize and arm
         prioritized = prioritize_signals(all_signals)
+        armed_count = 0
+
+        # Build sets of already-active symbol+direction combos to avoid duplicates
+        open_trades = self.trade_logger.get_open_trades()
+        active_positions = {(t.symbol, t.direction) for t in open_trades}
+        active_armed = {(a["record"].symbol, a["record"].direction) for a in self._armed_patterns}
+        recent_patterns = self.trade_logger.get_recent_patterns(hours=24)
+        recently_triggered = {
+            (p.symbol, p.direction) for p in recent_patterns
+            if p.status in ("ARMED", "TRIGGERED")
+        }
+
         for sig in prioritized:
+            key = (sig.symbol, sig.direction)
+            if key in active_positions:
+                logger.debug(f"Skip {sig.pattern_type} {sig.symbol} {sig.direction}: open trade exists")
+                continue
+            if key in active_armed:
+                logger.debug(f"Skip {sig.pattern_type} {sig.symbol} {sig.direction}: already armed")
+                continue
+            if key in recently_triggered:
+                logger.debug(f"Skip {sig.pattern_type} {sig.symbol} {sig.direction}: recently triggered")
+                continue
+
             # Check per-pattern circuit breaker
             cb_ok, cb_reason = self.circuit_breaker.check_pattern(sig.pattern_type)
             if not cb_ok:
@@ -362,6 +385,13 @@ class HVFTrader:
                 continue
 
             self._arm_signal(sig, df_1h)
+            armed_count += 1
+            active_armed.add(key)  # Prevent arming another signal for same symbol+direction
+
+        logger.info(
+            f"Scan {symbol}: {len(all_signals)} candidates, "
+            f"{len(prioritized)} prioritized, {armed_count} armed"
+        )
 
     def _arm_signal(self, sig, df_1h):
         """Arm a prioritized signal by logging to DB and adding to armed list."""

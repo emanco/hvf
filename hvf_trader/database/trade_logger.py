@@ -354,6 +354,15 @@ class TradeLogger:
             .all()
         )
 
+    def get_recent_patterns(self, hours: int = 24) -> list[PatternRecord]:
+        """Return patterns detected within the last N hours (any status)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        return (
+            self._session.query(PatternRecord)
+            .filter(PatternRecord.detected_at >= cutoff)
+            .all()
+        )
+
     def get_pnl_since(self, since_dt: datetime) -> float:
         """Sum P&L of all trades closed since a given datetime.
 
