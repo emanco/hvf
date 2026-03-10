@@ -97,6 +97,7 @@ class HVFTrader:
 
         # ─── Alerts ──────────────────────────────────────────────────────
         self.alerter = TelegramAlerter()
+        self.trade_monitor.alerter = self.alerter
 
         # ─── Performance Monitor ────────────────────────────────────────
         self.perf_monitor = PerformanceMonitor(

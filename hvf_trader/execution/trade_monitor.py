@@ -20,14 +20,16 @@ from hvf_trader import config
 
 
 class TradeMonitor:
-    def __init__(self, order_manager, trade_logger, connector=None):
+    def __init__(self, order_manager, trade_logger, connector=None, alerter=None):
         """
         Args:
             order_manager: OrderManager instance
             trade_logger: TradeLogger instance
             connector: MT5Connector instance
+            alerter: TelegramAlerter instance (optional)
         """
         self.order_manager = order_manager
+        self.alerter = alerter
         self.trade_logger = trade_logger
         self.connector = connector
         self._running = False
@@ -184,6 +186,15 @@ class TradeMonitor:
                 f"Partial close complete: ticket={ticket}, "
                 f"SL→breakeven={breakeven_sl}"
             )
+            if self.alerter:
+                # Approximate pips (works for 4/5 digit pairs)
+                pip_size = 0.01 if "JPY" in trade_record.symbol else 0.0001
+                pnl_pips = (close_price - trade_record.entry_price) / pip_size
+                if direction == "SHORT":
+                    pnl_pips = -pnl_pips
+                self.alerter.alert_partial_close(
+                    trade_record.symbol, direction, close_price, pnl_pips,
+                )
 
     def _update_trailing_stop(self, trade_record, ticket, position, current_price):
         """
