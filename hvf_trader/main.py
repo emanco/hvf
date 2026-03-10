@@ -637,6 +637,7 @@ class HVFTrader:
             direction=direction,
             lot_size=result.lot_size,
             stop_loss=pattern.stop_loss,
+            comment=pattern_type,
         )
 
         if ticket is None:
