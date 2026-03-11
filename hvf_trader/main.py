@@ -603,16 +603,32 @@ class HVFTrader:
         open_trades = self.trade_logger.get_open_trades()
         news_blocking = has_upcoming_news(symbol)
 
+        # Use current market price for position sizing (not pattern's theoretical
+        # entry). This matches the backtest which uses actual bar close, and
+        # accounts for spread + price movement since detection.
+        spread_price = symbol_info["spread"] * symbol_info["point"]
+        if direction == "LONG":
+            live_entry = symbol_info["ask"]
+        else:
+            live_entry = symbol_info["bid"]
+
+        # Widen SL by the spread to match backtest conditions (no spread).
+        # LONG: move SL down by spread; SHORT: move SL up by spread.
+        if direction == "LONG":
+            adjusted_sl = pattern.stop_loss - spread_price
+        else:
+            adjusted_sl = pattern.stop_loss + spread_price
+
         result = self.risk_manager.pre_trade_check(
             symbol=symbol,
             direction=direction,
-            entry_price=pattern.entry_price,
-            stop_loss=pattern.stop_loss,
+            entry_price=live_entry,
+            stop_loss=adjusted_sl,
             target_2=pattern.target_2,
             equity=account["equity"],
             free_margin=account["free_margin"],
             margin_used=account.get("margin", 0),
-            current_spread=symbol_info["spread"] * symbol_info["point"],
+            current_spread=spread_price,
             open_trades=open_trades,
             news_within_window=news_blocking,
             pattern_type=pattern_type,
@@ -631,12 +647,12 @@ class HVFTrader:
             )
             return
 
-        # Execute market order
+        # Execute market order with spread-adjusted SL
         ticket = self.order_manager.place_market_order(
             symbol=symbol,
             direction=direction,
             lot_size=result.lot_size,
-            stop_loss=pattern.stop_loss,
+            stop_loss=adjusted_sl,
             comment=pattern_type,
         )
 
@@ -651,14 +667,21 @@ class HVFTrader:
             )
             return
 
+        logger.info(
+            f"[{pattern_type}] Executed {direction} {symbol}: "
+            f"pattern_entry={pattern.entry_price:.5f}, live_fill={live_entry:.5f}, "
+            f"original_sl={pattern.stop_loss:.5f}, adjusted_sl={adjusted_sl:.5f}, "
+            f"spread={spread_price:.5f}, lots={result.lot_size}"
+        )
+
         # Log trade
         trade_record = self.trade_logger.log_trade_open({
             "pattern_id": pattern_record.id,
             "symbol": symbol,
             "direction": direction,
             "mt5_ticket": ticket,
-            "entry_price": pattern.entry_price,
-            "stop_loss": pattern.stop_loss,
+            "entry_price": live_entry,
+            "stop_loss": adjusted_sl,
             "target_1": pattern.target_1,
             "target_2": pattern.target_2,
             "lot_size": result.lot_size,
@@ -674,7 +697,7 @@ class HVFTrader:
             symbol=symbol,
             trade_id=trade_record.id,
             pattern_id=pattern_record.id,
-            details=f"Ticket={ticket}, Lots={result.lot_size}, Entry={pattern.entry_price}",
+            details=f"Ticket={ticket}, Lots={result.lot_size}, Entry={live_entry:.5f}",
         )
 
         self.alerter.alert_trade_opened(
