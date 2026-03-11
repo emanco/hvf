@@ -619,13 +619,22 @@ class HVFTrader:
         else:
             adjusted_sl = pattern.stop_loss + spread_price
 
-        # Guard: if live price has drifted so close to SL that stop distance
-        # is less than 3x spread, the pattern is stale — skip it.
-        live_stop_dist = abs(live_entry - adjusted_sl)
-        if live_stop_dist < spread_price * 3:
+        # Guard: SL must be on the correct side of live price with enough room.
+        # Minimum stop distance = max(5x spread, 5 pips) to avoid broker rejections.
+        pip_size = config.PIP_VALUES.get(symbol, 0.0001)
+        min_stop_dist = max(spread_price * 5, pip_size * 5)
+        if direction == "LONG" and (live_entry - adjusted_sl) < min_stop_dist:
             logger.info(
                 f"[{pattern_type}] Skipping {symbol} {direction}: "
-                f"live stop distance {live_stop_dist:.5f} < 3x spread {spread_price*3:.5f}"
+                f"SL too close or wrong side (entry={live_entry:.5f}, sl={adjusted_sl:.5f}, "
+                f"min_dist={min_stop_dist:.5f})"
+            )
+            return
+        if direction == "SHORT" and (adjusted_sl - live_entry) < min_stop_dist:
+            logger.info(
+                f"[{pattern_type}] Skipping {symbol} {direction}: "
+                f"SL too close or wrong side (entry={live_entry:.5f}, sl={adjusted_sl:.5f}, "
+                f"min_dist={min_stop_dist:.5f})"
             )
             return
 
