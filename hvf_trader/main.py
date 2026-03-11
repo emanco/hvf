@@ -583,6 +583,32 @@ class HVFTrader:
             if armed in self._armed_patterns:
                 self._armed_patterns.remove(armed)
 
+    # Map symbol quote currency to the MT5 pair needed for USD conversion
+    _QUOTE_FX_MAP = {
+        "EURGBP": ("GBPUSD", False),   # quote=GBP, need GBPUSD rate
+        "USDCHF": ("USDCHF", True),    # quote=CHF, need 1/USDCHF
+        "EURAUD": ("AUDUSD", False),    # quote=AUD, need AUDUSD rate
+    }
+    # EURUSD, NZDUSD: quote=USD, no conversion needed
+
+    def _get_quote_to_account_rate(self, symbol: str) -> float:
+        """Get exchange rate to convert pip value from quote currency to USD."""
+        lookup = self._QUOTE_FX_MAP.get(symbol)
+        if lookup is None:
+            return 1.0  # USD-quoted pair
+
+        fx_symbol, invert = lookup
+        fx_info = self.connector.get_symbol_info(fx_symbol)
+        if fx_info is None:
+            logger.warning(f"Cannot get FX rate for {fx_symbol}, defaulting to 1.0")
+            return 1.0
+
+        rate = fx_info["bid"]
+        if invert:
+            rate = 1.0 / rate if rate > 0 else 1.0
+        logger.debug(f"FX rate for {symbol}: {fx_symbol}={'1/' if invert else ''}{fx_info['bid']:.5f} = {rate:.5f}")
+        return rate
+
     def _attempt_entry(self, pattern_record, pattern, df, pattern_type="HVF"):
         """Run pre-trade risk checks and execute if all pass."""
         symbol = pattern_record.symbol
@@ -638,6 +664,9 @@ class HVFTrader:
             )
             return
 
+        # Convert pip value to account currency (USD) for non-USD quoted pairs
+        fx_rate = self._get_quote_to_account_rate(symbol)
+
         result = self.risk_manager.pre_trade_check(
             symbol=symbol,
             direction=direction,
@@ -651,6 +680,7 @@ class HVFTrader:
             open_trades=open_trades,
             news_within_window=news_blocking,
             pattern_type=pattern_type,
+            exchange_rate_to_account=fx_rate,
         )
 
         if not result.passed:
