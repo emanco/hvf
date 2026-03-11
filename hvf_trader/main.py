@@ -619,6 +619,16 @@ class HVFTrader:
         else:
             adjusted_sl = pattern.stop_loss + spread_price
 
+        # Guard: if live price has drifted so close to SL that stop distance
+        # is less than 3x spread, the pattern is stale — skip it.
+        live_stop_dist = abs(live_entry - adjusted_sl)
+        if live_stop_dist < spread_price * 3:
+            logger.info(
+                f"[{pattern_type}] Skipping {symbol} {direction}: "
+                f"live stop distance {live_stop_dist:.5f} < 3x spread {spread_price*3:.5f}"
+            )
+            return
+
         result = self.risk_manager.pre_trade_check(
             symbol=symbol,
             direction=direction,
