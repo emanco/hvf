@@ -137,10 +137,14 @@ class HVFTrader:
 
         account = self.connector.get_account_info()
         if account:
+            self._account_currency = account.get("currency", "USD")
             logger.info(
                 f"Account: balance={account['balance']:.2f}, "
-                f"equity={account['equity']:.2f}"
+                f"equity={account['equity']:.2f}, "
+                f"currency={self._account_currency}"
             )
+        else:
+            self._account_currency = "USD"
 
         self.trade_logger.log_event("STARTUP", details=f"Environment={config.ENVIRONMENT}")
 
@@ -583,31 +587,34 @@ class HVFTrader:
             if armed in self._armed_patterns:
                 self._armed_patterns.remove(armed)
 
-    # Map symbol quote currency to the MT5 pair needed for USD conversion
-    _QUOTE_FX_MAP = {
-        "EURGBP": ("GBPUSD", False),   # quote=GBP, need GBPUSD rate
-        "USDCHF": ("USDCHF", True),    # quote=CHF, need 1/USDCHF
-        "EURAUD": ("AUDUSD", False),    # quote=AUD, need AUDUSD rate
-    }
-    # EURUSD, NZDUSD: quote=USD, no conversion needed
-
     def _get_quote_to_account_rate(self, symbol: str) -> float:
-        """Get exchange rate to convert pip value from quote currency to USD."""
-        lookup = self._QUOTE_FX_MAP.get(symbol)
-        if lookup is None:
-            return 1.0  # USD-quoted pair
+        """Get exchange rate to convert pip value from quote currency to account currency.
 
-        fx_symbol, invert = lookup
-        fx_info = self.connector.get_symbol_info(fx_symbol)
-        if fx_info is None:
-            logger.warning(f"Cannot get FX rate for {fx_symbol}, defaulting to 1.0")
+        Works with any account currency (USD, EUR, GBP, etc.) by dynamically
+        looking up the conversion pair in MT5.
+        """
+        quote_ccy = symbol[3:6]  # e.g. EURUSD -> USD, EURGBP -> GBP
+        account_ccy = self._account_currency
+        if quote_ccy == account_ccy:
             return 1.0
 
-        rate = fx_info["bid"]
-        if invert:
-            rate = 1.0 / rate if rate > 0 else 1.0
-        logger.debug(f"FX rate for {symbol}: {fx_symbol}={'1/' if invert else ''}{fx_info['bid']:.5f} = {rate:.5f}")
-        return rate
+        # Try direct pair: {quote}{account} e.g. GBPUSD
+        direct = quote_ccy + account_ccy
+        fx_info = self.connector.get_symbol_info(direct)
+        if fx_info and fx_info["bid"] > 0:
+            logger.debug(f"FX rate {symbol}: {direct} bid={fx_info['bid']:.5f}")
+            return fx_info["bid"]
+
+        # Try inverse pair: {account}{quote} e.g. USDCHF -> invert
+        inverse = account_ccy + quote_ccy
+        fx_info = self.connector.get_symbol_info(inverse)
+        if fx_info and fx_info["bid"] > 0:
+            rate = 1.0 / fx_info["bid"]
+            logger.debug(f"FX rate {symbol}: 1/{inverse} bid={fx_info['bid']:.5f} = {rate:.5f}")
+            return rate
+
+        logger.warning(f"Cannot find FX pair for {quote_ccy}->{account_ccy}, defaulting to 1.0")
+        return 1.0
 
     def _attempt_entry(self, pattern_record, pattern, df, pattern_type="HVF"):
         """Run pre-trade risk checks and execute if all pass."""

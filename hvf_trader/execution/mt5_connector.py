@@ -183,6 +183,7 @@ class MT5Connector:
             "margin": account.margin,
             "margin_level": account.margin_level,
             "profit": account.profit,
+            "currency": account.currency,
         }
 
     def get_symbol_info(self, symbol: str) -> Optional[dict]:
