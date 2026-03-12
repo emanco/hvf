@@ -317,7 +317,7 @@ class BacktestEngine:
                 all_candidates: list[dict] = []
 
                 # HVF Detection (every 4 bars)
-                if scan_hvf:
+                if scan_hvf and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("HVF", []):
                     pivots = compute_zigzag(window_df, config.ZIGZAG_ATR_MULTIPLIER)
                     if len(pivots) >= 6:
                         hvf_patterns = detect_hvf_patterns(
@@ -546,7 +546,8 @@ class BacktestEngine:
         else:
             raw_pips = (trade.entry_price - trade.exit_price) / pip_value
 
-        # Account for partial close: 50% at target_1, 50% at exit
+        # Account for partial close at T1
+        partial_pct = config.PARTIAL_CLOSE_PCT
         if trade.partial_closed and trade.exit_reason != "STOP_LOSS":
             if trade.direction == "LONG":
                 partial_pips = (trade.partial_price - trade.entry_price) / pip_value
@@ -554,7 +555,7 @@ class BacktestEngine:
             else:
                 partial_pips = (trade.entry_price - trade.partial_price) / pip_value
                 remaining_pips = (trade.entry_price - trade.exit_price) / pip_value
-            trade.pnl_pips = (partial_pips * 0.5) + (remaining_pips * 0.5)
+            trade.pnl_pips = (partial_pips * partial_pct) + (remaining_pips * (1 - partial_pct))
         else:
             trade.pnl_pips = raw_pips
 
