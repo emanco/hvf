@@ -45,6 +45,10 @@ class TradeMonitor:
                 self._monitor_cycle()
             except Exception as e:
                 logger.error(f"Trade monitor error: {e}", exc_info=True)
+                try:
+                    self.trade_logger._session.rollback()
+                except Exception:
+                    pass
                 self.trade_logger.log_event(
                     "ERROR", details=f"Trade monitor: {e}", severity="ERROR"
                 )
@@ -57,6 +61,10 @@ class TradeMonitor:
 
     def _monitor_cycle(self):
         """Single monitoring cycle: check all open trades."""
+        try:
+            self.trade_logger._session.rollback()  # Clear any stale state
+        except Exception:
+            pass
         open_trades = self.trade_logger.get_open_trades()
         if not open_trades:
             return
@@ -210,7 +218,10 @@ class TradeMonitor:
         if df is None or df.empty:
             return
         current_atr = df["atr"].iloc[-1]
-        trail_distance = config.TRAILING_STOP_ATR_MULT * current_atr
+        trail_mult = config.TRAILING_STOP_ATR_MULT_BY_PATTERN.get(
+            trade_record.pattern_type, config.TRAILING_STOP_ATR_MULT
+        )
+        trail_distance = trail_mult * current_atr
 
         if direction == "LONG":
             # Track highest price
@@ -313,30 +324,40 @@ class TradeMonitor:
             )
             return
 
-        # Find the closing deal (the one that reduces/closes position)
+        # Find the closing deal — must match symbol, take most recent
+        close_deal = None
         for deal in deals:
-            if deal.entry == 1:  # DEAL_ENTRY_OUT = close
-                close_price = deal.price
-                pnl = deal.profit
-                pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
-                direction = trade_record.direction
+            if deal.entry == 1 and deal.symbol == trade_record.symbol:
+                close_deal = deal  # Keep iterating to get the LAST one
 
-                if direction == "LONG":
-                    pnl_pips = (close_price - trade_record.entry_price) / pip_value
-                else:
-                    pnl_pips = (trade_record.entry_price - close_price) / pip_value
+        if close_deal:
+            close_price = close_deal.price
+            pnl = close_deal.profit
+            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+            direction = trade_record.direction
 
-                reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
-                self.trade_logger.log_trade_close(
-                    trade_record.id, close_price, pnl, pnl_pips, reason
-                )
-                self.trade_logger.log_event(
-                    "TRADE_CLOSED",
-                    symbol=trade_record.symbol,
-                    trade_id=trade_record.id,
-                    details=f"Server-side close: {reason}, PnL={pnl:.2f}",
-                )
+            if direction == "LONG":
+                pnl_pips = (close_price - trade_record.entry_price) / pip_value
+            else:
+                pnl_pips = (trade_record.entry_price - close_price) / pip_value
 
-                self._highest_since_partial.pop(ticket, None)
-                self._lowest_since_partial.pop(ticket, None)
-                break
+            reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
+            self.trade_logger.log_trade_close(
+                trade_record.id, close_price, pnl, pnl_pips, reason
+            )
+            self.trade_logger.log_event(
+                "TRADE_CLOSED",
+                symbol=trade_record.symbol,
+                trade_id=trade_record.id,
+                details=f"Server-side close: {reason}, PnL={pnl:.2f}",
+            )
+
+            self._highest_since_partial.pop(ticket, None)
+            self._lowest_since_partial.pop(ticket, None)
+        else:
+            logger.warning(
+                f"Position {ticket} closed but no matching deal for {trade_record.symbol}"
+            )
+            self.trade_logger.log_trade_close(
+                trade_record.id, 0.0, 0.0, 0.0, "UNKNOWN"
+            )

@@ -454,12 +454,25 @@ class HVFTrader:
                 "h3_index": pattern.h3.index,
                 "l3_index": pattern.l3.index,
             })
-        else:
-            # Non-HVF patterns use zero pivots in DB
+        elif pattern_type == "KZ_HUNT":
+            # KZ invalidation: price returns to the KZ extreme we're fading
+            # LONG (fading KZ low): invalidate if price revisits KZ low
+            # SHORT (fading KZ high): invalidate if price revisits KZ high
             pattern_data.update({
                 "h1_price": 0, "l1_price": 0,
                 "h2_price": 0, "l2_price": 0,
-                "h3_price": 0, "l3_price": 0,
+                "h3_price": pattern.kz_high,  # SHORT invalidation level
+                "l3_price": pattern.kz_low,   # LONG invalidation level
+                "h1_index": 0, "l1_index": 0,
+                "h2_index": 0, "l2_index": 0,
+                "h3_index": 0, "l3_index": 0,
+            })
+        else:
+            # Other non-HVF patterns: disable invalidation by using extreme values
+            pattern_data.update({
+                "h1_price": 0, "l1_price": 0,
+                "h2_price": 0, "l2_price": 0,
+                "h3_price": 999999, "l3_price": -999999,
                 "h1_index": 0, "l1_index": 0,
                 "h2_index": 0, "l2_index": 0,
                 "h3_index": 0, "l3_index": 0,
