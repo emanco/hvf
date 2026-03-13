@@ -226,6 +226,45 @@ class TelegramAlerter:
                 f"  {pt}: {len(pt_trades)}T, {pt_wins}W, PnL {pt_pnl:+.2f}"
             )
 
+        # Live vs backtest tracking
+        slippage_trades = [t for t in trades if t.slippage is not None]
+        if slippage_trades:
+            avg_slip = sum(t.slippage for t in slippage_trades) / len(slippage_trades)
+            max_slip = max(t.slippage for t in slippage_trades)
+            # Convert to pips for readability
+            slip_pips = [
+                t.slippage / (0.01 if "JPY" in t.symbol else 0.0001)
+                for t in slippage_trades
+            ]
+            avg_slip_pips = sum(slip_pips) / len(slip_pips)
+            slip_section = (
+                f"\n\n<b>Live vs Backtest:</b>\n"
+                f"  Avg slippage: {avg_slip_pips:+.1f}p ({len(slippage_trades)}T)\n"
+                f"  Max slippage: {max(slip_pips):+.1f}p"
+            )
+        else:
+            slip_section = ""
+
+        # Invalidation ratio from pattern records
+        from hvf_trader.database.models import PatternRecord
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        recent_patterns = (
+            trade_logger.session.query(PatternRecord)
+            .filter(PatternRecord.detected_at >= cutoff)
+            .all()
+        )
+        armed = sum(1 for p in recent_patterns if p.status in ("ARMED", "TRIGGERED", "EXPIRED"))
+        triggered = sum(1 for p in recent_patterns if p.status == "TRIGGERED")
+        expired = sum(1 for p in recent_patterns if p.status == "EXPIRED")
+        if armed > 0:
+            inval_section = (
+                f"\n  Armed: {armed} | Triggered: {triggered} | Expired: {expired}"
+                f"\n  Trigger rate: {triggered/armed*100:.0f}%"
+            )
+        else:
+            inval_section = ""
+
         text = (
             f"<b>\U0001f4ca Weekly Performance</b>\n"
             f"Last {len(trades)} trades:\n"
@@ -233,6 +272,8 @@ class TelegramAlerter:
             f"WR: {wr:.0f}% | PF: {pf:.2f}\n\n"
             f"<b>By Pattern:</b>\n"
             + "\n".join(pattern_lines)
+            + slip_section
+            + inval_section
         )
         self.send_message(text)
 

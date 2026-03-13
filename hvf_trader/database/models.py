@@ -118,6 +118,11 @@ class TradeRecord(Base):
     close_reason = Column(String(50), nullable=True)
     # TARGET_1, TARGET_2, TRAILING_STOP, INVALIDATION, MANUAL, CIRCUIT_BREAKER, DISCONNECT
 
+    # Live vs backtest tracking
+    intended_entry = Column(Float, nullable=True)  # Pattern's theoretical entry price
+    intended_sl = Column(Float, nullable=True)  # Pattern's original SL before spread adjustment
+    slippage = Column(Float, nullable=True)  # fill_price - intended_entry (positive = worse)
+
     notes = Column(Text, nullable=True)
 
     def __repr__(self) -> str:

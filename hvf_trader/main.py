@@ -779,6 +779,12 @@ class HVFTrader:
             f"spread={spread_price:.5f}, lots={result.lot_size}"
         )
 
+        # Compute slippage: positive = worse fill (paid more for LONG, got less for SHORT)
+        if direction == "LONG":
+            slippage = fill_price - pattern.entry_price
+        else:
+            slippage = pattern.entry_price - fill_price
+
         # Log trade
         trade_record = self.trade_logger.log_trade_open({
             "pattern_id": pattern_record.id,
@@ -792,6 +798,9 @@ class HVFTrader:
             "lot_size": result.lot_size,
             "opened_at": datetime.now(timezone.utc),
             "status": "OPEN",
+            "intended_entry": pattern.entry_price,
+            "intended_sl": pattern.stop_loss,
+            "slippage": slippage,
         })
 
         # Update pattern status
