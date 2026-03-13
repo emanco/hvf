@@ -59,11 +59,11 @@ class TelegramAlerter:
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
 
-    def alert_pattern_detected(self, symbol: str, direction: str, score: float, rrr: float):
-        """Alert when a new HVF pattern is detected and armed."""
+    def alert_pattern_detected(self, symbol: str, direction: str, score: float, rrr: float, pattern_type: str = "HVF"):
+        """Alert when a new pattern is detected and armed."""
         arrow = "\u2B06" if direction == "LONG" else "\u2B07"
         text = (
-            f"<b>{arrow} HVF Pattern Detected</b>\n"
+            f"<b>{arrow} {pattern_type} Pattern Detected</b>\n"
             f"Symbol: <code>{symbol}</code>\n"
             f"Direction: <b>{direction}</b>\n"
             f"Score: <b>{score:.0f}/100</b>\n"
@@ -81,11 +81,12 @@ class TelegramAlerter:
         stop_loss: float,
         target_1: float,
         target_2: float,
+        pattern_type: str = "HVF",
     ):
         """Alert when a trade is executed."""
         arrow = "\u2B06" if direction == "LONG" else "\u2B07"
         text = (
-            f"<b>{arrow} Trade Opened</b>\n"
+            f"<b>{arrow} {pattern_type} Trade Opened</b>\n"
             f"Symbol: <code>{symbol}</code>\n"
             f"Direction: <b>{direction}</b>\n"
             f"Lots: <b>{lot_size}</b>\n"
