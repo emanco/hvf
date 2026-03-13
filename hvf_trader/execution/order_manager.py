@@ -392,3 +392,23 @@ class OrderManager:
             "comment": pos.comment,
             "price_current": pos.price_current,
         }
+
+    def get_all_positions(self) -> list[dict]:
+        """Get all open MT5 positions."""
+        if not MT5_AVAILABLE:
+            return []
+        positions = mt5.positions_get()
+        if not positions:
+            return []
+        result = []
+        for pos in positions:
+            result.append({
+                "ticket": pos.ticket,
+                "symbol": pos.symbol,
+                "type": "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT",
+                "volume": pos.volume,
+                "price_open": pos.price_open,
+                "profit": pos.profit,
+                "price_current": pos.price_current,
+            })
+        return result

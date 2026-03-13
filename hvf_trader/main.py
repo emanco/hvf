@@ -148,6 +148,9 @@ class HVFTrader:
 
         self.trade_logger.log_event("STARTUP", details=f"Environment={config.ENVIRONMENT}")
 
+        # ─── Startup reconciliation: DB vs MT5 ─────────────────────────
+        self._reconcile_on_startup()
+
         # Load armed patterns from DB, filtering out stale and duplicate ones
         db_armed = self.trade_logger.get_armed_patterns()
         now = pd.Timestamp.now(tz="UTC")
@@ -786,6 +789,59 @@ class HVFTrader:
             f"Trade opened: {symbol} {direction} {result.lot_size} lots "
             f"ticket={ticket}"
         )
+
+    def _reconcile_on_startup(self):
+        """Compare DB open trades against MT5 positions. Log and alert on mismatches."""
+        db_trades = self.trade_logger.get_open_trades()
+        mt5_positions = self.order_manager.get_all_positions() if hasattr(self.order_manager, 'get_all_positions') else []
+
+        # Build lookup sets
+        db_tickets = {}
+        for t in db_trades:
+            if t.mt5_ticket:
+                db_tickets[t.mt5_ticket] = t
+        mt5_tickets = {p["ticket"]: p for p in mt5_positions}
+
+        issues = []
+
+        # DB says open, MT5 has no position (ghost trade)
+        for ticket, trade in db_tickets.items():
+            if ticket not in mt5_tickets:
+                issues.append(
+                    f"GHOST: DB trade {trade.id} ({trade.symbol} {trade.direction}) "
+                    f"ticket={ticket} not found in MT5 — may have been closed while bot was down"
+                )
+
+        # MT5 has position, DB doesn't know about it (orphan position)
+        for ticket, pos in mt5_tickets.items():
+            if ticket not in db_tickets:
+                issues.append(
+                    f"ORPHAN: MT5 position ticket={ticket} ({pos['symbol']} {pos['type']} "
+                    f"{pos['volume']} lots) not tracked in DB"
+                )
+
+        # Volume mismatch (partial close happened server-side or DB out of sync)
+        for ticket in db_tickets:
+            if ticket in mt5_tickets:
+                db_trade = db_tickets[ticket]
+                mt5_pos = mt5_tickets[ticket]
+                if db_trade.lot_size and abs(mt5_pos["volume"] - db_trade.lot_size) > 0.001:
+                    # Could be a partial close — only flag if NOT already marked partial
+                    if not db_trade.partial_closed:
+                        issues.append(
+                            f"VOLUME: DB trade {db_trade.id} ({db_trade.symbol}) "
+                            f"lots DB={db_trade.lot_size} vs MT5={mt5_pos['volume']}"
+                        )
+
+        if issues:
+            msg = f"RECONCILIATION: {len(issues)} issue(s) found on startup:\n" + "\n".join(issues)
+            logger.warning(msg)
+            self.trade_logger.log_event("RECONCILIATION", details=msg, severity="WARNING")
+            self.alerter.send_message(f"⚠️ {msg}")
+        else:
+            n_db = len(db_trades)
+            n_mt5 = len(mt5_positions)
+            logger.info(f"Reconciliation OK: {n_db} DB trades, {n_mt5} MT5 positions — all match")
 
     def _signal_handler(self, signum, frame):
         """Handle SIGINT/SIGTERM for graceful shutdown."""
