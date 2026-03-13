@@ -93,7 +93,7 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
 # Viper net negative on EURGBP, NZDUSD, EURAUD. HVF net negative on EURGBP over 10yr.
 PATTERN_SYMBOL_EXCLUSIONS = {
     "VIPER": ["EURGBP", "NZDUSD", "EURAUD", "EURUSD"],
-    "HVF": ["EURUSD"],
+    "HVF": ["EURUSD", "EURGBP"],  # EURGBP HVF net negative (-105p/10yr, PF=0.85)
 }
 
 # ─── Multi-Pattern Indicators ───────────────────────────────────────────────
@@ -122,7 +122,7 @@ RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
 RISK_PCT_BY_PATTERN = {
     "HVF": 1.0,
     "VIPER": 2.0,          # V2 aggressive — PF 1.50+ SHORT-only, push while account is small
-    "KZ_HUNT": 2.0,        # V2 aggressive — volume engine, biggest £ lever
+    "KZ_HUNT": 1.0,        # Reduced from 2% — expert panel: 2% on correlated pairs too aggressive for micro account
     "LONDON_SWEEP": 0.5,
 }
 DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
@@ -134,7 +134,7 @@ MAX_SPREAD_ABSOLUTE = 0.00020     # 2 pips — normal spreads always pass regard
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
 # ─── Trade Management ───────────────────────────────────────────────────────
-PARTIAL_CLOSE_PCT = 0.50          # 50/50 split — standard partial close at T1
+PARTIAL_CLOSE_PCT = 0.60          # 60/40 split — bank more at T1, better risk-adjusted return (PF 1.79 vs 1.53, MaxDD 10.9% vs 19%)
 TRAILING_STOP_ATR_MULT = 1.5     # Trail SL at 1.5x ATR below highest since partial
 TARGET_1_MULT = 0.5              # target_1 = midpoint + full_range * 0.5
 TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
@@ -156,6 +156,14 @@ PATTERN_FRESHNESS_BARS = {
 }
 
 # ─── News Filter ─────────────────────────────────────────────────────────────
+# Per-pattern minimum stop distance in pips (rejects patterns with stops in noise range)
+MIN_STOP_PIPS_BY_PATTERN = {
+    "HVF": 5,
+    "KZ_HUNT": 15,       # Expert panel: 9.9-pip stops are noise-magnets on H1 FX
+    "VIPER": 5,
+    "LONDON_SWEEP": 5,
+}
+
 NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact
 
 # ─── Health Check ────────────────────────────────────────────────────────────

@@ -667,9 +667,10 @@ class HVFTrader:
             adjusted_sl = pattern.stop_loss + spread_price
 
         # Guard: SL must be on the correct side of live price with enough room.
-        # Minimum stop distance = max(5x spread, 5 pips) to avoid broker rejections.
+        # Minimum stop distance = max(5x spread, pattern minimum pips) to avoid noise stops.
         pip_size = config.PIP_VALUES.get(symbol, 0.0001)
-        min_stop_dist = max(spread_price * 5, pip_size * 5)
+        min_stop_pips = config.MIN_STOP_PIPS_BY_PATTERN.get(pattern_type, 5)
+        min_stop_dist = max(spread_price * 5, pip_size * min_stop_pips)
         if direction == "LONG" and (live_entry - adjusted_sl) < min_stop_dist:
             logger.info(
                 f"[{pattern_type}] Skipping {symbol} {direction}: "
