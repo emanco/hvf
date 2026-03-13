@@ -15,7 +15,8 @@ echo "=== HVF Deploy ==="
 
 # 1. Stop the bot
 echo "[1/6] Stopping bot..."
-ssh "$VPS" "Stop-ScheduledTask -TaskName 'HVF_Bot' -ErrorAction SilentlyContinue; Start-Sleep 2; Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; exit 0"
+ssh "$VPS" "C:\nssm\nssm.exe stop HVF_Bot; exit 0"
+sleep 2
 echo "  Bot stopped."
 
 # 2. Remove stale nested duplicate
@@ -42,14 +43,15 @@ echo "  Package uploaded."
 
 # 5. Upload top-level scripts
 echo "[5/6] Uploading scripts..."
-scp setup_task.ps1 launch_trader.ps1 start_bot.bat "${VPS}:${REMOTE_DIR}/" 2>/dev/null
+scp install_nssm_service.ps1 launch_trader.ps1 start_bot.bat "${VPS}:${REMOTE_DIR}/" 2>/dev/null
 echo "  Scripts uploaded."
 
 # 6. Restart the bot
 echo "[6/6] Starting bot..."
-ssh "$VPS" "Start-ScheduledTask -TaskName 'HVF_Bot'"
+ssh "$VPS" "C:\nssm\nssm.exe start HVF_Bot; exit 0"
 sleep 5
 echo "  Verifying..."
+ssh "$VPS" "C:\nssm\nssm.exe status HVF_Bot; exit 0"
 ssh "$VPS" "Get-Content '${REMOTE_DIR}/logs/main.log' -Tail 3 -ErrorAction SilentlyContinue; exit 0"
 
 echo ""
