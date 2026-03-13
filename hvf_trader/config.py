@@ -134,7 +134,7 @@ MAX_SPREAD_ABSOLUTE = 0.00020     # 2 pips — normal spreads always pass regard
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 
 # ─── Trade Management ───────────────────────────────────────────────────────
-PARTIAL_CLOSE_PCT = 0.60          # V2 aggressive — close 60% at target_1 to secure profit early
+PARTIAL_CLOSE_PCT = 0.50          # 50/50 split — standard partial close at T1
 TRAILING_STOP_ATR_MULT = 1.5     # Trail SL at 1.5x ATR below highest since partial
 TARGET_1_MULT = 0.5              # target_1 = midpoint + full_range * 0.5
 TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
