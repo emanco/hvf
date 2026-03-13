@@ -17,9 +17,10 @@ logger = logging.getLogger("hvf_trader")
 
 
 class PerformanceMonitor:
-    def __init__(self, trade_logger, alerter):
+    def __init__(self, trade_logger, alerter, circuit_breaker=None):
         self.trade_logger = trade_logger
         self.alerter = alerter
+        self.circuit_breaker = circuit_breaker
         self._last_check = None
         self._alert_cooldowns = {}  # key -> last alert time
 
@@ -55,6 +56,9 @@ class PerformanceMonitor:
 
         # Check win rate decay
         alerts.extend(self._check_wr_decay())
+
+        # Kill switch: auto-halt if PF < threshold after enough trades
+        alerts.extend(self._check_kill_switch())
 
         # Send alerts (with cooldown)
         for alert_key, alert_text in alerts:
@@ -208,6 +212,40 @@ class PerformanceMonitor:
             alerts.append((key, text))
 
         return alerts
+
+    def _check_kill_switch(self):
+        """Auto-halt trading if live PF < threshold after enough trades."""
+        all_trades = self.trade_logger.get_all_closed_trades()
+        if len(all_trades) < config.PERF_KILL_SWITCH_MIN_TRADES:
+            return []
+
+        wins = [t for t in all_trades if t.pnl and t.pnl > 0]
+        losses = [t for t in all_trades if t.pnl and t.pnl <= 0]
+        gross_profit = sum(t.pnl for t in wins) if wins else 0
+        gross_loss = abs(sum(t.pnl for t in losses)) if losses else 0.001
+        pf = gross_profit / gross_loss
+
+        if pf >= config.PERF_KILL_SWITCH_MIN_PF:
+            return []
+
+        # Trip the circuit breaker — no auto-resume (manual restart required)
+        if self.circuit_breaker and not self.circuit_breaker.is_tripped:
+            # Use a far-future resume date so it won't auto-reset
+            far_future = datetime.now(timezone.utc) + timedelta(days=365)
+            self.circuit_breaker._trip("MONTHLY", pf, far_future)
+            logger.warning(
+                "KILL SWITCH ACTIVATED: PF %.2f < %.2f after %d trades. Trading halted.",
+                pf, config.PERF_KILL_SWITCH_MIN_PF, len(all_trades),
+            )
+
+        key = "kill_switch"
+        text = (
+            f"<b>\U0001f6a8 KILL SWITCH ACTIVATED</b>\n"
+            f"Live PF: <b>{pf:.2f}</b> after {len(all_trades)} trades\n"
+            f"Threshold: PF < {config.PERF_KILL_SWITCH_MIN_PF} @ {config.PERF_KILL_SWITCH_MIN_TRADES}+ trades\n"
+            f"<b>Trading HALTED. Manual restart required.</b>"
+        )
+        return [(key, text)]
 
     def _should_alert(self, key):
         """Check cooldown — don't re-alert same issue within 24h."""

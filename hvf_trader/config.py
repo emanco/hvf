@@ -187,6 +187,8 @@ PERF_SHARPE_WINDOW_DAYS = 60           # Rolling Sharpe ratio window
 PERF_SHARPE_WARN_THRESHOLD = 0.5       # Sharpe < 0.5 → alert: reduce size
 PERF_SHARPE_HALT_THRESHOLD = 0.0       # Sharpe < 0.0 → alert: halt trading
 PERF_WR_DECAY_THRESHOLD = 15           # Alert if recent WR drops >15% below all-time WR
+PERF_KILL_SWITCH_MIN_TRADES = 200      # Min trades before kill switch can activate
+PERF_KILL_SWITCH_MIN_PF = 1.2          # Auto-halt if live PF < this after min trades
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 LOG_RETENTION_DAYS = 90

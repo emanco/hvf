@@ -103,6 +103,7 @@ class HVFTrader:
         self.perf_monitor = PerformanceMonitor(
             trade_logger=self.trade_logger,
             alerter=self.alerter,
+            circuit_breaker=self.circuit_breaker,
         )
 
         # ─── Multi-Pattern Detectors ───────────────────────────────────
