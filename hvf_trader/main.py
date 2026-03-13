@@ -722,7 +722,7 @@ class HVFTrader:
             return
 
         # Execute market order with spread-adjusted SL
-        ticket = self.order_manager.place_market_order(
+        order_result = self.order_manager.place_market_order(
             symbol=symbol,
             direction=direction,
             lot_size=result.lot_size,
@@ -730,7 +730,7 @@ class HVFTrader:
             comment=pattern_type,
         )
 
-        if ticket is None:
+        if order_result is None:
             logger.error(f"Order execution failed for {symbol}")
             self.trade_logger.log_event(
                 "ERROR",
@@ -741,10 +741,41 @@ class HVFTrader:
             )
             return
 
+        ticket = order_result["ticket"]
+        fill_price = order_result["fill_price"]
+
+        # Recalculate SL from actual fill price to maintain the intended stop distance.
+        # The original stop distance was measured from the pattern's entry price.
+        stop_distance = abs(pattern.entry_price - pattern.stop_loss) + spread_price
+        if direction == "LONG":
+            final_sl = fill_price - stop_distance
+        else:
+            final_sl = fill_price + stop_distance
+
+        # Apply the recalculated SL if it differs from what was sent with the order
+        # Derive digits from point: 0.00001 -> 5, 0.001 -> 3
+        digits = len(str(symbol_info["point"]).rstrip('0').split('.')[-1])
+        final_sl = round(final_sl, digits)
+        if abs(final_sl - adjusted_sl) > symbol_info["point"]:
+            modified = self.order_manager.modify_stop_loss(ticket, symbol, final_sl)
+            if modified:
+                logger.info(
+                    f"[{pattern_type}] SL recalculated from fill: "
+                    f"sent_sl={adjusted_sl:.5f} -> final_sl={final_sl:.5f} "
+                    f"(fill={fill_price:.5f} vs pre-fill={live_entry:.5f})"
+                )
+            else:
+                logger.warning(
+                    f"[{pattern_type}] SL modify failed, keeping sent_sl={adjusted_sl:.5f}"
+                )
+                final_sl = adjusted_sl
+        else:
+            final_sl = adjusted_sl
+
         logger.info(
             f"[{pattern_type}] Executed {direction} {symbol}: "
-            f"pattern_entry={pattern.entry_price:.5f}, live_fill={live_entry:.5f}, "
-            f"original_sl={pattern.stop_loss:.5f}, adjusted_sl={adjusted_sl:.5f}, "
+            f"pattern_entry={pattern.entry_price:.5f}, fill={fill_price:.5f}, "
+            f"original_sl={pattern.stop_loss:.5f}, final_sl={final_sl:.5f}, "
             f"spread={spread_price:.5f}, lots={result.lot_size}"
         )
 
@@ -754,8 +785,8 @@ class HVFTrader:
             "symbol": symbol,
             "direction": direction,
             "mt5_ticket": ticket,
-            "entry_price": live_entry,
-            "stop_loss": adjusted_sl,
+            "entry_price": fill_price,
+            "stop_loss": final_sl,
             "target_1": pattern.target_1,
             "target_2": pattern.target_2,
             "lot_size": result.lot_size,
@@ -771,7 +802,7 @@ class HVFTrader:
             symbol=symbol,
             trade_id=trade_record.id,
             pattern_id=pattern_record.id,
-            details=f"Ticket={ticket}, Lots={result.lot_size}, Entry={live_entry:.5f}",
+            details=f"Ticket={ticket}, Lots={result.lot_size}, Entry={fill_price:.5f}",
         )
 
         self.alerter.alert_trade_opened(

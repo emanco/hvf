@@ -36,7 +36,7 @@ class OrderManager:
         take_profit: float = 0.0,
         comment: str = "HVF",
         magic: int = 20250305,
-    ) -> Optional[int]:
+    ) -> Optional[dict]:
         """
         Place a market order with stop loss.
 
@@ -50,7 +50,7 @@ class OrderManager:
             magic: magic number for identification
 
         Returns:
-            MT5 ticket number on success, None on failure.
+            Dict with 'ticket' and 'fill_price' on success, None on failure.
         """
         if not MT5_AVAILABLE:
             logger.error("MT5 not available")
@@ -107,7 +107,7 @@ class OrderManager:
             f"Order placed: ticket={result.order}, {direction} {lot_size} {symbol} "
             f"@ {result.price}, SL={stop_loss}"
         )
-        return result.order
+        return {"ticket": result.order, "fill_price": result.price}
 
     def modify_stop_loss(self, ticket: int, symbol: str, new_sl: float) -> bool:
         """
