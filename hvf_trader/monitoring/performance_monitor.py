@@ -1,13 +1,15 @@
 """
 Performance Monitor — rolling health metrics with Telegram alerts.
 
-Computes per-pattern and per-symbol rolling PF, win rate, and loss streaks.
+Computes per-pattern and per-symbol rolling PF, win rate, loss streaks,
+rolling Sharpe ratio, and win rate decay.
 Alerts via Telegram when thresholds are breached (with 24h cooldown).
 Does NOT modify any config or pause trading.
 """
 
 import logging
-from datetime import datetime, timezone
+import math
+from datetime import datetime, timedelta, timezone
 
 from hvf_trader import config
 
@@ -47,6 +49,12 @@ class PerformanceMonitor:
 
         # Check consecutive losses (portfolio-wide)
         alerts.extend(self._check_loss_streak())
+
+        # Check rolling Sharpe ratio
+        alerts.extend(self._check_rolling_sharpe())
+
+        # Check win rate decay
+        alerts.extend(self._check_wr_decay())
 
         # Send alerts (with cooldown)
         for alert_key, alert_text in alerts:
@@ -117,6 +125,88 @@ class PerformanceMonitor:
                 f"Review recommended"
             )
             alerts.append((key, text))
+        return alerts
+
+    def _check_rolling_sharpe(self):
+        """Compute 60-day rolling Sharpe from per-trade returns.
+
+        Sharpe = mean(returns) / std(returns) * sqrt(252 / avg_trades_per_day)
+        Simplified: annualized from trade-level returns.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=config.PERF_SHARPE_WINDOW_DAYS)
+        trades = self.trade_logger.get_trades_closed_since(cutoff)
+
+        if len(trades) < 20:
+            return []
+
+        # Use pnl_pips as returns (currency-neutral, consistent across pairs)
+        returns = [t.pnl_pips for t in trades if t.pnl_pips is not None]
+        if len(returns) < 20:
+            return []
+
+        mean_r = sum(returns) / len(returns)
+        variance = sum((r - mean_r) ** 2 for r in returns) / len(returns)
+        std_r = math.sqrt(variance) if variance > 0 else 0.001
+
+        # Annualize: trades span N days, so trades_per_year = len / days * 252
+        days_span = (trades[-1].closed_at - trades[0].closed_at).total_seconds() / 86400
+        if days_span < 1:
+            days_span = 1
+        trades_per_year = len(returns) / days_span * 252
+        sharpe = (mean_r / std_r) * math.sqrt(trades_per_year)
+
+        alerts = []
+
+        if sharpe < config.PERF_SHARPE_HALT_THRESHOLD:
+            key = "sharpe_halt"
+            text = (
+                f"<b>\U0001f6a8 SHARPE CRITICAL</b>\n"
+                f"Rolling {config.PERF_SHARPE_WINDOW_DAYS}d Sharpe: <b>{sharpe:.2f}</b>\n"
+                f"{len(returns)} trades, avg {mean_r:+.1f}p/trade\n"
+                f"<b>Recommendation: HALT TRADING</b>"
+            )
+            alerts.append((key, text))
+        elif sharpe < config.PERF_SHARPE_WARN_THRESHOLD:
+            key = "sharpe_warn"
+            text = (
+                f"<b>\u26a0\ufe0f Sharpe Warning</b>\n"
+                f"Rolling {config.PERF_SHARPE_WINDOW_DAYS}d Sharpe: <b>{sharpe:.2f}</b>\n"
+                f"{len(returns)} trades, avg {mean_r:+.1f}p/trade\n"
+                f"<b>Recommendation: reduce position size</b>"
+            )
+            alerts.append((key, text))
+
+        logger.info(
+            "Rolling Sharpe: %.2f (%d trades, %dd window, avg %.1f pips/trade)",
+            sharpe, len(returns), config.PERF_SHARPE_WINDOW_DAYS, mean_r,
+        )
+        return alerts
+
+    def _check_wr_decay(self):
+        """Compare recent win rate to all-time win rate."""
+        all_trades = self.trade_logger.get_all_closed_trades()
+        if len(all_trades) < 30:
+            return []
+
+        all_wr = sum(1 for t in all_trades if t.pnl and t.pnl > 0) / len(all_trades) * 100
+
+        # Recent = last PERF_ROLLING_TRADE_COUNT trades
+        recent = all_trades[-config.PERF_ROLLING_TRADE_COUNT:]
+        recent_wr = sum(1 for t in recent if t.pnl and t.pnl > 0) / len(recent) * 100
+
+        decay = all_wr - recent_wr
+
+        alerts = []
+        if decay >= config.PERF_WR_DECAY_THRESHOLD:
+            key = "wr_decay"
+            text = (
+                f"<b>\u26a0\ufe0f Win Rate Decay</b>\n"
+                f"All-time WR: {all_wr:.0f}%\n"
+                f"Last {len(recent)} trades: {recent_wr:.0f}%\n"
+                f"Decay: {decay:.0f}pp"
+            )
+            alerts.append((key, text))
+
         return alerts
 
     def _should_alert(self, key):

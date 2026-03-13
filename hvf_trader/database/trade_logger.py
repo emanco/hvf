@@ -476,6 +476,31 @@ class TradeLogger:
             TradeRecord.status == "CLOSED",
         ).count()
 
+    def get_trades_closed_since(self, since_dt: datetime) -> list[TradeRecord]:
+        """Return all closed trades since a given datetime, oldest first."""
+        return (
+            self._session.query(TradeRecord)
+            .filter(
+                TradeRecord.status == "CLOSED",
+                TradeRecord.closed_at >= since_dt,
+                TradeRecord.pnl.isnot(None),
+            )
+            .order_by(TradeRecord.closed_at.asc())
+            .all()
+        )
+
+    def get_all_closed_trades(self) -> list[TradeRecord]:
+        """Return all closed trades, oldest first."""
+        return (
+            self._session.query(TradeRecord)
+            .filter(
+                TradeRecord.status == "CLOSED",
+                TradeRecord.pnl.isnot(None),
+            )
+            .order_by(TradeRecord.closed_at.asc())
+            .all()
+        )
+
     # ─── Circuit Breaker ────────────────────────────────────────────────
 
     def get_circuit_breaker_state(self, level: str) -> CircuitBreakerState:
