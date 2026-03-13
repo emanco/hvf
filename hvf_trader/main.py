@@ -113,7 +113,6 @@ class HVFTrader:
         # ─── State ───────────────────────────────────────────────────────
         self._running = False
         self._armed_patterns = []  # In-memory list of armed patterns (dicts with pattern_type)
-        self._stale_logged = set()  # (symbol, direction) pairs already logged as stale
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
         self._last_reconcile = None
         self._last_daily_summary = None
@@ -573,14 +572,12 @@ class HVFTrader:
                         # Price must be within 2x stop-distance of entry to be "near"
                         max_distance = stop_dist * 2.0 if stop_dist > 0 else 0.0050
                         if distance > max_distance:
-                            stale_key = (symbol, direction, record.id)
-                            if stale_key not in self._stale_logged:
-                                logger.info(
-                                    f"[{pattern_type}] Skipping stale {symbol} {direction}: "
-                                    f"price {close_price:.5f} is {distance:.5f} from entry {record.entry_price:.5f} "
-                                    f"(max {max_distance:.5f})"
-                                )
-                                self._stale_logged.add(stale_key)
+                            logger.info(
+                                f"[{pattern_type}] Invalidating stale {symbol} {direction}: "
+                                f"price {close_price:.5f} is {distance:.5f} from entry {record.entry_price:.5f} "
+                                f"(max {max_distance:.5f})"
+                            )
+                            expired.append(armed)
                             confirmed = False
                         elif direction == "LONG":
                             confirmed = float(close_price) > record.entry_price
@@ -596,7 +593,6 @@ class HVFTrader:
             self.trade_logger.update_pattern_status(armed["record"].id, "EXPIRED")
             self._armed_patterns.remove(armed)
             r = armed["record"]
-            self._stale_logged.discard((r.symbol, r.direction, r.id))
             logger.info(
                 f"[{armed['pattern_type']}] Expired: {r.symbol} {r.direction} (id={r.id})"
             )
@@ -604,8 +600,6 @@ class HVFTrader:
         for armed in triggered:
             if armed in self._armed_patterns:
                 self._armed_patterns.remove(armed)
-                r = armed["record"]
-                self._stale_logged.discard((r.symbol, r.direction, r.id))
 
     def _get_quote_to_account_rate(self, symbol: str) -> float:
         """Get exchange rate to convert pip value from quote currency to account currency.
