@@ -229,7 +229,16 @@ def get_engine(url: str | None = None):
         SQLAlchemy Engine instance.
     """
     db_url = url or DATABASE_URL
-    return create_engine(db_url, echo=False, pool_pre_ping=True)
+    engine = create_engine(db_url, echo=False, pool_pre_ping=True)
+    if db_url.startswith("sqlite"):
+        from sqlalchemy import event
+
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
+    return engine
 
 
 def get_session(engine=None):
