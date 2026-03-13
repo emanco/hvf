@@ -188,7 +188,9 @@ class PerformanceMonitor:
 
     def _check_wr_decay(self):
         """Compare recent win rate to all-time win rate."""
-        all_trades = self.trade_logger.get_all_closed_trades()
+        all_trades = self.trade_logger.get_all_closed_trades(
+            since_date=config.PERF_GO_LIVE_DATE
+        )
         if len(all_trades) < 30:
             return []
 
@@ -215,7 +217,9 @@ class PerformanceMonitor:
 
     def _check_kill_switch(self):
         """Auto-halt trading if live PF < threshold after enough trades."""
-        all_trades = self.trade_logger.get_all_closed_trades()
+        all_trades = self.trade_logger.get_all_closed_trades(
+            since_date=config.PERF_GO_LIVE_DATE
+        )
         if len(all_trades) < config.PERF_KILL_SWITCH_MIN_TRADES:
             return []
 

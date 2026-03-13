@@ -489,17 +489,20 @@ class TradeLogger:
             .all()
         )
 
-    def get_all_closed_trades(self) -> list[TradeRecord]:
-        """Return all closed trades, oldest first."""
-        return (
-            self._session.query(TradeRecord)
-            .filter(
-                TradeRecord.status == "CLOSED",
-                TradeRecord.pnl.isnot(None),
-            )
-            .order_by(TradeRecord.closed_at.asc())
-            .all()
+    def get_all_closed_trades(self, since_date: str = None) -> list[TradeRecord]:
+        """Return all closed trades, oldest first.
+
+        Args:
+            since_date: Optional ISO date string (YYYY-MM-DD) to filter trades after.
+        """
+        query = self._session.query(TradeRecord).filter(
+            TradeRecord.status == "CLOSED",
+            TradeRecord.pnl.isnot(None),
         )
+        if since_date:
+            cutoff = datetime.fromisoformat(since_date).replace(tzinfo=timezone.utc)
+            query = query.filter(TradeRecord.closed_at >= cutoff)
+        return query.order_by(TradeRecord.closed_at.asc()).all()
 
     # ─── Circuit Breaker ────────────────────────────────────────────────
 
