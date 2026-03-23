@@ -159,7 +159,7 @@ PATTERN_FRESHNESS_BARS = {
 # Per-pattern minimum stop distance in pips (rejects patterns with stops in noise range)
 MIN_STOP_PIPS_BY_PATTERN = {
     "HVF": 5,
-    "KZ_HUNT": 15,       # Expert panel: 9.9-pip stops are noise-magnets on H1 FX
+    "KZ_HUNT": 8,        # Lowered from 15 (blocked all KZ entries) — 8 pips still filters noise
     "VIPER": 5,
     "LONDON_SWEEP": 5,
 }

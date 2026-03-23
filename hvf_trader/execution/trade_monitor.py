@@ -4,7 +4,7 @@
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -108,22 +108,34 @@ class TradeMonitor:
             session.close()
 
         # ─── Check invalidation ──────────────────────────────────────────
+        # Grace period: skip invalidation check for first 2 H1 bars (2 hours)
+        # to avoid premature exits from normal entry-zone noise.
         if pattern and not trade_record.partial_closed:
-            invalidated = False
-            if direction == "LONG" and current_price <= pattern.l3_price:
-                invalidated = True
-            elif direction == "SHORT" and current_price >= pattern.h3_price:
-                invalidated = True
+            hours_since_open = 0
+            if trade_record.opened_at:
+                opened = trade_record.opened_at
+                if opened.tzinfo is None:
+                    opened = opened.replace(tzinfo=timezone.utc)
+                hours_since_open = (
+                    datetime.now(timezone.utc) - opened
+                ).total_seconds() / 3600
 
-            if invalidated:
-                logger.warning(
-                    f"Trade {ticket} invalidated: price revisited "
-                    f"{'3L' if direction == 'LONG' else '3H'}"
-                )
-                self._close_trade(
-                    trade_record, ticket, position, "INVALIDATION"
-                )
-                return
+            if hours_since_open >= 2:
+                invalidated = False
+                if direction == "LONG" and current_price <= pattern.l3_price:
+                    invalidated = True
+                elif direction == "SHORT" and current_price >= pattern.h3_price:
+                    invalidated = True
+
+                if invalidated:
+                    logger.warning(
+                        f"Trade {ticket} invalidated: price revisited "
+                        f"{'3L' if direction == 'LONG' else '3H'}"
+                    )
+                    self._close_trade(
+                        trade_record, ticket, position, "INVALIDATION"
+                    )
+                    return
 
         # ─── Check target 2 (full close) ─────────────────────────────────
         target_2_hit = False
@@ -167,6 +179,23 @@ class TradeMonitor:
         if new_ticket is not None:
             # Update trade record
             self.trade_logger.log_partial_close(trade_record.id, close_price)
+
+            # MT5 may assign a new ticket to the remaining position after
+            # partial close. Detect and update DB so we can track it.
+            remaining_pos = self.order_manager.get_position_by_ticket(ticket)
+            if remaining_pos is None:
+                # Old ticket gone — find the new position for this symbol+direction
+                new_positions = self._find_position_for_trade(trade_record)
+                if new_positions:
+                    new_mt5_ticket = new_positions["ticket"]
+                    logger.info(
+                        f"Ticket changed after partial close: "
+                        f"{ticket} -> {new_mt5_ticket}"
+                    )
+                    self.trade_logger.log_trade_update(
+                        trade_record.id, mt5_ticket=new_mt5_ticket
+                    )
+                    ticket = new_mt5_ticket
 
             # Move SL to breakeven (entry price)
             breakeven_sl = trade_record.entry_price
@@ -270,6 +299,24 @@ class TradeMonitor:
                         details=f"Trailing SL: {current_sl:.5f} → {new_sl:.5f}",
                     )
 
+    def _find_position_for_trade(self, trade_record):
+        """Find an MT5 position matching this trade's symbol and direction."""
+        if not MT5_AVAILABLE:
+            return None
+        positions = mt5.positions_get(symbol=trade_record.symbol)
+        if not positions:
+            return None
+        expected_type = 0 if trade_record.direction == "LONG" else 1  # BUY=0, SELL=1
+        for pos in positions:
+            if pos.type == expected_type:
+                return {
+                    "ticket": pos.ticket,
+                    "price_current": pos.price_current,
+                    "profit": pos.profit,
+                    "volume": pos.volume,
+                }
+        return None
+
     def _close_trade(self, trade_record, ticket, position, reason):
         """Close a trade fully and update records."""
         direction = trade_record.direction
@@ -310,18 +357,35 @@ class TradeMonitor:
             return
 
         ticket = trade_record.mt5_ticket
-        from datetime import timedelta
 
-        # Search recent deals for this position
+        # Search deal history (7 days to catch weekend gaps and delayed reporting)
         now = datetime.now(timezone.utc)
-        from_date = now - timedelta(days=1)
+        from_date = now - timedelta(days=7)
         deals = mt5.history_deals_get(from_date, now, position=ticket)
 
         if not deals:
-            logger.warning(f"Position {ticket} disappeared but no deals found")
-            self.trade_logger.log_trade_update(
-                trade_record.id, status="CLOSED", close_reason="UNKNOWN"
+            # Ticket may have changed after partial close — record breakeven close
+            logger.warning(
+                f"Position {ticket} disappeared, no deals found. "
+                f"Recording as breakeven SL (likely post-partial-close ticket change)."
             )
+            close_price = trade_record.entry_price  # Breakeven SL
+            pnl = 0.0
+            pnl_pips = 0.0
+            reason = "STOP_LOSS"
+            if trade_record.partial_closed:
+                reason = "BREAKEVEN_SL"
+            self.trade_logger.log_trade_close(
+                trade_record.id, close_price, pnl, pnl_pips, reason
+            )
+            self.trade_logger.log_event(
+                "TRADE_CLOSED",
+                symbol=trade_record.symbol,
+                trade_id=trade_record.id,
+                details=f"Server-side close (no deals): {reason}, assumed breakeven",
+            )
+            self._highest_since_partial.pop(ticket, None)
+            self._lowest_since_partial.pop(ticket, None)
             return
 
         # Find the closing deal — must match symbol, take most recent
@@ -355,9 +419,13 @@ class TradeMonitor:
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
         else:
+            # No matching close deal — use entry price as fallback (breakeven)
             logger.warning(
-                f"Position {ticket} closed but no matching deal for {trade_record.symbol}"
+                f"Position {ticket} closed but no matching deal for {trade_record.symbol}. "
+                f"Recording as breakeven."
             )
+            close_price = trade_record.entry_price
+            reason = "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
             self.trade_logger.log_trade_close(
-                trade_record.id, 0.0, 0.0, 0.0, "UNKNOWN"
+                trade_record.id, close_price, 0.0, 0.0, reason
             )

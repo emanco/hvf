@@ -19,7 +19,7 @@ from sqlalchemy import (
     Text,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 from hvf_trader.config import DATABASE_URL
 
@@ -246,19 +246,28 @@ def get_engine(url: str | None = None):
     return engine
 
 
+_scoped_session = None
+
+
 def get_session(engine=None):
-    """Create a new database session.
+    """Get a thread-local database session.
+
+    Uses scoped_session to ensure each thread gets its own session,
+    preventing concurrent access errors between scanner and monitor threads.
 
     Args:
         engine: SQLAlchemy engine. If None, creates one from config.
 
     Returns:
-        A new SQLAlchemy Session instance.
+        A thread-local SQLAlchemy Session instance.
     """
-    if engine is None:
-        engine = get_engine()
-    session_factory = sessionmaker(bind=engine)
-    return session_factory()
+    global _scoped_session
+    if _scoped_session is None:
+        if engine is None:
+            engine = get_engine()
+        session_factory = sessionmaker(bind=engine)
+        _scoped_session = scoped_session(session_factory)
+    return _scoped_session()
 
 
 def init_db(engine=None):
