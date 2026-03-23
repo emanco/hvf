@@ -186,7 +186,7 @@ class MT5Connector:
             "currency": account.currency,
         }
 
-    def get_symbol_info(self, symbol: str) -> Optional[dict]:
+    def get_symbol_info(self, symbol: str, quiet: bool = False) -> Optional[dict]:
         """
         Get symbol info as dict with keys:
         bid, ask, spread, point, trade_contract_size, volume_min, volume_max, volume_step.
@@ -198,9 +198,10 @@ class MT5Connector:
 
         info = mt5.symbol_info(symbol)
         if info is None:
-            logger.warning(
-                "Symbol '%s' not found: %s", symbol, mt5.last_error()
-            )
+            if not quiet:
+                logger.warning(
+                    "Symbol '%s' not found: %s", symbol, mt5.last_error()
+                )
             return None
 
         return {

@@ -618,14 +618,14 @@ class HVFTrader:
 
         # Try direct pair: {quote}{account} e.g. GBPUSD
         direct = quote_ccy + account_ccy
-        fx_info = self.connector.get_symbol_info(direct)
+        fx_info = self.connector.get_symbol_info(direct, quiet=True)
         if fx_info and fx_info["bid"] > 0:
             logger.debug(f"FX rate {symbol}: {direct} bid={fx_info['bid']:.5f}")
             return fx_info["bid"]
 
         # Try inverse pair: {account}{quote} e.g. USDCHF -> invert
         inverse = account_ccy + quote_ccy
-        fx_info = self.connector.get_symbol_info(inverse)
+        fx_info = self.connector.get_symbol_info(inverse, quiet=True)
         if fx_info and fx_info["bid"] > 0:
             rate = 1.0 / fx_info["bid"]
             logger.debug(f"FX rate {symbol}: 1/{inverse} bid={fx_info['bid']:.5f} = {rate:.5f}")
