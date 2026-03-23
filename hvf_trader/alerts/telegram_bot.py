@@ -59,6 +59,25 @@ class TelegramAlerter:
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
 
+    def send_photo(self, photo_path: str, caption: str = None):
+        """Send a photo synchronously (blocking)."""
+        if not self.bot:
+            return
+
+        try:
+            loop = self._get_loop()
+            with open(photo_path, "rb") as f:
+                loop.run_until_complete(
+                    self.bot.send_photo(
+                        chat_id=self.chat_id,
+                        photo=f,
+                        caption=caption,
+                        parse_mode="HTML",
+                    )
+                )
+        except Exception as e:
+            logger.error(f"Telegram send_photo failed: {e}")
+
     def alert_pattern_detected(self, symbol: str, direction: str, score: float, rrr: float, pattern_type: str = "HVF"):
         """Alert when a new pattern is detected and armed."""
         arrow = "\u2B06" if direction == "LONG" else "\u2B07"
@@ -150,12 +169,11 @@ class TelegramAlerter:
         self.send_message(text)
 
     def send_daily_summary(self, trade_logger):
-        """Send daily trading summary."""
+        """Send daily trading summary with equity chart."""
         daily_pnl = trade_logger.get_daily_pnl()
 
         # Count today's trades
         from hvf_trader.database.models import get_session, TradeRecord
-        from datetime import timedelta
         session = get_session()
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -174,16 +192,71 @@ class TelegramAlerter:
         open_trades = trade_logger.get_open_trades()
         armed_patterns = trade_logger.get_armed_patterns()
 
+        # Build equity curve from all closed trades since go-live
+        all_trades = trade_logger.get_all_closed_trades(since_date="2026-03-13")
+        starting_equity = 700.0
+        balance = starting_equity
+        total_pnl = sum(t.pnl for t in all_trades if t.pnl)
+        balance = starting_equity + total_pnl
+
         emoji = "\u2705" if daily_pnl >= 0 else "\u274C"
         text = (
             f"<b>\U0001F4CA Daily Summary</b>\n"
             f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
-            f"PnL: <b>{emoji} {daily_pnl:+.2f}</b>\n"
+            f"PnL today: <b>{emoji} ${daily_pnl:+.2f}</b>\n"
             f"Trades closed: {total} (W:{wins} L:{losses})\n"
             f"Open trades: {len(open_trades)}\n"
-            f"Armed patterns: {len(armed_patterns)}"
+            f"Armed patterns: {len(armed_patterns)}\n\n"
+            f"Balance: <b>${balance:,.2f}</b> ({total_pnl:+.2f} from $700)"
         )
-        self.send_message(text)
+
+        # Generate equity chart
+        chart_path = self._generate_equity_chart(all_trades, starting_equity)
+        if chart_path:
+            self.send_photo(chart_path, caption=text)
+        else:
+            self.send_message(text)
+
+    def _generate_equity_chart(self, trades, starting_equity: float):
+        """Generate a small equity curve PNG. Returns file path or None."""
+        if not trades:
+            return None
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.dates as mdates
+            import tempfile, os
+
+            eq = [starting_equity]
+            times = [trades[0].closed_at or trades[0].opened_at]
+            for t in trades:
+                eq.append(eq[-1] + (t.pnl or 0))
+                times.append(t.closed_at or t.opened_at)
+
+            fig, ax = plt.subplots(figsize=(8, 3.5))
+            color = "#2196F3" if eq[-1] >= starting_equity else "#F44336"
+            ax.plot(times, eq, color=color, linewidth=1.5)
+            ax.fill_between(times, starting_equity, eq, alpha=0.15, color=color)
+            ax.axhline(y=starting_equity, color="gray", linestyle="--", alpha=0.4, linewidth=0.8)
+
+            ax.set_title(
+                f"Equity: ${eq[-1]:,.2f}  ({eq[-1] - starting_equity:+,.2f})",
+                fontsize=11, fontweight="bold",
+            )
+            ax.set_ylabel("$", fontsize=9)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+            ax.tick_params(labelsize=8)
+            ax.grid(True, alpha=0.2)
+            plt.tight_layout()
+
+            path = os.path.join(tempfile.gettempdir(), "hvf_equity.png")
+            plt.savefig(path, dpi=120, bbox_inches="tight")
+            plt.close()
+            return path
+        except Exception as e:
+            logger.error(f"Equity chart generation failed: {e}")
+            return None
 
     def alert_startup(self):
         """Alert on bot startup."""

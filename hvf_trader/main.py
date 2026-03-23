@@ -28,6 +28,7 @@ from hvf_trader.execution.trade_monitor import TradeMonitor
 from hvf_trader.monitoring.health_check import HealthChecker
 from hvf_trader.monitoring.reconciliation import Reconciliator
 from hvf_trader.alerts.telegram_bot import TelegramAlerter
+from hvf_trader.alerts.telegram_commands import TelegramCommandHandler
 from hvf_trader.detector.zigzag import compute_zigzag
 from hvf_trader.detector.hvf_detector import detect_hvf_patterns, check_entry_confirmation
 from hvf_trader.detector.pattern_scorer import score_pattern
@@ -98,6 +99,13 @@ class HVFTrader:
         # ─── Alerts ──────────────────────────────────────────────────────
         self.alerter = TelegramAlerter()
         self.trade_monitor.alerter = self.alerter
+
+        # ─── Telegram Commands ─────────────────────────────────────────
+        self.telegram_commands = TelegramCommandHandler(
+            alerter=self.alerter,
+            trade_logger=self.trade_logger,
+            connector=self.connector,
+        )
 
         # ─── Performance Monitor ────────────────────────────────────────
         self.perf_monitor = PerformanceMonitor(
@@ -199,6 +207,9 @@ class HVFTrader:
         )
         monitor_thread.start()
 
+        # Start Telegram command listener (daemon thread)
+        self.telegram_commands.start()
+
         # Notify
         self.alerter.alert_startup()
 
@@ -254,12 +265,13 @@ class HVFTrader:
                 if now.weekday() == 6 and now.hour == 21:
                     ensure_fresh_cache(max_age_hours=72.0)
 
-                # Daily summary at 21:00 UTC (after NY close)
+                # Daily summary at 21:00 UTC (after NY close), skip weekends
                 if now.hour == 21 and (
                     self._last_daily_summary is None
                     or self._last_daily_summary.date() < now.date()
                 ):
-                    self.alerter.send_daily_summary(self.trade_logger)
+                    if now.weekday() <= 4:  # Mon-Fri only
+                        self.alerter.send_daily_summary(self.trade_logger)
                     if now.weekday() == 6:  # Sunday — weekly performance summary
                         self.alerter.send_performance_summary(self.trade_logger)
                     self._last_daily_summary = now
@@ -906,6 +918,7 @@ class HVFTrader:
         self._running = False
 
         # Stop components
+        self.telegram_commands.stop()
         self.trade_monitor.stop()
         self.health_checker.stop()
 
