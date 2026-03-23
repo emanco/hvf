@@ -746,12 +746,23 @@ class HVFTrader:
         fill_price = order_result["fill_price"]
 
         # Recalculate SL from actual fill price to maintain the intended stop distance.
-        # The original stop distance was measured from the pattern's entry price.
-        stop_distance = abs(pattern.entry_price - pattern.stop_loss) + spread_price
+        # Use the validated pre-order distance (live_entry to adjusted_sl), not the
+        # stale pattern geometry which can be tiny when fill differs from pattern entry.
+        stop_distance = abs(live_entry - adjusted_sl)
         if direction == "LONG":
             final_sl = fill_price - stop_distance
         else:
             final_sl = fill_price + stop_distance
+
+        # Post-fill min-stop guard: if recalculated SL is too tight, keep the
+        # original adjusted_sl which already passed the pre-order guard.
+        final_stop_dist = abs(fill_price - final_sl)
+        if final_stop_dist < min_stop_dist:
+            logger.warning(
+                f"[{pattern_type}] Post-fill SL too tight ({final_stop_dist/pip_size:.1f} pips), "
+                f"keeping pre-order SL={adjusted_sl:.5f}"
+            )
+            final_sl = adjusted_sl
 
         # Apply the recalculated SL if it differs from what was sent with the order
         # Derive digits from point: 0.00001 -> 5, 0.001 -> 3
