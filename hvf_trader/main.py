@@ -100,11 +100,16 @@ class HVFTrader:
         self.alerter = TelegramAlerter()
         self.trade_monitor.alerter = self.alerter
 
+        # ─── State (init early so refs can be passed) ──────────────────
+        self._armed_patterns = []  # In-memory list of armed patterns (dicts with pattern_type)
+
         # ─── Telegram Commands ─────────────────────────────────────────
         self.telegram_commands = TelegramCommandHandler(
             alerter=self.alerter,
             trade_logger=self.trade_logger,
             connector=self.connector,
+            order_manager=self.order_manager,
+            armed_patterns_ref=self._armed_patterns,
         )
 
         # ─── Performance Monitor ────────────────────────────────────────
@@ -121,7 +126,6 @@ class HVFTrader:
 
         # ─── State ───────────────────────────────────────────────────────
         self._running = False
-        self._armed_patterns = []  # In-memory list of armed patterns (dicts with pattern_type)
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
         self._last_reconcile = None
         self._last_daily_summary = None

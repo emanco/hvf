@@ -27,21 +27,25 @@ except ImportError:
 class TelegramCommandHandler:
     """Polls for incoming Telegram messages and responds to commands."""
 
-    def __init__(self, alerter, trade_logger, connector, armed_patterns_ref=None):
+    def __init__(self, alerter, trade_logger, connector, order_manager=None,
+                 armed_patterns_ref=None):
         """
         Args:
             alerter: TelegramAlerter instance (reuse its bot + chat_id)
             trade_logger: TradeLogger for querying trades/patterns
             connector: MT5Connector for account info
+            order_manager: OrderManager for closing positions
             armed_patterns_ref: reference to HVFTrader._armed_patterns list
         """
         self.alerter = alerter
         self.trade_logger = trade_logger
         self.connector = connector
+        self.order_manager = order_manager
         self._armed_ref = armed_patterns_ref or []
         self._running = False
         self._thread = None
         self._last_update_id = 0
+        self._pending_closeall = False
 
     def start(self):
         if not TELEGRAM_AVAILABLE or not self.alerter.bot:
@@ -91,12 +95,27 @@ class TelegramCommandHandler:
         text = update.message.text.strip().lower()
         cmd = text.split()[0] if text else ""
 
+        # Handle confirmation for /closeall
+        if self._pending_closeall and text in ("yes", "confirm"):
+            self._pending_closeall = False
+            try:
+                self._cmd_closeall_execute()
+            except Exception as e:
+                logger.error(f"Command /closeall failed: {e}")
+                self.alerter.send_message(f"<b>Error</b>\n<code>{e}</code>")
+            return
+        elif self._pending_closeall:
+            self._pending_closeall = False
+            self.alerter.send_message("Cancelled.")
+            return
+
         handlers = {
             "/status": self._cmd_status,
             "/health": self._cmd_health,
             "/trades": self._cmd_trades,
             "/equity": self._cmd_equity,
             "/balance": self._cmd_balance,
+            "/closeall": self._cmd_closeall,
             "/help": self._cmd_help,
         }
 
@@ -116,6 +135,7 @@ class TelegramCommandHandler:
             "/trades - Open trades\n"
             "/equity - Equity chart since go-live\n"
             "/balance - Current balance + PnL\n"
+            "/closeall - Close all trades + expire armed patterns\n"
             "/help - This message"
         )
         self.alerter.send_message(text)
@@ -237,3 +257,99 @@ class TelegramCommandHandler:
             f"Trades: {trade_count} (WR: {wr:.0f}%)"
         )
         self.alerter.send_message(text)
+
+    def _cmd_closeall(self):
+        """Prompt for confirmation before closing everything."""
+        open_trades = self.trade_logger.get_open_trades()
+        armed = self.trade_logger.get_armed_patterns()
+
+        if not open_trades and not armed:
+            self.alerter.send_message("Nothing to close — no open trades or armed patterns.")
+            return
+
+        lines = ["\u26A0\uFE0F <b>Close All — Confirm?</b>\n"]
+        if open_trades:
+            lines.append(f"Will close <b>{len(open_trades)}</b> open trade(s):")
+            for t in open_trades:
+                arrow = "\u2B06" if t.direction == "LONG" else "\u2B07"
+                lines.append(f"  {arrow} {t.symbol} {t.direction} ({t.pattern_type})")
+        if armed:
+            lines.append(f"\nWill expire <b>{len(armed)}</b> armed pattern(s)")
+        lines.append("\nReply <b>yes</b> to confirm, anything else to cancel.")
+
+        self._pending_closeall = True
+        self.alerter.send_message("\n".join(lines))
+
+    def _cmd_closeall_execute(self):
+        """Close all open trades and expire armed patterns."""
+        open_trades = self.trade_logger.get_open_trades()
+        armed = self.trade_logger.get_armed_patterns()
+
+        closed = 0
+        failed = 0
+        total_pnl = 0.0
+
+        # Close all open positions
+        for trade in open_trades:
+            ticket = trade.mt5_ticket
+            if not ticket or not self.order_manager:
+                failed += 1
+                continue
+
+            position = self.order_manager.get_position_by_ticket(ticket)
+            if position is None:
+                # Position already gone — mark closed in DB
+                self.trade_logger.log_trade_close(
+                    trade.id, trade.entry_price, 0.0, 0.0, "MANUAL_CLOSEALL"
+                )
+                closed += 1
+                continue
+
+            success = self.order_manager.close_position(
+                ticket, trade.symbol, trade.direction, "closeall"
+            )
+            if success:
+                pnl = position["profit"]
+                total_pnl += pnl
+                pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
+                close_price = position["price_current"]
+                if trade.direction == "LONG":
+                    pnl_pips = (close_price - trade.entry_price) / pip_value
+                else:
+                    pnl_pips = (trade.entry_price - close_price) / pip_value
+
+                self.trade_logger.log_trade_close(
+                    trade.id, close_price, pnl, pnl_pips, "MANUAL_CLOSEALL"
+                )
+                self.trade_logger.log_event(
+                    "TRADE_CLOSED",
+                    symbol=trade.symbol,
+                    trade_id=trade.id,
+                    details=f"Reason=MANUAL_CLOSEALL, PnL={pnl:.2f}",
+                )
+                closed += 1
+                logger.info(f"[CLOSEALL] Closed {trade.symbol} {trade.direction} PnL={pnl:.2f}")
+            else:
+                failed += 1
+                logger.error(f"[CLOSEALL] Failed to close {trade.symbol} ticket={ticket}")
+
+        # Expire all armed patterns
+        expired = 0
+        for pattern in armed:
+            self.trade_logger.update_pattern_status(pattern.id, "EXPIRED")
+            expired += 1
+
+        # Clear the in-memory armed patterns list
+        if self._armed_ref is not None:
+            self._armed_ref.clear()
+
+        lines = ["\u2705 <b>Close All Complete</b>\n"]
+        if closed:
+            lines.append(f"Closed: <b>{closed}</b> trade(s), PnL: <b>${total_pnl:+.2f}</b>")
+        if failed:
+            lines.append(f"Failed: <b>{failed}</b> trade(s)")
+        if expired:
+            lines.append(f"Expired: <b>{expired}</b> armed pattern(s)")
+
+        self.alerter.send_message("\n".join(lines))
+        logger.info(f"[CLOSEALL] Done: {closed} closed, {failed} failed, {expired} expired")
