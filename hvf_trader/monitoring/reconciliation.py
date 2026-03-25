@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone
 
 from hvf_trader import config
+from hvf_trader.database.models import TradeRecord
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +84,56 @@ class Reconciliator:
                     severity="WARNING",
                 )
 
-        # Check 2: MT5 positions not in internal records
+        # Check 2: MT5 positions not in internal records — try to re-adopt
         for ticket, pos in mt5_positions.items():
             if ticket not in internal_tickets:
-                # Only flag positions with our magic number
-                if pos.get("magic") == 20250305:
+                # Only handle positions with our magic number
+                if pos.get("magic") != 20250305:
+                    continue
+
+                # Check if there's a falsely-closed trade with this ticket
+                closed_trade = (
+                    self.trade_logger._session.query(TradeRecord)
+                    .filter(
+                        TradeRecord.mt5_ticket == ticket,
+                        TradeRecord.status == "CLOSED",
+                    )
+                    .first()
+                )
+
+                if closed_trade:
+                    # Re-adopt: reopen the falsely closed trade
+                    prev_status = "PARTIAL" if closed_trade.partial_closed else "OPEN"
+                    self.trade_logger.log_trade_update(
+                        closed_trade.id,
+                        status=prev_status,
+                        close_price=None,
+                        pnl=None,
+                        pnl_pips=None,
+                        close_reason=None,
+                        closed_at=None,
+                    )
+                    self.trade_logger._session.commit()
+                    discrepancy = {
+                        "type": "REOPENED",
+                        "details": (
+                            f"Trade {closed_trade.id} (ticket {ticket}, "
+                            f"{pos['symbol']}) was falsely closed — "
+                            f"reopened as {prev_status}"
+                        ),
+                        "trade_id": closed_trade.id,
+                        "ticket": ticket,
+                    }
+                    discrepancies.append(discrepancy)
+                    logger.warning(f"[RECONCILIATION_REOPEN] {discrepancy['details']}")
+                    self.trade_logger.log_event(
+                        "RECONCILIATION_REOPEN",
+                        symbol=pos["symbol"],
+                        trade_id=closed_trade.id,
+                        details=discrepancy["details"],
+                        severity="WARNING",
+                    )
+                else:
                     discrepancy = {
                         "type": "MISSING_IN_DB",
                         "details": (

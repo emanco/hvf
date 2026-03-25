@@ -35,6 +35,7 @@ class TradeMonitor:
         self._running = False
         self._highest_since_partial = {}  # ticket -> highest price since partial close
         self._lowest_since_partial = {}   # ticket -> lowest price since partial (for shorts)
+        self._missing_position_counts = {}  # ticket -> consecutive miss count
 
     def start(self):
         """Start the trade monitoring loop."""
@@ -92,9 +93,27 @@ class TradeMonitor:
 
         position = self.order_manager.get_position_by_ticket(ticket)
         if position is None:
-            # Position may have been closed by SL/TP on server side
+            # Retry once after brief pause (MT5 query can be transiently empty)
+            time.sleep(1)
+            position = self.order_manager.get_position_by_ticket(ticket)
+        if position is None:
+            # Try full symbol scan as fallback
+            position = self._find_position_for_trade(trade_record)
+        if position is None:
+            # Require 2 consecutive misses before declaring closed
+            count = self._missing_position_counts.get(ticket, 0) + 1
+            self._missing_position_counts[ticket] = count
+            if count < 2:
+                logger.warning(
+                    f"Position {ticket} ({trade_record.symbol}) not found "
+                    f"(attempt {count}/2), will recheck next cycle"
+                )
+                return
+            self._missing_position_counts.pop(ticket, None)
             self._handle_server_close(trade_record)
             return
+        # Position found — reset miss counter
+        self._missing_position_counts.pop(ticket, None)
 
         current_price = position["price_current"]
         direction = trade_record.direction
@@ -261,6 +280,13 @@ class TradeMonitor:
             new_sl = highest - trail_distance
             current_sl = trade_record.trailing_sl or trade_record.entry_price
 
+            logger.debug(
+                f"[TRAIL_DEBUG] {trade_record.symbol} dir=LONG "
+                f"price={current_price:.5f} highest={highest:.5f} "
+                f"trail_dist={trail_distance:.5f} new_sl={new_sl:.5f} "
+                f"current_sl={current_sl:.5f} would_modify={new_sl > current_sl}"
+            )
+
             # Only move SL up, never down
             if new_sl > current_sl:
                 if self.order_manager.modify_stop_loss(
@@ -283,6 +309,13 @@ class TradeMonitor:
 
             new_sl = lowest + trail_distance
             current_sl = trade_record.trailing_sl or trade_record.entry_price
+
+            logger.debug(
+                f"[TRAIL_DEBUG] {trade_record.symbol} dir=SHORT "
+                f"price={current_price:.5f} lowest={lowest:.5f} "
+                f"trail_dist={trail_distance:.5f} new_sl={new_sl:.5f} "
+                f"current_sl={current_sl:.5f} would_modify={new_sl < current_sl}"
+            )
 
             # Only move SL down, never up
             if new_sl < current_sl:
@@ -364,17 +397,25 @@ class TradeMonitor:
         deals = mt5.history_deals_get(from_date, now, position=ticket)
 
         if not deals:
-            # Ticket may have changed after partial close — record breakeven close
+            # Final safety check: is the position actually still alive in MT5?
+            still_alive = self._find_position_for_trade(trade_record)
+            if still_alive:
+                logger.error(
+                    f"Position {ticket} ({trade_record.symbol}) has no deals but "
+                    f"a matching position still exists in MT5 — skipping close. "
+                    f"Likely transient MT5 query issue."
+                )
+                return
+
+            # Truly gone with no deal history
             logger.warning(
                 f"Position {ticket} disappeared, no deals found. "
-                f"Recording as breakeven SL (likely post-partial-close ticket change)."
+                f"Recording as unknown close."
             )
-            close_price = trade_record.entry_price  # Breakeven SL
+            close_price = trade_record.entry_price
             pnl = 0.0
             pnl_pips = 0.0
-            reason = "STOP_LOSS"
-            if trade_record.partial_closed:
-                reason = "BREAKEVEN_SL"
+            reason = "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN_CLOSE"
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, pnl, pnl_pips, reason
             )
@@ -388,11 +429,34 @@ class TradeMonitor:
             self._lowest_since_partial.pop(ticket, None)
             return
 
-        # Find the closing deal — must match symbol, take most recent
+        # Find the closing deal — must match symbol, direction, and timing
         close_deal = None
+        # Expected close deal type: LONG closes with SELL (1), SHORT with BUY (0)
+        expected_deal_type = 1 if trade_record.direction == "LONG" else 0
+        trade_open_time = trade_record.opened_at
+        if trade_open_time and trade_open_time.tzinfo is None:
+            trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
+
         for deal in deals:
-            if deal.entry == 1 and deal.symbol == trade_record.symbol:
-                close_deal = deal  # Keep iterating to get the LAST one
+            if deal.entry != 1 or deal.symbol != trade_record.symbol:
+                continue
+            # Validate deal direction matches expected close direction
+            if deal.type != expected_deal_type:
+                logger.debug(
+                    f"Skipping deal {deal.ticket}: type={deal.type} "
+                    f"(expected {expected_deal_type} for {trade_record.direction} close)"
+                )
+                continue
+            # Validate deal happened after trade was opened
+            if trade_open_time:
+                deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
+                if deal_time < trade_open_time:
+                    logger.debug(
+                        f"Skipping deal {deal.ticket}: time {deal_time} "
+                        f"is before trade open {trade_open_time}"
+                    )
+                    continue
+            close_deal = deal  # Keep iterating to get the LAST valid one
 
         if close_deal:
             close_price = close_deal.price
