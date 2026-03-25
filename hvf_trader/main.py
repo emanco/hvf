@@ -818,6 +818,7 @@ class HVFTrader:
             "pattern_id": pattern_record.id,
             "symbol": symbol,
             "direction": direction,
+            "pattern_type": pattern_type,
             "mt5_ticket": ticket,
             "entry_price": fill_price,
             "stop_loss": final_sl,
