@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +49,33 @@ from hvf_trader.risk.circuit_breaker import CircuitBreaker
 from hvf_trader.monitoring.performance_monitor import PerformanceMonitor
 
 logger = logging.getLogger("hvf_trader")
+
+
+def _detach_record(record):
+    """Snapshot a PatternRecord ORM object into a SimpleNamespace.
+
+    Prevents DetachedInstanceError when accessing attributes after
+    a session.commit() expires loaded instances.
+    """
+    return types.SimpleNamespace(
+        id=record.id,
+        symbol=record.symbol,
+        direction=record.direction,
+        timeframe=record.timeframe,
+        detected_at=record.detected_at,
+        entry_price=record.entry_price,
+        stop_loss=record.stop_loss,
+        target_1=record.target_1,
+        target_2=record.target_2,
+        h1_price=record.h1_price,
+        l1_price=record.l1_price,
+        h2_price=record.h2_price,
+        l2_price=record.l2_price,
+        h3_price=record.h3_price,
+        l3_price=record.l3_price,
+        score=record.score,
+        pattern_type=record.pattern_type,
+    )
 
 
 class HVFTrader:
@@ -187,7 +215,7 @@ class HVFTrader:
                 continue
             seen_keys.add(key)
             self._armed_patterns.append(
-                {"record": rec, "pattern_type": ptype, "pattern_obj": None}
+                {"record": _detach_record(rec), "pattern_type": ptype, "pattern_obj": None}
             )
         if stale_count:
             logger.info(f"Expired {stale_count} stale armed patterns on startup")
@@ -502,7 +530,7 @@ class HVFTrader:
 
         # Store armed pattern with its type and the original pattern object
         self._armed_patterns.append({
-            "record": pattern_record,
+            "record": _detach_record(pattern_record),
             "pattern_type": pattern_type,
             "pattern_obj": pattern,
         })
