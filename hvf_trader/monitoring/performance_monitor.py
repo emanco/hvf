@@ -138,6 +138,10 @@ class PerformanceMonitor:
         Simplified: annualized from trade-level returns.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=config.PERF_SHARPE_WINDOW_DAYS)
+        # Never include trades before the go-live date (pre-fix data is unreliable)
+        go_live = datetime.fromisoformat(config.PERF_GO_LIVE_DATE).replace(tzinfo=timezone.utc)
+        if cutoff < go_live:
+            cutoff = go_live
         trades = self.trade_logger.get_trades_closed_since(cutoff)
 
         if len(trades) < 20:
