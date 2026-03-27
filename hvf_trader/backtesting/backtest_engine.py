@@ -42,6 +42,10 @@ class BacktestTrade:
     rrr: float
     pattern_type: str = "HVF"
 
+    # Invalidation levels (h3/l3 or kz_high/kz_low)
+    invalidation_long: float = 0.0   # LONG invalidated if price <= this (l3/kz_low)
+    invalidation_short: float = 0.0  # SHORT invalidated if price >= this (h3/kz_high)
+
     # Filled on close
     exit_price: float = 0.0
     exit_bar: int = 0
@@ -66,6 +70,7 @@ class BacktestResult:
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
+    invalidation_exits: int = 0
     win_rate: float = 0.0
     total_pnl_pips: float = 0.0
     total_pnl_currency: float = 0.0
@@ -87,6 +92,7 @@ class BacktestResult:
 
         self.winning_trades = len(winners)
         self.losing_trades = len(losers)
+        self.invalidation_exits = sum(1 for t in self.trades if t.exit_reason == "INVALIDATION")
         self.win_rate = self.winning_trades / self.total_trades * 100
 
         self.total_pnl_pips = sum(t.pnl_pips for t in self.trades)
@@ -266,6 +272,16 @@ class BacktestEngine:
                     lot_size = validate_lot_size(lot_size)
 
                     if lot_size > 0:
+                        # Extract invalidation levels from pattern
+                        inv_long = 0.0
+                        inv_short = 0.0
+                        if pat_type == "HVF":
+                            inv_long = pattern.l3.price
+                            inv_short = pattern.h3.price
+                        elif pat_type == "KZ_HUNT":
+                            inv_long = pattern.kz_low
+                            inv_short = pattern.kz_high
+
                         trade = BacktestTrade(
                             symbol=symbol,
                             direction=pattern.direction,
@@ -279,6 +295,8 @@ class BacktestEngine:
                             score=pattern.score,
                             rrr=pattern.rrr,
                             pattern_type=pat_type,
+                            invalidation_long=inv_long,
+                            invalidation_short=inv_short,
                         )
                         open_trades.append(trade)
                         trade_counter += 1
@@ -455,6 +473,9 @@ class BacktestEngine:
         low = bar["low"]
         close = bar["close"]
 
+        bar_idx = bar.name if isinstance(bar.name, int) else 0
+        bars_since_entry = bar_idx - trade.entry_bar
+
         # Track max favourable/adverse excursion
         if trade.direction == "LONG":
             fav = (high - trade.entry_price) / pip_value
@@ -464,6 +485,23 @@ class BacktestEngine:
             adv = (high - trade.entry_price) / pip_value
         trade.max_favourable = max(trade.max_favourable, fav)
         trade.max_adverse = max(trade.max_adverse, adv)
+
+        # ─── Check invalidation (after 2-bar grace period) ──────────
+        if bars_since_entry >= 2 and not trade.partial_closed:
+            invalidated = False
+            if trade.direction == "LONG" and trade.invalidation_long > 0 and low <= trade.invalidation_long:
+                invalidated = True
+                trade.exit_price = trade.invalidation_long
+            elif trade.direction == "SHORT" and trade.invalidation_short > 0 and high >= trade.invalidation_short:
+                invalidated = True
+                trade.exit_price = trade.invalidation_short
+
+            if invalidated:
+                trade.exit_bar = bar_idx
+                trade.exit_time = bar["time"]
+                trade.exit_reason = "INVALIDATION"
+                self._calc_pnl(trade, pip_value)
+                return True
 
         # ─── Check stop loss ─────────────────────────────────────────
         current_sl = trade.stop_loss
