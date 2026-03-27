@@ -725,6 +725,7 @@ class HVFTrader:
                 f"SL too close or wrong side (entry={live_entry:.5f}, sl={adjusted_sl:.5f}, "
                 f"min_dist={min_stop_dist:.5f})"
             )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
             return
         if direction == "SHORT" and (adjusted_sl - live_entry) < min_stop_dist:
             logger.info(
@@ -732,6 +733,7 @@ class HVFTrader:
                 f"SL too close or wrong side (entry={live_entry:.5f}, sl={adjusted_sl:.5f}, "
                 f"min_dist={min_stop_dist:.5f})"
             )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
             return
 
         # Convert pip value to account currency (USD) for non-USD quoted pairs
@@ -758,6 +760,7 @@ class HVFTrader:
                 f"Pre-trade check failed for {symbol}: "
                 f"{result.check_name} — {result.reason}"
             )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
             self.trade_logger.log_event(
                 "TRADE_REJECTED",
                 symbol=symbol,
@@ -777,6 +780,7 @@ class HVFTrader:
 
         if order_result is None:
             logger.error(f"Order execution failed for {symbol}")
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
             self.trade_logger.log_event(
                 "ERROR",
                 symbol=symbol,
