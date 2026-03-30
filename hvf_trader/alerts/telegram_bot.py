@@ -173,17 +173,10 @@ class TelegramAlerter:
         daily_pnl = trade_logger.get_daily_pnl()
 
         # Count today's trades
-        from hvf_trader.database.models import get_session, TradeRecord
-        session = get_session()
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        today_trades = (
-            session.query(TradeRecord)
-            .filter(TradeRecord.closed_at >= today_start)
-            .all()
-        )
-        session.close()
+        today_trades = trade_logger.get_trades_closed_since(today_start)
 
         wins = sum(1 for t in today_trades if t.pnl and t.pnl > 0)
         losses = sum(1 for t in today_trades if t.pnl and t.pnl < 0)

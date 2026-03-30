@@ -34,9 +34,18 @@ class TradeLogger:
         """Initialize TradeLogger with a database session.
 
         Args:
-            session: SQLAlchemy session. If None, creates one from config.
+            session: SQLAlchemy session. If None, uses thread-local session
+                from scoped_session on each access (thread-safe).
         """
-        self._session = session or get_session()
+        self._explicit_session = session
+
+    @property
+    def _session(self):
+        """Return a thread-local session. Each thread gets its own session
+        via scoped_session, preventing cross-thread SQLAlchemy errors."""
+        if self._explicit_session is not None:
+            return self._explicit_session
+        return get_session()
 
     @property
     def session(self):
@@ -79,7 +88,11 @@ class TradeLogger:
             severity=severity,
         )
         self._session.add(event)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
         logger.log(
             getattr(logging, severity, logging.INFO),
             "[%s] %s %s %s",
@@ -107,7 +120,11 @@ class TradeLogger:
         if record.status is None:
             record.status = "DETECTED"
         self._session.add(record)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         self.log_event(
             event_type="PATTERN_DETECTED",
@@ -139,7 +156,11 @@ class TradeLogger:
             if hasattr(record, key):
                 setattr(record, key, value)
 
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         event_map = {
             "ARMED": "PATTERN_ARMED",
@@ -171,7 +192,11 @@ class TradeLogger:
         if record.status is None:
             record.status = "OPEN"
         self._session.add(record)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         self.log_event(
             event_type="TRADE_OPENED",
@@ -204,7 +229,11 @@ class TradeLogger:
             if hasattr(record, key):
                 setattr(record, key, value)
 
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         # Log SL modifications specifically
         if "trailing_sl" in kwargs or "stop_loss" in kwargs:
@@ -239,13 +268,27 @@ class TradeLogger:
             logger.warning("TradeRecord %d not found for close", trade_id)
             return
 
+        # Guard: prevent double-close from overwriting real PnL with stale data
+        if record.status == "CLOSED":
+            logger.warning(
+                "TradeRecord %d already CLOSED (reason=%s, pnl=%.2f). "
+                "Ignoring duplicate close (new reason=%s, new pnl=%.2f).",
+                trade_id, record.close_reason, record.pnl or 0.0,
+                close_reason, pnl,
+            )
+            return
+
         record.closed_at = datetime.now(timezone.utc)
         record.close_price = close_price
         record.pnl = pnl
         record.pnl_pips = pnl_pips
         record.close_reason = close_reason
         record.status = "CLOSED"
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         self.log_event(
             event_type="TRADE_CLOSED",
@@ -276,7 +319,11 @@ class TradeLogger:
         record.partial_close_price = close_price
         record.partial_close_at = datetime.now(timezone.utc)
         record.status = "PARTIAL"
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         self.log_event(
             event_type="PARTIAL_CLOSE",
@@ -325,7 +372,11 @@ class TradeLogger:
             monthly_pnl=monthly_pnl,
         )
         self._session.add(snapshot)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
         return snapshot
 
     # ─── Queries ────────────────────────────────────────────────────────
@@ -527,7 +578,11 @@ class TradeLogger:
         if state is None:
             state = CircuitBreakerState(level=level, tripped=False)
             self._session.add(state)
-            self._session.commit()
+            try:
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                raise
         return state
 
     def update_circuit_breaker(
@@ -561,7 +616,11 @@ class TradeLogger:
             notes=notes,
         )
         self._session.add(state)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
         self.log_event(
             event_type="CIRCUIT_BREAKER",

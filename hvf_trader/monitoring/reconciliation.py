@@ -4,7 +4,7 @@ Runs every 60s to detect discrepancies.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from hvf_trader import config
 from hvf_trader.database.models import TradeRecord
@@ -72,17 +72,8 @@ class Reconciliator:
                 discrepancies.append(discrepancy)
                 logger.warning(discrepancy["details"])
 
-                # Mark as closed (server-side close)
-                self.trade_logger.log_trade_update(
-                    trade.id, status="CLOSED", close_reason="RECONCILIATION"
-                )
-                self.trade_logger.log_event(
-                    "RECONCILIATION",
-                    symbol=trade.symbol,
-                    trade_id=trade.id,
-                    details=discrepancy["details"],
-                    severity="WARNING",
-                )
+                # Look up deal history for proper close price and PnL
+                self._close_with_deal_history(trade, ticket)
 
         # Check 2: MT5 positions not in internal records — try to re-adopt
         for ticket, pos in mt5_positions.items():
@@ -187,3 +178,95 @@ class Reconciliator:
             logger.debug("Reconciliation: no discrepancies")
 
         return discrepancies
+
+    def _close_with_deal_history(self, trade, ticket):
+        """Close a missing trade using MT5 deal history for accurate PnL."""
+        if not MT5_AVAILABLE:
+            self._close_fallback(trade, ticket)
+            return
+
+        # Search deal history (7 days)
+        now = datetime.now(timezone.utc)
+        from_date = now - timedelta(days=7)
+        deals = mt5.history_deals_get(from_date, now, position=ticket)
+
+        if not deals:
+            self._close_fallback(trade, ticket)
+            return
+
+        # Find the closing deal — same logic as trade_monitor._handle_server_close
+        close_deal = None
+        expected_deal_type = 1 if trade.direction == "LONG" else 0
+        trade_open_time = trade.opened_at
+        if trade_open_time and trade_open_time.tzinfo is None:
+            trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
+
+        for deal in deals:
+            if deal.entry != 1 or deal.symbol != trade.symbol:
+                continue
+            if deal.type != expected_deal_type:
+                continue
+            if trade_open_time:
+                deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
+                if deal_time < trade_open_time:
+                    continue
+            close_deal = deal
+
+        if close_deal:
+            close_price = close_deal.price
+            pnl = close_deal.profit
+            pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
+            if trade.direction == "LONG":
+                pnl_pips = (close_price - trade.entry_price) / pip_value
+            else:
+                pnl_pips = (trade.entry_price - close_price) / pip_value
+
+            reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
+            self.trade_logger.log_trade_close(
+                trade.id, close_price, pnl, pnl_pips, reason
+            )
+            self.trade_logger.log_event(
+                "RECONCILIATION",
+                symbol=trade.symbol,
+                trade_id=trade.id,
+                details=(
+                    f"Server-side close detected by reconciliation: {reason}, "
+                    f"PnL={pnl:.2f}, Pips={pnl_pips:.1f}"
+                ),
+                severity="WARNING",
+            )
+            logger.info(
+                f"[RECONCILIATION] {trade.symbol} trade {trade.id} closed "
+                f"via deal history: {reason}, {pnl_pips:+.1f} pips"
+            )
+        else:
+            self._close_fallback(trade, ticket)
+
+    def _close_fallback(self, trade, ticket):
+        """Fallback close when no deal history is available."""
+        close_price = trade.trailing_sl or trade.entry_price
+        pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
+        if trade.direction == "LONG":
+            pnl_pips = (close_price - trade.entry_price) / pip_value
+        else:
+            pnl_pips = (trade.entry_price - close_price) / pip_value
+
+        reason = "RECONCILIATION"
+        self.trade_logger.log_trade_close(
+            trade.id, close_price, 0.0, pnl_pips, reason
+        )
+        self.trade_logger.log_event(
+            "RECONCILIATION",
+            symbol=trade.symbol,
+            trade_id=trade.id,
+            details=(
+                f"No deal history found. Estimated close at "
+                f"{'trailing SL' if trade.trailing_sl else 'entry'} "
+                f"{close_price:.5f}, ~{pnl_pips:+.1f} pips"
+            ),
+            severity="WARNING",
+        )
+        logger.warning(
+            f"[RECONCILIATION] {trade.symbol} trade {trade.id} closed "
+            f"without deal history, estimated {pnl_pips:+.1f} pips"
+        )

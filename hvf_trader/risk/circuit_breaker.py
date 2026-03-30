@@ -46,6 +46,9 @@ class CircuitBreaker:
         self.trade_logger = trade_logger
         self._tripped: dict[str, bool] = {lvl: False for lvl in _LEVELS}
         self._resumes_at: dict[str, datetime | None] = {lvl: None for lvl in _LEVELS}
+        # Period-start equity for accurate loss% calculation
+        self._period_start_equity: dict[str, float] = {}
+        self._period_start_date: dict[str, str] = {}
         # Per-pattern consecutive loss tracking
         self._pattern_consecutive_losses: dict[str, int] = {}
         self._pattern_paused_until: dict[str, datetime | None] = {}
@@ -110,15 +113,16 @@ class CircuitBreaker:
 
         return True, ""
 
-    def update(self, starting_equity: float):
+    def update(self, current_balance: float):
         """
-        Called after each trade close.  Checks whether cumulative losses
+        Called every scanner cycle. Checks whether cumulative losses
         in the current daily / weekly / monthly window have breached the
         configured limit.
 
         Uses trade_logger.get_pnl_since() to retrieve total PnL for the
-        window, then compares the loss (if any) against the limit expressed
-        as a percentage of *starting_equity*.
+        window, then compares the loss against the limit expressed
+        as a percentage of the period-start equity (captured on first call
+        per period, not current balance which shrinks as losses accrue).
 
         Daily limit:   DAILY_LOSS_LIMIT_PCT   -> resumes at midnight UTC
         Weekly limit:  WEEKLY_LOSS_LIMIT_PCT   -> resumes at Monday 00:00 UTC
@@ -126,8 +130,8 @@ class CircuitBreaker:
         """
         if not self.trade_logger:
             return
-        if starting_equity <= 0:
-            logger.warning("Cannot evaluate circuit breakers with equity <= 0")
+        if current_balance <= 0:
+            logger.warning("Cannot evaluate circuit breakers with balance <= 0")
             return
 
         now = datetime.now(timezone.utc)
@@ -159,12 +163,20 @@ class CircuitBreaker:
                 # Already tripped -- nothing to do until reset.
                 continue
 
+            # Capture period-start equity on first call in each period
+            period_key = window_start.isoformat()
+            if self._period_start_date.get(level) != period_key:
+                self._period_start_equity[level] = current_balance
+                self._period_start_date[level] = period_key
+
+            base_equity = self._period_start_equity.get(level, current_balance)
+
             pnl = self.trade_logger.get_pnl_since(window_start)
             if pnl >= 0:
                 # Profitable or break-even -- no action.
                 continue
 
-            loss_pct = abs(pnl) / starting_equity * 100.0
+            loss_pct = abs(pnl) / base_equity * 100.0
             limit_pct = _LIMIT_MAP[level]
 
             if loss_pct >= limit_pct:

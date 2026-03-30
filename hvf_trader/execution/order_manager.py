@@ -309,7 +309,7 @@ class OrderManager:
         logger.info(
             f"Position closed: ticket={ticket}, {pos.volume} lots @ {result.price}"
         )
-        return True
+        return {"success": True, "fill_price": result.price, "volume": pos.volume}
 
     def close_all_positions(self, comment: str = "HVF emergency close") -> int:
         """
@@ -329,7 +329,7 @@ class OrderManager:
         closed = 0
         for pos in positions:
             direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
-            if self.close_position(pos.ticket, pos.symbol, direction, comment):
+            if self.close_position(pos.ticket, pos.symbol, direction, comment):  # truthy dict
                 closed += 1
 
         logger.info(f"Emergency close: {closed}/{len(positions)} positions closed")

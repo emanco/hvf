@@ -28,7 +28,7 @@ class TelegramCommandHandler:
     """Polls for incoming Telegram messages and responds to commands."""
 
     def __init__(self, alerter, trade_logger, connector, order_manager=None,
-                 armed_patterns_ref=None):
+                 armed_patterns_ref=None, armed_lock=None):
         """
         Args:
             alerter: TelegramAlerter instance (reuse its bot + chat_id)
@@ -36,12 +36,14 @@ class TelegramCommandHandler:
             connector: MT5Connector for account info
             order_manager: OrderManager for closing positions
             armed_patterns_ref: reference to HVFTrader._armed_patterns list
+            armed_lock: threading.Lock protecting armed_patterns_ref
         """
         self.alerter = alerter
         self.trade_logger = trade_logger
         self.connector = connector
         self.order_manager = order_manager
         self._armed_ref = armed_patterns_ref or []
+        self._armed_lock = armed_lock or threading.Lock()
         self._running = False
         self._thread = None
         self._last_update_id = 0
@@ -305,14 +307,14 @@ class TelegramCommandHandler:
                 closed += 1
                 continue
 
-            success = self.order_manager.close_position(
+            close_result = self.order_manager.close_position(
                 ticket, trade.symbol, trade.direction, "closeall"
             )
-            if success:
+            if close_result:
                 pnl = position["profit"]
                 total_pnl += pnl
                 pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-                close_price = position["price_current"]
+                close_price = close_result["fill_price"] if isinstance(close_result, dict) else position["price_current"]
                 if trade.direction == "LONG":
                     pnl_pips = (close_price - trade.entry_price) / pip_value
                 else:
@@ -341,7 +343,8 @@ class TelegramCommandHandler:
 
         # Clear the in-memory armed patterns list
         if self._armed_ref is not None:
-            self._armed_ref.clear()
+            with self._armed_lock:
+                self._armed_ref.clear()
 
         lines = ["\u2705 <b>Close All Complete</b>\n"]
         if closed:

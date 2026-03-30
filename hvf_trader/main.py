@@ -130,6 +130,7 @@ class HVFTrader:
 
         # ─── State (init early so refs can be passed) ──────────────────
         self._armed_patterns = []  # In-memory list of armed patterns (dicts with pattern_type)
+        self._armed_lock = threading.Lock()  # Protects _armed_patterns from concurrent access
 
         # ─── Telegram Commands ─────────────────────────────────────────
         self.telegram_commands = TelegramCommandHandler(
@@ -138,6 +139,7 @@ class HVFTrader:
             connector=self.connector,
             order_manager=self.order_manager,
             armed_patterns_ref=self._armed_patterns,
+            armed_lock=self._armed_lock,
         )
 
         # ─── Performance Monitor ────────────────────────────────────────
@@ -430,7 +432,8 @@ class HVFTrader:
         # Build sets of already-active symbol+direction combos to avoid duplicates
         open_trades = self.trade_logger.get_open_trades()
         active_positions = {(t.symbol, t.direction) for t in open_trades}
-        active_armed = {(a["record"].symbol, a["record"].direction) for a in self._armed_patterns}
+        with self._armed_lock:
+            active_armed = {(a["record"].symbol, a["record"].direction) for a in self._armed_patterns}
         recent_patterns = self.trade_logger.get_recent_patterns(hours=24)
         recently_triggered = {
             (p.symbol, p.direction) for p in recent_patterns
@@ -529,11 +532,12 @@ class HVFTrader:
         pattern_record = self.trade_logger.log_pattern(pattern_data)
 
         # Store armed pattern with its type and the original pattern object
-        self._armed_patterns.append({
-            "record": _detach_record(pattern_record),
-            "pattern_type": pattern_type,
-            "pattern_obj": pattern,
-        })
+        with self._armed_lock:
+            self._armed_patterns.append({
+                "record": _detach_record(pattern_record),
+                "pattern_type": pattern_type,
+                "pattern_obj": pattern,
+            })
 
         logger.info(
             f"[{pattern_type}] Armed: {sig.symbol} {sig.direction} "
@@ -554,7 +558,11 @@ class HVFTrader:
         expired = []
         triggered = []
 
-        for armed in self._armed_patterns:
+        # Snapshot under lock to avoid RuntimeError from concurrent modification
+        with self._armed_lock:
+            armed_snapshot = list(self._armed_patterns)
+
+        for armed in armed_snapshot:
             record = armed["record"]
             pattern_type = armed["pattern_type"]
             pattern_obj = armed["pattern_obj"]
@@ -633,21 +641,38 @@ class HVFTrader:
                             confirmed = float(close_price) < record.entry_price
 
             if confirmed:
-                self._attempt_entry(record, pattern_obj, df, pattern_type)
+                try:
+                    self._attempt_entry(record, pattern_obj, df, pattern_type)
+                except Exception as e:
+                    logger.error(
+                        f"[{pattern_type}] _attempt_entry failed for {symbol} {direction}: {e}",
+                        exc_info=True,
+                    )
+                    self.trade_logger.update_pattern_status(record.id, "REJECTED")
+                    self.trade_logger.log_event(
+                        "ERROR",
+                        symbol=symbol,
+                        pattern_id=record.id,
+                        details=f"Entry attempt exception: {e}",
+                        severity="ERROR",
+                    )
                 triggered.append(armed)
 
         # Clean up expired patterns
         for armed in expired:
             self.trade_logger.update_pattern_status(armed["record"].id, "EXPIRED")
-            self._armed_patterns.remove(armed)
+            with self._armed_lock:
+                if armed in self._armed_patterns:
+                    self._armed_patterns.remove(armed)
             r = armed["record"]
             logger.info(
                 f"[{armed['pattern_type']}] Expired: {r.symbol} {r.direction} (id={r.id})"
             )
 
-        for armed in triggered:
-            if armed in self._armed_patterns:
-                self._armed_patterns.remove(armed)
+        with self._armed_lock:
+            for armed in triggered:
+                if armed in self._armed_patterns:
+                    self._armed_patterns.remove(armed)
 
     def _get_quote_to_account_rate(self, symbol: str) -> float:
         """Get exchange rate to convert pip value from quote currency to account currency.

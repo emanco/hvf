@@ -121,10 +121,8 @@ class TradeMonitor:
         # Get associated pattern for invalidation check
         pattern = None
         if trade_record.pattern_id:
-            from hvf_trader.database.models import get_session, PatternRecord
-            session = get_session()
-            pattern = session.query(PatternRecord).get(trade_record.pattern_id)
-            session.close()
+            from hvf_trader.database.models import PatternRecord
+            pattern = self.trade_logger.session.get(PatternRecord, trade_record.pattern_id)
 
         # ─── Check invalidation ──────────────────────────────────────────
         # Grace period: skip invalidation check for first 2 H1 bars (2 hours)
@@ -333,7 +331,7 @@ class TradeMonitor:
                     )
 
     def _find_position_for_trade(self, trade_record):
-        """Find an MT5 position matching this trade's symbol and direction."""
+        """Find an MT5 position matching this trade's symbol, direction, and magic number."""
         if not MT5_AVAILABLE:
             return None
         positions = mt5.positions_get(symbol=trade_record.symbol)
@@ -341,25 +339,30 @@ class TradeMonitor:
             return None
         expected_type = 0 if trade_record.direction == "LONG" else 1  # BUY=0, SELL=1
         for pos in positions:
-            if pos.type == expected_type:
-                return {
-                    "ticket": pos.ticket,
-                    "price_current": pos.price_current,
-                    "profit": pos.profit,
-                    "volume": pos.volume,
-                }
+            if pos.type != expected_type:
+                continue
+            # Verify magic number to avoid matching manual positions
+            if pos.magic != 20250305:
+                continue
+            return {
+                "ticket": pos.ticket,
+                "price_current": pos.price_current,
+                "profit": pos.profit,
+                "volume": pos.volume,
+            }
         return None
 
     def _close_trade(self, trade_record, ticket, position, reason):
         """Close a trade fully and update records."""
         direction = trade_record.direction
-        close_price = position["price_current"]
 
-        success = self.order_manager.close_position(
+        result = self.order_manager.close_position(
             ticket, trade_record.symbol, direction, f"HVF {reason}"
         )
 
-        if success:
+        if result:
+            # Use actual fill price from close order, not pre-close snapshot
+            close_price = result["fill_price"] if isinstance(result, dict) else position["price_current"]
             pnl = position["profit"]
             pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
             if direction == "LONG":
