@@ -198,24 +198,6 @@ def _is_rejection_candle(bar: pd.Series, rejection_type: str) -> bool:
         return upper_wick > 2.0 * body
 
 
-def _ema_aligns(df: pd.DataFrame, bar_idx: int, direction: str) -> bool:
-    """Check if EMA200 alignment supports the direction."""
-    if "ema_200" not in df.columns:
-        return True  # No EMA data = allow
-
-    idx = min(bar_idx, len(df) - 1)
-    ema = df["ema_200"].iloc[idx]
-    close = df["close"].iloc[idx]
-
-    if np.isnan(ema):
-        return True
-
-    if direction == "LONG":
-        return close > ema  # Price above EMA for longs
-    else:
-        return close < ema  # Price below EMA for shorts
-
-
 def check_kz_hunt_entry_confirmation(
     pattern: KZHuntPattern,
     latest_bar: pd.Series,

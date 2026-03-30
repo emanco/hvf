@@ -5,6 +5,8 @@ Uses python-telegram-bot library (async).
 
 import logging
 import asyncio
+import queue
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -31,52 +33,55 @@ class TelegramAlerter:
         if TELEGRAM_AVAILABLE and self.token and self.chat_id:
             self.bot = Bot(token=self.token)
 
-    def _get_loop(self):
-        """Get or create an event loop for sync contexts."""
-        try:
-            loop = asyncio.get_running_loop()
-            return loop
-        except RuntimeError:
-            if self._loop is None or self._loop.is_closed():
-                self._loop = asyncio.new_event_loop()
-            return self._loop
+        # Background send queue — prevents blocking caller threads
+        self._send_queue = queue.Queue()
+        self._sender_thread = threading.Thread(target=self._send_loop, daemon=True)
+        self._sender_thread.start()
+
+    def _send_loop(self):
+        """Background thread that processes the send queue sequentially."""
+        loop = asyncio.new_event_loop()
+        while True:
+            try:
+                task = self._send_queue.get()
+                if task is None:
+                    break
+                task_type = task[0]
+                if task_type == "message":
+                    _, text, parse_mode = task
+                    loop.run_until_complete(
+                        self.bot.send_message(
+                            chat_id=self.chat_id,
+                            text=text,
+                            parse_mode=parse_mode,
+                        )
+                    )
+                elif task_type == "photo":
+                    _, photo_path, caption = task
+                    with open(photo_path, "rb") as f:
+                        loop.run_until_complete(
+                            self.bot.send_photo(
+                                chat_id=self.chat_id,
+                                photo=f,
+                                caption=caption,
+                                parse_mode="HTML",
+                            )
+                        )
+            except Exception as e:
+                logger.error(f"Telegram send failed: {e}")
 
     def send_message(self, text: str, parse_mode: str = "HTML"):
-        """Send a message synchronously (blocking)."""
+        """Queue a message for background sending (non-blocking)."""
         if not self.bot:
             logger.debug(f"Telegram not configured, would send: {text[:100]}...")
             return
-
-        try:
-            loop = self._get_loop()
-            loop.run_until_complete(
-                self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=text,
-                    parse_mode=parse_mode,
-                )
-            )
-        except Exception as e:
-            logger.error(f"Telegram send failed: {e}")
+        self._send_queue.put(("message", text, parse_mode))
 
     def send_photo(self, photo_path: str, caption: str = None):
-        """Send a photo synchronously (blocking)."""
+        """Queue a photo for background sending (non-blocking)."""
         if not self.bot:
             return
-
-        try:
-            loop = self._get_loop()
-            with open(photo_path, "rb") as f:
-                loop.run_until_complete(
-                    self.bot.send_photo(
-                        chat_id=self.chat_id,
-                        photo=f,
-                        caption=caption,
-                        parse_mode="HTML",
-                    )
-                )
-        except Exception as e:
-            logger.error(f"Telegram send_photo failed: {e}")
+        self._send_queue.put(("photo", photo_path, caption))
 
     def alert_pattern_detected(self, symbol: str, direction: str, score: float, rrr: float, pattern_type: str = "HVF"):
         """Alert when a new pattern is detected and armed."""

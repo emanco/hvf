@@ -239,7 +239,7 @@ class OrderManager:
             f"Partial close: ticket={ticket}, closed {close_volume} lots "
             f"({close_pct*100}%) @ {result.price}"
         )
-        return result.order
+        return {"ticket": result.order, "fill_price": result.price, "volume": close_volume}
 
     def close_position(
         self,

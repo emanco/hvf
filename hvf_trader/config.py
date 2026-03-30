@@ -110,7 +110,7 @@ VIPER_REGIME_ADX_THRESHOLD = 20    # ADX below this = weak trend
 # ─── Kill Zones (UTC hours) ─────────────────────────────────────────────────
 KILL_ZONES_UTC = {
     "london": (8, 11),          # London open session
-    "ny_morning": (13, 16),     # NY morning / London-NY overlap
+    "ny_morning": (13, 15),     # NY morning / London-NY overlap
     "ny_evening": (16, 20),     # NY afternoon session
     "asian": (0, 4),            # Asian session (Tokyo/Sydney)
 }

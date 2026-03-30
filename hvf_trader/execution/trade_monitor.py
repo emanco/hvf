@@ -36,6 +36,7 @@ class TradeMonitor:
         self._highest_since_partial = {}  # ticket -> highest price since partial close
         self._lowest_since_partial = {}   # ticket -> lowest price since partial (for shorts)
         self._missing_position_counts = {}  # ticket -> consecutive miss count
+        self._atr_cache = {}  # symbol -> (timestamp, atr_value)
 
     def start(self):
         """Start the trade monitoring loop."""
@@ -186,14 +187,17 @@ class TradeMonitor:
     def _handle_partial_close(self, trade_record, ticket, position):
         """Close 50% of position and move SL to breakeven."""
         direction = trade_record.direction
-        close_price = position["price_current"]
 
         # Partial close
-        new_ticket = self.order_manager.partial_close(
+        partial_result = self.order_manager.partial_close(
             ticket, trade_record.symbol, direction, config.PARTIAL_CLOSE_PCT
         )
 
-        if new_ticket is not None:
+        if partial_result is not None:
+            # Use actual fill price from partial close, not pre-close snapshot
+            close_price = partial_result["fill_price"] if isinstance(partial_result, dict) else position["price_current"]
+            new_ticket = partial_result["ticket"] if isinstance(partial_result, dict) else partial_result
+
             # Update trade record
             self.trade_logger.log_partial_close(trade_record.id, close_price)
 
@@ -258,12 +262,18 @@ class TradeMonitor:
         """
         direction = trade_record.direction
 
-        # Get current ATR from latest data
-        from hvf_trader.data.data_fetcher import fetch_and_prepare
-        df = fetch_and_prepare(trade_record.symbol, config.PRIMARY_TIMEFRAME, bars=20)
-        if df is None or df.empty:
-            return
-        current_atr = df["atr"].iloc[-1]
+        # Get current ATR — cached per symbol, refreshed every 120s (2 monitor cycles)
+        now = time.time()
+        cached = self._atr_cache.get(trade_record.symbol)
+        if cached and (now - cached[0]) < 120:
+            current_atr = cached[1]
+        else:
+            from hvf_trader.data.data_fetcher import fetch_and_prepare
+            df = fetch_and_prepare(trade_record.symbol, config.PRIMARY_TIMEFRAME, bars=20)
+            if df is None or df.empty:
+                return
+            current_atr = df["atr"].iloc[-1]
+            self._atr_cache[trade_record.symbol] = (now, current_atr)
         trail_mult = config.TRAILING_STOP_ATR_MULT_BY_PATTERN.get(
             trade_record.pattern_type, config.TRAILING_STOP_ATR_MULT
         )
@@ -486,13 +496,23 @@ class TradeMonitor:
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
         else:
-            # No matching close deal — use entry price as fallback (breakeven)
+            # No matching close deal — estimate from trailing SL or entry price
+            close_price = trade_record.trailing_sl or trade_record.entry_price
+            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+            direction = trade_record.direction
+            if direction == "LONG":
+                pnl_pips = (close_price - trade_record.entry_price) / pip_value
+            else:
+                pnl_pips = (trade_record.entry_price - close_price) / pip_value
+
+            source = "trailing SL" if trade_record.trailing_sl else "entry (breakeven)"
+            reason = "TRAILING_STOP" if trade_record.trailing_sl else (
+                "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
+            )
             logger.warning(
                 f"Position {ticket} closed but no matching deal for {trade_record.symbol}. "
-                f"Recording as breakeven."
+                f"Estimating close at {source} {close_price:.5f} ({pnl_pips:+.1f} pips)."
             )
-            close_price = trade_record.entry_price
-            reason = "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
             self.trade_logger.log_trade_close(
-                trade_record.id, close_price, 0.0, 0.0, reason
+                trade_record.id, close_price, 0.0, pnl_pips, reason
             )
