@@ -273,6 +273,15 @@ class TelegramAlerter:
         if not trades:
             return
 
+        # Filter out pre-go-live trades (corrupted pattern_type / PnL data)
+        go_live = config.PERF_GO_LIVE_DATE
+        if go_live:
+            from datetime import datetime as dt
+            cutoff = dt.fromisoformat(go_live).replace(tzinfo=timezone.utc)
+            trades = [t for t in trades if t.closed_at and t.closed_at >= cutoff]
+        if not trades:
+            return
+
         # Overall stats
         wins = [t for t in trades if t.pnl and t.pnl > 0]
         losses = [t for t in trades if t.pnl and t.pnl <= 0]
@@ -286,7 +295,7 @@ class TelegramAlerter:
         # Per-pattern breakdown
         by_pattern = {}
         for t in trades:
-            pt = t.pattern_type or "HVF"
+            pt = t.pattern_type or "LEGACY"
             by_pattern.setdefault(pt, []).append(t)
 
         pattern_lines = []
