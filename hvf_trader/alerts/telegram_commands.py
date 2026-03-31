@@ -49,6 +49,13 @@ class TelegramCommandHandler:
         self._last_update_id = 0
         self._pending_closeall = False
 
+    def _currency_symbol(self):
+        """Get display currency symbol from MT5 account, fallback to config."""
+        account = self.connector.get_account_info()
+        if account and account.get("currency"):
+            return config.CURRENCY_SYMBOLS.get(account["currency"], account["currency"] + " ")
+        return config.ACCOUNT_CURRENCY_SYMBOL
+
     def start(self):
         if not TELEGRAM_AVAILABLE or not self.alerter.bot:
             logger.info("Telegram commands disabled (bot not configured)")
@@ -160,14 +167,15 @@ class TelegramCommandHandler:
         emoji_d = "\u2705" if daily_pnl >= 0 else "\u274C"
         emoji_w = "\u2705" if weekly_pnl >= 0 else "\u274C"
 
+        cs = self._currency_symbol()
         text = (
             f"<b>\U0001F4CA Bot Status</b>\n"
             f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
             f"MT5: <b>{mt5_status}</b>\n"
             f"Open trades: <b>{len(open_trades)}</b>\n"
             f"Armed patterns: <b>{len(armed)}</b>\n\n"
-            f"Today: {emoji_d} <b>${daily_pnl:+.2f}</b> ({len(today_trades)}T, W:{wins} L:{losses})\n"
-            f"Week: {emoji_w} <b>${weekly_pnl:+.2f}</b>"
+            f"Today: {emoji_d} <b>{cs}{daily_pnl:+.2f}</b> ({len(today_trades)}T, W:{wins} L:{losses})\n"
+            f"Week: {emoji_w} <b>{cs}{weekly_pnl:+.2f}</b>"
         )
         self.alerter.send_message(text)
 
@@ -177,14 +185,15 @@ class TelegramCommandHandler:
 
         if account:
             margin_level = account.get("margin_level", 0) or 0
+            cs = config.CURRENCY_SYMBOLS.get(account.get("currency", ""), config.ACCOUNT_CURRENCY_SYMBOL)
             text = (
                 f"<b>\U0001F3E5 Health Check</b>\n\n"
                 f"MT5: <b>{mt5_status}</b>\n"
-                f"Balance: <b>${account['balance']:,.2f}</b>\n"
-                f"Equity: <b>${account['equity']:,.2f}</b>\n"
-                f"Free margin: ${account['free_margin']:,.2f}\n"
+                f"Balance: <b>{cs}{account['balance']:,.2f}</b>\n"
+                f"Equity: <b>{cs}{account['equity']:,.2f}</b>\n"
+                f"Free margin: {cs}{account['free_margin']:,.2f}\n"
                 f"Margin level: {margin_level:.0f}%\n"
-                f"Unrealised PnL: ${account['profit']:+.2f}"
+                f"Unrealised PnL: {cs}{account['profit']:+.2f}"
             )
         else:
             text = (
@@ -200,11 +209,12 @@ class TelegramCommandHandler:
             self.alerter.send_message("<b>No open trades</b>")
             return
 
+        cs = self._currency_symbol()
         lines = [f"<b>\U0001F4C8 Open Trades ({len(open_trades)})</b>\n"]
         for t in open_trades:
             ptype = t.pattern_type or "LEGACY"
             arrow = "\u2B06" if t.direction == "LONG" else "\u2B07"
-            pnl_str = f"${t.pnl:+.2f}" if t.pnl else "n/a"
+            pnl_str = f"{cs}{t.pnl:+.2f}" if t.pnl else "n/a"
             lines.append(
                 f"{arrow} <code>{t.symbol}</code> {t.direction} ({ptype})\n"
                 f"   Entry: {t.entry_price:.5f} | SL: {t.stop_loss:.5f}\n"
@@ -214,30 +224,42 @@ class TelegramCommandHandler:
 
     def _cmd_equity(self):
         """Send equity chart."""
-        all_trades = self.trade_logger.get_all_closed_trades(since_date="2026-03-13")
+        all_trades = self.trade_logger.get_all_closed_trades(
+            since_date=config.PERF_GO_LIVE_DATE
+        )
         if not all_trades:
             self.alerter.send_message("<b>No closed trades yet</b>")
             return
 
-        starting_equity = 700.0
         total_pnl = sum(t.pnl for t in all_trades if t.pnl)
-        balance = starting_equity + total_pnl
 
-        chart_path = self.alerter._generate_equity_chart(all_trades, starting_equity)
+        account = self.connector.get_account_info()
+        if account:
+            balance = account["balance"]
+            equity = account["equity"]
+            starting_equity = balance - total_pnl
+        else:
+            starting_equity = config.STARTING_EQUITY
+            balance = starting_equity + total_pnl
+            equity = balance
+
+        cs = self._currency_symbol()
+        chart_path = self.alerter._generate_equity_chart(all_trades, starting_equity, cs)
         if chart_path:
             caption = (
-                f"<b>Equity: ${balance:,.2f}</b> ({total_pnl:+.2f} from $700)\n"
+                f"<b>Equity: {cs}{equity:,.2f}</b>\n"
+                f"Balance: {cs}{balance:,.2f} ({total_pnl:+.2f})\n"
                 f"Trades: {len(all_trades)}"
             )
             self.alerter.send_photo(chart_path, caption=caption)
         else:
             self.alerter.send_message(
-                f"<b>Balance: ${balance:,.2f}</b> ({total_pnl:+.2f} from $700)"
+                f"<b>Balance: {cs}{balance:,.2f}</b> ({total_pnl:+.2f})"
             )
 
     def _cmd_balance(self):
         account = self.connector.get_account_info()
-        all_trades = self.trade_logger.get_all_closed_trades(since_date="2026-03-13")
+        all_trades = self.trade_logger.get_all_closed_trades(since_date=config.PERF_GO_LIVE_DATE)
         total_pnl = sum(t.pnl for t in all_trades if t.pnl) if all_trades else 0
         trade_count = len(all_trades) if all_trades else 0
         wins = sum(1 for t in all_trades if t.pnl and t.pnl > 0) if all_trades else 0
@@ -246,16 +268,17 @@ class TelegramCommandHandler:
             balance = account["balance"]
             equity = account["equity"]
         else:
-            balance = 700.0 + total_pnl
+            balance = config.STARTING_EQUITY + total_pnl
             equity = balance
 
         wr = (wins / trade_count * 100) if trade_count > 0 else 0
 
+        cs = self._currency_symbol()
         text = (
             f"<b>\U0001F4B0 Balance</b>\n\n"
-            f"Balance: <b>${balance:,.2f}</b>\n"
-            f"Equity: <b>${equity:,.2f}</b>\n"
-            f"Total PnL: <b>${total_pnl:+.2f}</b> (from $700)\n"
+            f"Balance: <b>{cs}{balance:,.2f}</b>\n"
+            f"Equity: <b>{cs}{equity:,.2f}</b>\n"
+            f"Total PnL: <b>{cs}{total_pnl:+.2f}</b>\n"
             f"Trades: {trade_count} (WR: {wr:.0f}%)"
         )
         self.alerter.send_message(text)
@@ -348,7 +371,8 @@ class TelegramCommandHandler:
 
         lines = ["\u2705 <b>Close All Complete</b>\n"]
         if closed:
-            lines.append(f"Closed: <b>{closed}</b> trade(s), PnL: <b>${total_pnl:+.2f}</b>")
+            cs = self._currency_symbol()
+            lines.append(f"Closed: <b>{closed}</b> trade(s), PnL: <b>{cs}{total_pnl:+.2f}</b>")
         if failed:
             lines.append(f"Failed: <b>{failed}</b> trade(s)")
         if expired:

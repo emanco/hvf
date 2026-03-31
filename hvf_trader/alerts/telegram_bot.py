@@ -173,7 +173,7 @@ class TelegramAlerter:
         )
         self.send_message(text)
 
-    def send_daily_summary(self, trade_logger):
+    def send_daily_summary(self, trade_logger, connector=None):
         """Send daily trading summary with equity chart."""
         daily_pnl = trade_logger.get_daily_pnl()
 
@@ -191,31 +191,40 @@ class TelegramAlerter:
         armed_patterns = trade_logger.get_armed_patterns()
 
         # Build equity curve from all closed trades since go-live
-        all_trades = trade_logger.get_all_closed_trades(since_date="2026-03-13")
-        starting_equity = 700.0
-        balance = starting_equity
+        all_trades = trade_logger.get_all_closed_trades(
+            since_date=config.PERF_GO_LIVE_DATE
+        )
         total_pnl = sum(t.pnl for t in all_trades if t.pnl)
-        balance = starting_equity + total_pnl
+
+        account = connector.get_account_info() if connector else None
+        if account:
+            balance = account["balance"]
+            starting_equity = balance - total_pnl
+            cs = config.CURRENCY_SYMBOLS.get(account.get("currency", ""), config.ACCOUNT_CURRENCY_SYMBOL)
+        else:
+            starting_equity = config.STARTING_EQUITY
+            balance = starting_equity + total_pnl
+            cs = config.ACCOUNT_CURRENCY_SYMBOL
 
         emoji = "\u2705" if daily_pnl >= 0 else "\u274C"
         text = (
             f"<b>\U0001F4CA Daily Summary</b>\n"
             f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
-            f"PnL today: <b>{emoji} ${daily_pnl:+.2f}</b>\n"
+            f"PnL today: <b>{emoji} {cs}{daily_pnl:+.2f}</b>\n"
             f"Trades closed: {total} (W:{wins} L:{losses})\n"
             f"Open trades: {len(open_trades)}\n"
             f"Armed patterns: {len(armed_patterns)}\n\n"
-            f"Balance: <b>${balance:,.2f}</b> ({total_pnl:+.2f} from $700)"
+            f"Balance: <b>{cs}{balance:,.2f}</b> ({total_pnl:+.2f})"
         )
 
         # Generate equity chart
-        chart_path = self._generate_equity_chart(all_trades, starting_equity)
+        chart_path = self._generate_equity_chart(all_trades, starting_equity, cs)
         if chart_path:
             self.send_photo(chart_path, caption=text)
         else:
             self.send_message(text)
 
-    def _generate_equity_chart(self, trades, starting_equity: float):
+    def _generate_equity_chart(self, trades, starting_equity: float, currency_symbol: str = "$"):
         """Generate a small equity curve PNG. Returns file path or None."""
         if not trades:
             return None
@@ -239,10 +248,10 @@ class TelegramAlerter:
             ax.axhline(y=starting_equity, color="gray", linestyle="--", alpha=0.4, linewidth=0.8)
 
             ax.set_title(
-                f"Equity: ${eq[-1]:,.2f}  ({eq[-1] - starting_equity:+,.2f})",
+                f"Equity: {currency_symbol}{eq[-1]:,.2f}  ({eq[-1] - starting_equity:+,.2f})",
                 fontsize=11, fontweight="bold",
             )
-            ax.set_ylabel("$", fontsize=9)
+            ax.set_ylabel(currency_symbol, fontsize=9)
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
             ax.tick_params(labelsize=8)
             ax.grid(True, alpha=0.2)

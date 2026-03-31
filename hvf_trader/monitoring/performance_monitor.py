@@ -60,11 +60,13 @@ class PerformanceMonitor:
         # Kill switch: auto-halt if PF < threshold after enough trades
         alerts.extend(self._check_kill_switch())
 
-        # Send alerts (with cooldown)
-        for alert_key, alert_text in alerts:
-            if self._should_alert(alert_key):
-                self.alerter.send_message(alert_text)
-                self._alert_cooldowns[alert_key] = now
+        # Send alerts (with cooldown) — batch into a single message
+        pending = [(k, t) for k, t in alerts if self._should_alert(k)]
+        if pending:
+            combined = "\n\n".join(t for _, t in pending)
+            self.alerter.send_message(combined)
+            for k, _ in pending:
+                self._alert_cooldowns[k] = now
 
     def _check_rolling_metrics(self, pattern_type=None, symbol=None, label=""):
         """Check rolling PF and win rate for a given filter."""

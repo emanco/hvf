@@ -480,26 +480,48 @@ class TradeMonitor:
         if trade_open_time and trade_open_time.tzinfo is None:
             trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
 
+        # Log raw deals for diagnostics (IC Markets deal format debugging)
+        logger.info(
+            f"[DEAL_SEARCH] {trade_record.symbol} ticket={ticket}: "
+            f"{len(deals)} deals found. Looking for type={expected_deal_type}, "
+            f"after={trade_open_time}"
+        )
+        for d in deals[:10]:
+            deal_time = datetime.fromtimestamp(d.time, tz=timezone.utc)
+            logger.debug(
+                f"[DEAL_RAW] ticket={d.ticket} pos={d.position} symbol={d.symbol} "
+                f"entry={d.entry} type={d.type} price={d.price} profit={d.profit} "
+                f"time={deal_time}"
+            )
+
+        # Two-pass matching:
+        # Pass 1: exact position ticket match (most reliable when available)
         for deal in deals:
-            if deal.entry != 1 or deal.symbol != trade_record.symbol:
+            if deal.position != ticket or deal.symbol != trade_record.symbol:
                 continue
-            # Validate deal direction matches expected close direction
             if deal.type != expected_deal_type:
-                logger.debug(
-                    f"Skipping deal {deal.ticket}: type={deal.type} "
-                    f"(expected {expected_deal_type} for {trade_record.direction} close)"
-                )
                 continue
-            # Validate deal happened after trade was opened
             if trade_open_time:
                 deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                if deal_time < trade_open_time:
-                    logger.debug(
-                        f"Skipping deal {deal.ticket}: time {deal_time} "
-                        f"is before trade open {trade_open_time}"
-                    )
+                if deal_time < (trade_open_time - timedelta(seconds=60)):
                     continue
-            close_deal = deal  # Keep iterating to get the LAST valid one
+            close_deal = deal
+
+        # Pass 2: fallback to entry-based matching (broader, for IC Markets quirks)
+        if not close_deal:
+            for deal in deals:
+                if deal.symbol != trade_record.symbol:
+                    continue
+                if deal.type != expected_deal_type:
+                    continue
+                # Accept entry=1 (standard exit) or entry=0 (some brokers use for SL fills)
+                if deal.entry not in (0, 1):
+                    continue
+                if trade_open_time:
+                    deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
+                    if deal_time < (trade_open_time - timedelta(seconds=60)):
+                        continue
+                close_deal = deal
 
         if close_deal:
             close_price = close_deal.price
@@ -539,10 +561,13 @@ class TradeMonitor:
             reason = "TRAILING_STOP" if trade_record.trailing_sl else (
                 "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
             )
+            lot_size = trade_record.lot_size or 0.01
+            estimated_pnl = pnl_pips * 10.0 * lot_size
             logger.warning(
                 f"Position {ticket} closed but no matching deal for {trade_record.symbol}. "
-                f"Estimating close at {source} {close_price:.5f} ({pnl_pips:+.1f} pips)."
+                f"Estimating close at {source} {close_price:.5f} ({pnl_pips:+.1f} pips, "
+                f"~{estimated_pnl:+.2f})."
             )
             self.trade_logger.log_trade_close(
-                trade_record.id, close_price, 0.0, pnl_pips, reason
+                trade_record.id, close_price, estimated_pnl, pnl_pips, reason
             )

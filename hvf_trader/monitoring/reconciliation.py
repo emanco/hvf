@@ -236,17 +236,35 @@ class Reconciliator:
         trade_open_time = trade.opened_at
         if trade_open_time and trade_open_time.tzinfo is None:
             trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
+        ticket = trade.mt5_ticket
 
+        # Two-pass matching (mirrors trade_monitor logic):
+        # Pass 1: exact position ticket match
         for deal in deals:
-            if deal.entry != 1 or deal.symbol != trade.symbol:
+            if deal.position != ticket or deal.symbol != trade.symbol:
                 continue
             if deal.type != expected_deal_type:
                 continue
             if trade_open_time:
                 deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                if deal_time < trade_open_time:
+                if deal_time < (trade_open_time - timedelta(seconds=60)):
                     continue
             close_deal = deal
+
+        # Pass 2: broader entry-based matching
+        if not close_deal:
+            for deal in deals:
+                if deal.symbol != trade.symbol:
+                    continue
+                if deal.type != expected_deal_type:
+                    continue
+                if deal.entry not in (0, 1):
+                    continue
+                if trade_open_time:
+                    deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
+                    if deal_time < (trade_open_time - timedelta(seconds=60)):
+                        continue
+                close_deal = deal
 
         if close_deal:
             close_price = close_deal.price

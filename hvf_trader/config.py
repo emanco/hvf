@@ -193,6 +193,9 @@ PERF_WR_DECAY_THRESHOLD = 15           # Alert if recent WR drops >15% below all
 PERF_KILL_SWITCH_MIN_TRADES = 200      # Min trades before kill switch can activate
 PERF_KILL_SWITCH_MIN_PF = 1.2          # Auto-halt if live PF < this after min trades
 PERF_GO_LIVE_DATE = "2026-03-25"       # Ignore trades before this date for performance stats (reset after bug fixes)
+STARTING_EQUITY = 10000.0              # Fallback when MT5 unavailable (current demo account balance)
+ACCOUNT_CURRENCY_SYMBOL = "$"          # Fallback display symbol when MT5 unavailable
+CURRENCY_SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£", "JPY": "¥", "CHF": "CHF ", "AUD": "A$", "NZD": "NZ$", "CAD": "C$"}
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 LOG_RETENTION_DAYS = 90
