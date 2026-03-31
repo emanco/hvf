@@ -189,8 +189,10 @@ class TradeMonitor:
         direction = trade_record.direction
 
         # Partial close
+        ptype = trade_record.pattern_type or "AUTO"
         partial_result = self.order_manager.partial_close(
-            ticket, trade_record.symbol, direction, config.PARTIAL_CLOSE_PCT
+            ticket, trade_record.symbol, direction, config.PARTIAL_CLOSE_PCT,
+            comment=f"{ptype} partial",
         )
 
         if partial_result is not None:
@@ -366,8 +368,9 @@ class TradeMonitor:
         """Close a trade fully and update records."""
         direction = trade_record.direction
 
+        ptype = trade_record.pattern_type or "AUTO"
         result = self.order_manager.close_position(
-            ticket, trade_record.symbol, direction, f"HVF {reason}"
+            ticket, trade_record.symbol, direction, f"{ptype} {reason}"
         )
 
         if result:

@@ -131,7 +131,7 @@ class TelegramCommandHandler:
 
     def _cmd_help(self):
         text = (
-            "<b>HVF Bot Commands</b>\n\n"
+            "<b>Bot Commands</b>\n\n"
             "/status - Bot status overview\n"
             "/health - MT5 connection + account\n"
             "/trades - Open trades\n"
@@ -202,7 +202,7 @@ class TelegramCommandHandler:
 
         lines = [f"<b>\U0001F4C8 Open Trades ({len(open_trades)})</b>\n"]
         for t in open_trades:
-            ptype = t.pattern_type or "HVF"
+            ptype = t.pattern_type or "LEGACY"
             arrow = "\u2B06" if t.direction == "LONG" else "\u2B07"
             pnl_str = f"${t.pnl:+.2f}" if t.pnl else "n/a"
             lines.append(

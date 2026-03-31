@@ -34,7 +34,7 @@ class OrderManager:
         lot_size: float,
         stop_loss: float,
         take_profit: float = 0.0,
-        comment: str = "HVF",
+        comment: str = "AUTO",
         magic: int = 20250305,
     ) -> Optional[dict]:
         """
@@ -163,7 +163,7 @@ class OrderManager:
         symbol: str,
         direction: str,
         close_pct: float = 0.5,
-        comment: str = "HVF partial",
+        comment: str = "partial",
     ) -> Optional[int]:
         """
         Partially close a position by percentage.
@@ -246,7 +246,7 @@ class OrderManager:
         ticket: int,
         symbol: str,
         direction: str,
-        comment: str = "HVF close",
+        comment: str = "close",
     ) -> bool:
         """
         Fully close an open position.
@@ -311,7 +311,7 @@ class OrderManager:
         )
         return {"success": True, "fill_price": result.price, "volume": pos.volume}
 
-    def close_all_positions(self, comment: str = "HVF emergency close") -> int:
+    def close_all_positions(self, comment: str = "emergency close") -> int:
         """
         Close all open positions (emergency use — extended disconnect).
 
