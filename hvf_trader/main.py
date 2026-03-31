@@ -163,7 +163,7 @@ class HVFTrader:
     def start(self):
         """Start the trading bot."""
         logger.info("=" * 60)
-        logger.info("HVF Auto-Trader starting...")
+        logger.info(f"{config.BOT_NAME} starting...")
         logger.info(f"Environment: {config.ENVIRONMENT}")
         logger.info(f"Instruments: {config.INSTRUMENTS}")
         logger.info(f"Enabled patterns: {config.ENABLED_PATTERNS}")
@@ -976,7 +976,7 @@ class HVFTrader:
 
     def stop(self):
         """Graceful shutdown."""
-        logger.info("Shutting down HVF Trader...")
+        logger.info(f"Shutting down {config.BOT_NAME}...")
         self._running = False
 
         # Stop components
@@ -993,7 +993,7 @@ class HVFTrader:
         # Disconnect MT5 (keep server-side SLs active)
         self.connector.disconnect()
 
-        logger.info("HVF Trader stopped")
+        logger.info(f"{config.BOT_NAME} stopped")
 
 
 def main():

@@ -259,7 +259,7 @@ class TelegramAlerter:
     def alert_startup(self):
         """Alert on bot startup."""
         text = (
-            f"<b>\U0001F680 HVF Trader Started</b>\n"
+            f"<b>\U0001F680 {config.BOT_NAME} Started</b>\n"
             f"Environment: <b>{config.ENVIRONMENT}</b>\n"
             f"Instruments: {', '.join(config.INSTRUMENTS)}\n"
             f"Risk: {config.RISK_PCT}% per trade\n"
@@ -360,7 +360,7 @@ class TelegramAlerter:
     def alert_shutdown(self, reason: str = "Manual"):
         """Alert on bot shutdown."""
         text = (
-            f"<b>\U0001F6D1 HVF Trader Stopped</b>\n"
+            f"<b>\U0001F6D1 {config.BOT_NAME} Stopped</b>\n"
             f"Reason: {reason}"
         )
         self.send_message(text)

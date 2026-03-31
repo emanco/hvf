@@ -4,6 +4,9 @@ All settings and thresholds. Nothing hardcoded elsewhere.
 """
 
 import os
+
+# ─── Bot Identity ─────────────────────────────────────────────────────────────
+BOT_NAME = "Sniper Bot"
 from pathlib import Path
 from dotenv import load_dotenv
 
