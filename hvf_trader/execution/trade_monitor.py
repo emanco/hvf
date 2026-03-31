@@ -409,6 +409,17 @@ class TradeMonitor:
         from_date = now - timedelta(days=7)
         deals = mt5.history_deals_get(from_date, now, position=ticket)
 
+        # IC Markets often returns nothing for position=ticket filter.
+        # Fall back to broad search filtered by symbol.
+        if not deals:
+            logger.info(
+                f"[TRADE_MONITOR] No deals for position={ticket}, "
+                f"trying broad search for {trade_record.symbol}"
+            )
+            all_deals = mt5.history_deals_get(from_date, now)
+            if all_deals:
+                deals = [d for d in all_deals if d.symbol == trade_record.symbol]
+
         if not deals:
             # Final safety check: is the position actually still alive in MT5?
             still_alive = self._find_position_for_trade(trade_record)
@@ -420,15 +431,31 @@ class TradeMonitor:
                 )
                 return
 
-            # Truly gone with no deal history
+            # Truly gone with no deal history — estimate from SL
+            if trade_record.trailing_sl:
+                close_price = trade_record.trailing_sl
+                source = "trailing SL"
+            elif trade_record.stop_loss:
+                close_price = trade_record.stop_loss
+                source = "stop loss"
+            else:
+                close_price = trade_record.entry_price
+                source = "entry (no SL)"
+
+            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+            if trade_record.direction == "LONG":
+                pnl_pips = (close_price - trade_record.entry_price) / pip_value
+            else:
+                pnl_pips = (trade_record.entry_price - close_price) / pip_value
+
+            lot_size = trade_record.lot_size or 0.01
+            pnl = pnl_pips * 10.0 * lot_size  # approximate $10/pip/lot
+
+            reason = "BREAKEVEN_SL" if trade_record.partial_closed else "STOP_LOSS"
             logger.warning(
                 f"Position {ticket} disappeared, no deals found. "
-                f"Recording as unknown close."
+                f"Estimated close at {source}: {pnl_pips:+.1f} pips"
             )
-            close_price = trade_record.entry_price
-            pnl = 0.0
-            pnl_pips = 0.0
-            reason = "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN_CLOSE"
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, pnl, pnl_pips, reason
             )
@@ -436,7 +463,7 @@ class TradeMonitor:
                 "TRADE_CLOSED",
                 symbol=trade_record.symbol,
                 trade_id=trade_record.id,
-                details=f"Server-side close (no deals): {reason}, assumed breakeven",
+                details=f"Server-side close (no deals): {reason} at {source}, ~{pnl_pips:+.1f}p",
             )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)

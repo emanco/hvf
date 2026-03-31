@@ -27,6 +27,7 @@ class Reconciliator:
         """
         self.trade_logger = trade_logger
         self.order_manager = order_manager
+        self._missing_counts = {}  # ticket -> consecutive miss count
 
     def reconcile(self) -> list[dict]:
         """
@@ -60,11 +61,23 @@ class Reconciliator:
         # Check 1: Internal trades missing from MT5
         for ticket, trade in internal_tickets.items():
             if ticket not in mt5_positions:
+                # Require 3 consecutive misses before closing — gives trade monitor
+                # (which has better deal lookup and runs every 30s) priority.
+                count = self._missing_counts.get(ticket, 0) + 1
+                self._missing_counts[ticket] = count
+                if count < 3:
+                    logger.info(
+                        f"[RECONCILIATION] Trade {trade.id} (ticket {ticket}, "
+                        f"{trade.symbol}) missing from MT5 (attempt {count}/3)"
+                    )
+                    continue
+
+                self._missing_counts.pop(ticket, None)
                 discrepancy = {
                     "type": "MISSING_IN_MT5",
                     "details": (
                         f"Trade {trade.id} (ticket {ticket}) is OPEN in DB "
-                        f"but not found in MT5"
+                        f"but not found in MT5 after 3 checks"
                     ),
                     "trade_id": trade.id,
                     "ticket": ticket,
@@ -74,6 +87,16 @@ class Reconciliator:
 
                 # Look up deal history for proper close price and PnL
                 self._close_with_deal_history(trade, ticket)
+
+        # Reset miss counters for positions that ARE found in MT5
+        for ticket in internal_tickets:
+            if ticket in mt5_positions:
+                self._missing_counts.pop(ticket, None)
+
+        # Clean up stale miss counters for tickets no longer in our DB
+        stale_tickets = [t for t in self._missing_counts if t not in internal_tickets]
+        for t in stale_tickets:
+            self._missing_counts.pop(t, None)
 
         # Check 2: MT5 positions not in internal records — try to re-adopt
         for ticket, pos in mt5_positions.items():
@@ -188,7 +211,20 @@ class Reconciliator:
         # Search deal history (7 days)
         now = datetime.now(timezone.utc)
         from_date = now - timedelta(days=7)
+
+        # Try position-filtered lookup first
         deals = mt5.history_deals_get(from_date, now, position=ticket)
+
+        # IC Markets often returns nothing for position=ticket filter.
+        # Fall back to broad search filtered by symbol.
+        if not deals:
+            logger.info(
+                f"[RECONCILIATION] No deals for position={ticket}, "
+                f"trying broad search for {trade.symbol}"
+            )
+            all_deals = mt5.history_deals_get(from_date, now)
+            if all_deals:
+                deals = [d for d in all_deals if d.symbol == trade.symbol]
 
         if not deals:
             self._close_fallback(trade, ticket)
@@ -243,30 +279,46 @@ class Reconciliator:
             self._close_fallback(trade, ticket)
 
     def _close_fallback(self, trade, ticket):
-        """Fallback close when no deal history is available."""
-        close_price = trade.trailing_sl or trade.entry_price
+        """Fallback close when no deal history is available.
+
+        Priority: trailing_sl > stop_loss > entry_price.
+        A position that disappeared without deal history most likely hit its SL.
+        """
+        if trade.trailing_sl:
+            close_price = trade.trailing_sl
+            source = "trailing SL"
+        elif trade.stop_loss:
+            close_price = trade.stop_loss
+            source = "stop loss"
+        else:
+            close_price = trade.entry_price
+            source = "entry (no SL available)"
+
         pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
         if trade.direction == "LONG":
             pnl_pips = (close_price - trade.entry_price) / pip_value
         else:
             pnl_pips = (trade.entry_price - close_price) / pip_value
 
+        # Estimate dollar PnL: $10 per pip per standard lot (1.0)
+        lot_size = trade.lot_size or 0.01
+        pnl_dollar = pnl_pips * 10.0 * lot_size
+
         reason = "RECONCILIATION"
         self.trade_logger.log_trade_close(
-            trade.id, close_price, 0.0, pnl_pips, reason
+            trade.id, close_price, pnl_dollar, pnl_pips, reason
         )
         self.trade_logger.log_event(
             "RECONCILIATION",
             symbol=trade.symbol,
             trade_id=trade.id,
             details=(
-                f"No deal history found. Estimated close at "
-                f"{'trailing SL' if trade.trailing_sl else 'entry'} "
-                f"{close_price:.5f}, ~{pnl_pips:+.1f} pips"
+                f"No deal history found. Estimated close at {source} "
+                f"{close_price:.5f}, ~{pnl_pips:+.1f} pips, ~${pnl_dollar:+.2f}"
             ),
             severity="WARNING",
         )
         logger.warning(
             f"[RECONCILIATION] {trade.symbol} trade {trade.id} closed "
-            f"without deal history, estimated {pnl_pips:+.1f} pips"
+            f"without deal history, estimated at {source}: {pnl_pips:+.1f} pips"
         )
