@@ -41,9 +41,11 @@ scp "${LOCAL_PKG}/__init__.py" \
     "${VPS}:${REMOTE_DIR}/" 2>/dev/null
 echo "  Package uploaded."
 
-# 5. Upload top-level scripts
+# 5. Upload top-level scripts and utility scripts
 echo "[5/6] Uploading scripts..."
 scp install_nssm_service.ps1 launch_trader.ps1 start_bot.bat "${VPS}:${REMOTE_DIR}/" 2>/dev/null
+ssh "$VPS" "if (-not (Test-Path '${REMOTE_DIR}/scripts')) { New-Item -ItemType Directory -Path '${REMOTE_DIR}/scripts' -Force | Out-Null }; exit 0"
+scp scripts/*.py "${VPS}:${REMOTE_DIR}/scripts/" 2>/dev/null
 echo "  Scripts uploaded."
 
 # 6. Restart the bot
