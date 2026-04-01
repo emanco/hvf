@@ -489,7 +489,7 @@ class TradeMonitor:
         for d in deals[:10]:
             deal_time = datetime.fromtimestamp(d.time, tz=timezone.utc)
             logger.debug(
-                f"[DEAL_RAW] ticket={d.ticket} pos={d.position} symbol={d.symbol} "
+                f"[DEAL_RAW] ticket={d.ticket} pos={d.position_id} symbol={d.symbol} "
                 f"entry={d.entry} type={d.type} price={d.price} profit={d.profit} "
                 f"time={deal_time}"
             )
@@ -497,7 +497,7 @@ class TradeMonitor:
         # Two-pass matching:
         # Pass 1: exact position ticket match (most reliable when available)
         for deal in deals:
-            if deal.position != ticket or deal.symbol != trade_record.symbol:
+            if deal.position_id != ticket or deal.symbol != trade_record.symbol:
                 continue
             if deal.type != expected_deal_type:
                 continue

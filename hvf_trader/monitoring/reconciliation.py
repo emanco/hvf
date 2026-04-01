@@ -241,7 +241,7 @@ class Reconciliator:
         # Two-pass matching (mirrors trade_monitor logic):
         # Pass 1: exact position ticket match
         for deal in deals:
-            if deal.position != ticket or deal.symbol != trade.symbol:
+            if deal.position_id != ticket or deal.symbol != trade.symbol:
                 continue
             if deal.type != expected_deal_type:
                 continue
