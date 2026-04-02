@@ -15,8 +15,10 @@ from urllib.error import URLError
 
 logger = logging.getLogger(__name__)
 
+from hvf_trader import config
+
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+CACHE_DIR = config.BASE_DIR / "data"
 CACHE_FILE = CACHE_DIR / "calendar_cache.json"
 USER_AGENT = "HVF-Trader/1.0"
 
