@@ -397,6 +397,42 @@ class TradeMonitor:
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
 
+    def _estimate_fallback_pnl(self, trade_record, close_price):
+        """Estimate PnL when no deal history available.
+
+        For partial-closed trades, combines the known partial profit
+        with the estimated remainder close. Returns (pnl, pnl_pips).
+        """
+        pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+        direction = trade_record.direction
+        original_lots = trade_record.lot_size or 0.01
+        dollar_per_pip = 10.0  # approximate $10/pip/standard lot
+
+        # Remainder pips (close_price vs entry)
+        if direction == "LONG":
+            remainder_pips = (close_price - trade_record.entry_price) / pip_value
+        else:
+            remainder_pips = (trade_record.entry_price - close_price) / pip_value
+
+        if trade_record.partial_closed and trade_record.partial_close_price:
+            partial_pct = config.PARTIAL_CLOSE_PCT  # 0.60
+            remainder_pct = 1.0 - partial_pct       # 0.40
+
+            if direction == "LONG":
+                partial_pips = (trade_record.partial_close_price - trade_record.entry_price) / pip_value
+            else:
+                partial_pips = (trade_record.entry_price - trade_record.partial_close_price) / pip_value
+
+            partial_pnl = partial_pips * dollar_per_pip * original_lots * partial_pct
+            remainder_pnl = remainder_pips * dollar_per_pip * original_lots * remainder_pct
+            total_pnl = partial_pnl + remainder_pnl
+            # Weighted pips across full position
+            total_pips = (partial_pips * partial_pct) + (remainder_pips * remainder_pct)
+            return total_pnl, total_pips
+        else:
+            pnl = remainder_pips * dollar_per_pip * original_lots
+            return pnl, remainder_pips
+
     def _handle_server_close(self, trade_record):
         """
         Handle case where position was closed server-side (SL/TP hit).
@@ -424,6 +460,20 @@ class TradeMonitor:
                 deals = [d for d in all_deals if d.symbol == trade_record.symbol]
 
         if not deals:
+            # IC Markets deals can take seconds to appear. Retry once after delay.
+            logger.info(
+                f"[TRADE_MONITOR] No deals for {trade_record.symbol} ticket={ticket}, "
+                f"retrying in 10s..."
+            )
+            time.sleep(10)
+            now = datetime.now(timezone.utc)
+            deals = mt5.history_deals_get(from_date, now, position=ticket)
+            if not deals:
+                all_deals = mt5.history_deals_get(from_date, now)
+                if all_deals:
+                    deals = [d for d in all_deals if d.symbol == trade_record.symbol]
+
+        if not deals:
             # Final safety check: is the position actually still alive in MT5?
             still_alive = self._find_position_for_trade(trade_record)
             if still_alive:
@@ -445,19 +495,13 @@ class TradeMonitor:
                 close_price = trade_record.entry_price
                 source = "entry (no SL)"
 
-            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
-            if trade_record.direction == "LONG":
-                pnl_pips = (close_price - trade_record.entry_price) / pip_value
-            else:
-                pnl_pips = (trade_record.entry_price - close_price) / pip_value
-
-            lot_size = trade_record.lot_size or 0.01
-            pnl = pnl_pips * 10.0 * lot_size  # approximate $10/pip/lot
+            pnl, pnl_pips = self._estimate_fallback_pnl(trade_record, close_price)
 
             reason = "BREAKEVEN_SL" if trade_record.partial_closed else "STOP_LOSS"
             logger.warning(
                 f"Position {ticket} disappeared, no deals found. "
-                f"Estimated close at {source}: {pnl_pips:+.1f} pips"
+                f"Estimated close at {source}: {pnl_pips:+.1f} pips, ~${pnl:+.2f}"
+                f"{' (includes partial profit)' if trade_record.partial_closed else ''}"
             )
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, pnl, pnl_pips, reason
@@ -550,23 +594,17 @@ class TradeMonitor:
         else:
             # No matching close deal — estimate from trailing SL or entry price
             close_price = trade_record.trailing_sl or trade_record.entry_price
-            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
-            direction = trade_record.direction
-            if direction == "LONG":
-                pnl_pips = (close_price - trade_record.entry_price) / pip_value
-            else:
-                pnl_pips = (trade_record.entry_price - close_price) / pip_value
-
             source = "trailing SL" if trade_record.trailing_sl else "entry (breakeven)"
             reason = "TRAILING_STOP" if trade_record.trailing_sl else (
                 "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
             )
-            lot_size = trade_record.lot_size or 0.01
-            estimated_pnl = pnl_pips * 10.0 * lot_size
+
+            estimated_pnl, pnl_pips = self._estimate_fallback_pnl(trade_record, close_price)
             logger.warning(
                 f"Position {ticket} closed but no matching deal for {trade_record.symbol}. "
                 f"Estimating close at {source} {close_price:.5f} ({pnl_pips:+.1f} pips, "
-                f"~{estimated_pnl:+.2f})."
+                f"~{estimated_pnl:+.2f})"
+                f"{' (includes partial profit)' if trade_record.partial_closed else ''}."
             )
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, estimated_pnl, pnl_pips, reason

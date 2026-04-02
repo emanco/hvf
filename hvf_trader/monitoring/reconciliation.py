@@ -300,7 +300,8 @@ class Reconciliator:
         """Fallback close when no deal history is available.
 
         Priority: trailing_sl > stop_loss > entry_price.
-        A position that disappeared without deal history most likely hit its SL.
+        For partial-closed trades, combines known partial profit with
+        the estimated remainder close.
         """
         if trade.trailing_sl:
             close_price = trade.trailing_sl
@@ -313,14 +314,28 @@ class Reconciliator:
             source = "entry (no SL available)"
 
         pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-        if trade.direction == "LONG":
-            pnl_pips = (close_price - trade.entry_price) / pip_value
-        else:
-            pnl_pips = (trade.entry_price - close_price) / pip_value
+        original_lots = trade.lot_size or 0.01
+        dollar_per_pip = 10.0
 
-        # Estimate dollar PnL: $10 per pip per standard lot (1.0)
-        lot_size = trade.lot_size or 0.01
-        pnl_dollar = pnl_pips * 10.0 * lot_size
+        if trade.direction == "LONG":
+            remainder_pips = (close_price - trade.entry_price) / pip_value
+        else:
+            remainder_pips = (trade.entry_price - close_price) / pip_value
+
+        if trade.partial_closed and trade.partial_close_price:
+            partial_pct = config.PARTIAL_CLOSE_PCT
+            remainder_pct = 1.0 - partial_pct
+            if trade.direction == "LONG":
+                partial_pips = (trade.partial_close_price - trade.entry_price) / pip_value
+            else:
+                partial_pips = (trade.entry_price - trade.partial_close_price) / pip_value
+            partial_pnl = partial_pips * dollar_per_pip * original_lots * partial_pct
+            remainder_pnl = remainder_pips * dollar_per_pip * original_lots * remainder_pct
+            pnl_dollar = partial_pnl + remainder_pnl
+            pnl_pips = (partial_pips * partial_pct) + (remainder_pips * remainder_pct)
+        else:
+            pnl_dollar = remainder_pips * dollar_per_pip * original_lots
+            pnl_pips = remainder_pips
 
         reason = "RECONCILIATION"
         self.trade_logger.log_trade_close(
@@ -333,6 +348,7 @@ class Reconciliator:
             details=(
                 f"No deal history found. Estimated close at {source} "
                 f"{close_price:.5f}, ~{pnl_pips:+.1f} pips, ~${pnl_dollar:+.2f}"
+                f"{' (includes partial profit)' if trade.partial_closed else ''}"
             ),
             severity="WARNING",
         )
