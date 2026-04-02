@@ -252,6 +252,12 @@ class BacktestEngine:
                         confirmed = bar["close"] < pattern.entry_price
 
                 if confirmed and len(open_trades) < config.MAX_CONCURRENT_TRADES:
+                    # Same-symbol dedup (matches live risk_manager.py:159-166)
+                    already_on_symbol = any(t.symbol == symbol for t in open_trades)
+                    if already_on_symbol:
+                        triggered.append(j)
+                        continue
+
                     actual_entry = bar["close"]
                     if pattern.direction == "LONG" and actual_entry >= pattern.target_1:
                         triggered.append(j)
@@ -260,11 +266,34 @@ class BacktestEngine:
                         triggered.append(j)
                         continue
 
-                    # Position sizing (per-pattern risk%)
-                    stop_dist = abs(actual_entry - pattern.stop_loss)
+                    # Spread simulation: widen SL by typical spread (matches live main.py:729-740)
+                    pip_sz = config.PIP_VALUES.get(symbol, 0.0001)
+                    spread_price = pip_sz * 1.5  # ~1.5 pip typical spread
+                    if pattern.direction == "LONG":
+                        adjusted_sl = pattern.stop_loss - spread_price
+                    else:
+                        adjusted_sl = pattern.stop_loss + spread_price
+
+                    # Position sizing with spread-adjusted SL (per-pattern risk%)
+                    stop_dist = abs(actual_entry - adjusted_sl)
                     if stop_dist <= 0:
                         triggered.append(j)
                         continue
+
+                    # Min stop distance guard (matches live main.py:744-762)
+                    min_stop_pips = config.MIN_STOP_PIPS_BY_PATTERN.get(pat_type, 5)
+                    min_stop_dist = max(spread_price * 5, pip_sz * min_stop_pips)
+                    if stop_dist < min_stop_dist:
+                        triggered.append(j)
+                        continue
+
+                    # RRR check (matches live risk_manager.py:184-195)
+                    reward_dist = abs(pattern.target_2 - actual_entry)
+                    min_rrr = config.MIN_RRR_BY_PATTERN.get(pat_type, config.HVF_MIN_RRR)
+                    if stop_dist > 0 and (reward_dist / stop_dist) < min_rrr:
+                        triggered.append(j)
+                        continue
+
                     risk_pct = config.RISK_PCT_BY_PATTERN.get(pat_type, self.risk_pct)
                     lot_size = calculate_lot_size(
                         self.equity, risk_pct, stop_dist, symbol
@@ -286,7 +315,7 @@ class BacktestEngine:
                             symbol=symbol,
                             direction=pattern.direction,
                             entry_price=actual_entry,
-                            stop_loss=pattern.stop_loss,
+                            stop_loss=adjusted_sl,
                             target_1=pattern.target_1,
                             target_2=pattern.target_2,
                             lot_size=lot_size,
@@ -310,13 +339,13 @@ class BacktestEngine:
 
             # ─── Scan for new patterns ──────────────────────────────────
             # HVF every 4 bars (needs 500-bar zigzag history)
-            # Viper every 4 bars (momentum patterns need fast detection)
-            # Other patterns every 24 bars with 200-bar window
+            # Viper every 8 bars (momentum patterns need fast detection)
+            # KZ_HUNT, LONDON_SWEEP: every bar (matches live bot behavior)
             scan_hvf = (bar_idx % 4 == 0) and "HVF" in self.enabled_patterns
             scan_viper = (bar_idx % 8 == 0) and "VIPER" in self.enabled_patterns
             non_hvf_patterns = [p for p in self.enabled_patterns if p != "HVF"]
             slow_patterns = [p for p in non_hvf_patterns if p != "VIPER"]
-            scan_slow_others = (bar_idx % 24 == 0) and len(slow_patterns) > 0
+            scan_slow_others = len(slow_patterns) > 0
             scan_others = scan_viper or scan_slow_others
             if not scan_hvf and not scan_viper and not scan_slow_others:
                 continue
