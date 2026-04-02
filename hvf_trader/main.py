@@ -792,6 +792,11 @@ class HVFTrader:
                 pattern_id=pattern_record.id,
                 details=f"Check={result.check_name}: {result.reason}",
             )
+            if result.check_name == "news_filter":
+                self.alerter.send_message(
+                    f"\U0001F4F0 <b>News Block</b>: {symbol} {direction} "
+                    f"({pattern_type}) rejected\n{result.reason}"
+                )
             return
 
         # Execute market order with spread-adjusted SL

@@ -210,16 +210,25 @@ class TelegramCommandHandler:
             return
 
         cs = self._currency_symbol()
+        total_floating = 0.0
         lines = [f"<b>\U0001F4C8 Open Trades ({len(open_trades)})</b>\n"]
         for t in open_trades:
             ptype = t.pattern_type or "LEGACY"
             arrow = "\u2B06" if t.direction == "LONG" else "\u2B07"
-            pnl_str = f"{cs}{t.pnl:+.2f}" if t.pnl else "n/a"
+            # Get floating P/L from MT5
+            floating_str = "n/a"
+            if self.order_manager and t.mt5_ticket:
+                pos = self.order_manager.get_position_by_ticket(t.mt5_ticket)
+                if pos and pos.get("profit") is not None:
+                    floating = pos["profit"]
+                    total_floating += floating
+                    floating_str = f"{cs}{floating:+.2f}"
             lines.append(
                 f"{arrow} <code>{t.symbol}</code> {t.direction} ({ptype})\n"
                 f"   Entry: {t.entry_price:.5f} | SL: {t.stop_loss:.5f}\n"
-                f"   PnL: {pnl_str}"
+                f"   Floating: {floating_str}"
             )
+        lines.append(f"\n<b>Total Floating: {cs}{total_floating:+.2f}</b>")
         self.alerter.send_message("\n".join(lines))
 
     def _cmd_equity(self):
