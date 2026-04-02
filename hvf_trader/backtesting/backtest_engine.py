@@ -186,6 +186,10 @@ class BacktestEngine:
         trade_counter = 0
         # Track triggered patterns to prevent re-entry on the same pattern
         triggered_pattern_keys: set[tuple] = set()
+        # Track recently triggered (symbol, direction) with bar index — matches live
+        # recently_triggered cooldown (live main.py:437-441 blocks 24h after arm/trigger)
+        recently_triggered: dict[tuple, int] = {}  # (symbol, direction) -> last triggered bar
+        TRIGGER_COOLDOWN_BARS = 24  # 24 H1 bars = 24 hours, matching live
         # KZ tracker for Kill Zone Hunt
         kz_tracker = KillZoneTracker() if "KZ_HUNT" in self.enabled_patterns else None
 
@@ -332,6 +336,8 @@ class BacktestEngine:
                         pat_key = arm.get("pat_key")
                         if pat_key:
                             triggered_pattern_keys.add(pat_key)
+                        # Record trigger for cooldown (matches live recently_triggered)
+                        recently_triggered[(symbol, pattern.direction)] = bar_idx
                         triggered.append(j)
 
             for j in sorted(triggered, reverse=True):
@@ -456,9 +462,21 @@ class BacktestEngine:
                                 "score": p.score, "pat_key": pat_key,
                             })
 
-                # Prioritize and arm
+                # Prioritize and arm (matches live main.py:443-463)
                 prioritized = prioritize_signals(all_candidates)
+                active_armed = {
+                    (a["pattern"].symbol, a["pattern"].direction)
+                    for a in armed_patterns
+                }
                 for sig in prioritized:
+                    sym_dir = (sig.symbol, sig.direction)
+                    # Same-symbol+direction dedup: skip if already armed
+                    if sym_dir in active_armed:
+                        continue
+                    # Recently triggered cooldown (matches live recently_triggered check)
+                    last_triggered_bar = recently_triggered.get(sym_dir, -9999)
+                    if bar_idx - last_triggered_bar < TRIGGER_COOLDOWN_BARS:
+                        continue
                     armed_patterns.append({
                         "pattern": sig.pattern,
                         "armed_bar": bar_idx,
@@ -469,6 +487,9 @@ class BacktestEngine:
                              if c["pattern"] is sig.pattern), None
                         ),
                     })
+                    # Record arm for cooldown (live treats ARMED same as TRIGGERED)
+                    recently_triggered[sym_dir] = bar_idx
+                    active_armed.add(sym_dir)
 
         # Close any remaining open trades at last bar
         last_bar = df_1h.iloc[-1]

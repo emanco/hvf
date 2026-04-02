@@ -3,10 +3,11 @@
 ## What This Is
 Automated forex trading bot running KZ Hunt (Kill Zone Hunt) strategy on 5 pairs via MetaTrader 5. Deployed to a Windows VPS, managed as an NSSM service. Python, SQLAlchemy, Telegram alerts.
 
-## Current State (as of 2026-03-31)
+## Current State (as of 2026-04-01)
 - **Active strategy**: KZ_HUNT only (all 5 pairs)
 - **Disabled**: HVF (PF=0.06 live after 27 trades), Viper (net negative 10yr), London Sweep (net negative)
-- **Account**: IC Markets Demo, $10k balance, 1% risk per trade
+- **Account**: IC Markets Demo, ~$10.5k balance, 1% risk per trade
+- **Account history**: Started $700 (2026-03-06), $10k deposit added 2026-03-31
 - **Phase**: Data collection — need 50+ clean trades before changing any parameters
 - **Go-live date**: 2026-03-25 (performance stats ignore trades before this)
 
