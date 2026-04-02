@@ -618,24 +618,12 @@ class HVFTrader:
                     else:
                         confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
                 else:
-                    # DB-loaded pattern (no pattern_obj): require price to be
-                    # NEAR entry level, not just past it.  A stale pattern whose
-                    # entry was 1.174 shouldn't fire when price is 1.155.
+                    # DB-loaded pattern (no pattern_obj after restart):
+                    # same simple confirmation as fresh patterns.
+                    # Pattern freshness (24-bar expiry) already guards against stale entries.
                     close_price = latest_bar.get("close")
                     if close_price is not None and record.entry_price:
-                        distance = abs(float(close_price) - record.entry_price)
-                        stop_dist = abs(record.entry_price - record.stop_loss) if record.stop_loss else 0
-                        # Price must be within 2x stop-distance of entry to be "near"
-                        max_distance = stop_dist * 2.0 if stop_dist > 0 else 0.0050
-                        if distance > max_distance:
-                            logger.info(
-                                f"[{pattern_type}] Invalidating stale {symbol} {direction}: "
-                                f"price {close_price:.5f} is {distance:.5f} from entry {record.entry_price:.5f} "
-                                f"(max {max_distance:.5f})"
-                            )
-                            expired.append(armed)
-                            confirmed = False
-                        elif direction == "LONG":
+                        if direction == "LONG":
                             confirmed = float(close_price) > record.entry_price
                         else:
                             confirmed = float(close_price) < record.entry_price
