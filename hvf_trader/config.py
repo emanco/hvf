@@ -168,6 +168,7 @@ MIN_STOP_PIPS_BY_PATTERN = {
 }
 
 NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact
+NEWS_CACHE_MAX_AGE_HOURS = 6.0    # Block trading if calendar cache older than this
 
 # ─── Health Check ────────────────────────────────────────────────────────────
 HEARTBEAT_INTERVAL_SEC = 60       # MT5 heartbeat check interval

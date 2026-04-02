@@ -42,7 +42,7 @@ from hvf_trader.detector.london_sweep_scorer import score_london_sweep
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
-from hvf_trader.data.calendar_cache import ensure_fresh_cache
+from hvf_trader.data.calendar_cache import ensure_fresh_cache, is_cache_stale, get_cache_age_hours
 from hvf_trader.data.news_filter import has_upcoming_news
 from hvf_trader.risk.risk_manager import RiskManager
 from hvf_trader.risk.circuit_breaker import CircuitBreaker
@@ -159,6 +159,7 @@ class HVFTrader:
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
         self._last_reconcile = None
         self._last_daily_summary = None
+        self._last_cache_alert = None
 
     def start(self):
         """Start the trading bot."""
@@ -170,8 +171,8 @@ class HVFTrader:
         logger.info(f"Risk: {config.RISK_PCT}% per trade")
         logger.info("=" * 60)
 
-        # Refresh economic calendar on startup if stale (>72h or missing)
-        ensure_fresh_cache(max_age_hours=72.0)
+        # Refresh economic calendar on startup if stale
+        ensure_fresh_cache(max_age_hours=config.NEWS_CACHE_MAX_AGE_HOURS)
 
         # Connect to MT5
         if not self.connector.connect():
@@ -295,9 +296,21 @@ class HVFTrader:
                 # Performance health check (hourly)
                 self.perf_monitor.check_health()
 
-                # Refresh economic calendar on Sunday 21:xx UTC (before market open)
-                if now.weekday() == 6 and now.hour == 21:
-                    ensure_fresh_cache(max_age_hours=72.0)
+                # Refresh economic calendar if stale (checked every cycle)
+                if is_cache_stale():
+                    refreshed = ensure_fresh_cache(max_age_hours=config.NEWS_CACHE_MAX_AGE_HOURS)
+                    if not refreshed:
+                        age = get_cache_age_hours()
+                        age_str = f"{age:.1f}h" if age is not None else "missing"
+                        if (self._last_cache_alert is None or
+                                (now - self._last_cache_alert).total_seconds() >= 3600):
+                            self.alerter.send_message(
+                                f"\u26a0\ufe0f <b>News calendar stale</b>\n"
+                                f"Cache age: {age_str} (limit: {config.NEWS_CACHE_MAX_AGE_HOURS}h)\n"
+                                f"Trading blocked until refreshed."
+                            )
+                            logger.warning(f"Calendar cache stale ({age_str}), trading blocked")
+                            self._last_cache_alert = now
 
                 # Daily summary at 21:00 UTC (after NY close), skip weekends
                 if now.hour == 21 and (

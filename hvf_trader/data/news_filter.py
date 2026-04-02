@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from hvf_trader import config
-from hvf_trader.data.calendar_cache import load_cached_events
+from hvf_trader.data.calendar_cache import load_cached_events, is_cache_stale
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +45,20 @@ def has_upcoming_news(symbol: str, window_minutes: int = None) -> bool:
         window_minutes: override blocking window (default from config)
 
     Returns:
-        True if high-impact news is upcoming (should block trading).
-        False if no news, no cache, or symbol not mapped (fail-open).
+        True if high-impact news is upcoming OR cache is stale/missing (fail-closed).
+        False only when cache is fresh and no matching news found.
     """
     window = window_minutes or config.NEWS_BLOCK_MINUTES
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=window)
     window_end = now + timedelta(minutes=window)
+
+    # FAIL-CLOSED: block trading if cache is missing or stale
+    if is_cache_stale():
+        logger.warning(
+            f"News filter blocking {symbol}: calendar cache is missing or stale"
+        )
+        return True
 
     currencies = SYMBOL_CURRENCIES.get(symbol, [])
     if not currencies:

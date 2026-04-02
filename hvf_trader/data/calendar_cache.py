@@ -2,8 +2,8 @@
 ForexFactory economic calendar cache.
 
 Fetches weekly calendar from nfs.faireconomy.media, caches to local JSON.
-Refreshes daily. Graceful fallback: if fetch fails, uses stale cache;
-if no cache exists, news filter is disabled (returns empty list).
+Refreshes every scanner cycle if stale. Graceful fallback: if fetch fails,
+uses stale cache. News filter fails CLOSED — stale/missing cache blocks trading.
 """
 
 import json
@@ -94,3 +94,16 @@ def ensure_fresh_cache(max_age_hours: float = 12.0) -> bool:
     if age is not None and age < max_age_hours:
         return True
     return refresh_calendar()
+
+
+def is_cache_stale(max_age_hours: float = None) -> bool:
+    """Return True if cache is missing, corrupt, or older than threshold.
+
+    When True, the news filter should block trading (fail-closed).
+    """
+    from hvf_trader import config
+    threshold = max_age_hours if max_age_hours is not None else config.NEWS_CACHE_MAX_AGE_HOURS
+    age = get_cache_age_hours()
+    if age is None:
+        return True
+    return age >= threshold
