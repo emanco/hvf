@@ -1008,6 +1008,13 @@ class HVFTrader:
                 db_tickets[t.mt5_ticket] = t
         mt5_tickets = {p["ticket"]: p for p in mt5_positions}
 
+        # Collect split-order partial tickets so they aren't flagged as orphans
+        partial_tickets = {
+            t.mt5_ticket_partial
+            for t in db_trades
+            if getattr(t, 'mt5_ticket_partial', None)
+        }
+
         issues = []
 
         # DB says open, MT5 has no position (ghost trade)
@@ -1021,6 +1028,9 @@ class HVFTrader:
         # MT5 has position, DB doesn't know about it (orphan position)
         for ticket, pos in mt5_tickets.items():
             if ticket not in db_tickets:
+                # Skip split-order partial positions (managed by trade_monitor)
+                if ticket in partial_tickets:
+                    continue
                 issues.append(
                     f"ORPHAN: MT5 position ticket={ticket} ({pos['symbol']} {pos['type']} "
                     f"{pos['volume']} lots) not tracked in DB"
@@ -1031,6 +1041,10 @@ class HVFTrader:
             if ticket in mt5_tickets:
                 db_trade = db_tickets[ticket]
                 mt5_pos = mt5_tickets[ticket]
+                # For split orders, DB lot_size is total but MT5 position is
+                # only the remainder (40%).  Skip volume check in that case.
+                if getattr(db_trade, 'mt5_ticket_partial', None):
+                    continue
                 if db_trade.lot_size and abs(mt5_pos["volume"] - db_trade.lot_size) > 0.001:
                     # Could be a partial close — only flag if NOT already marked partial
                     if not db_trade.partial_closed:
