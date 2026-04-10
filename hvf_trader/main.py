@@ -367,20 +367,26 @@ class HVFTrader:
             kz_tracker.update(bar["time"], bar["high"], bar["low"], i)
         self._kz_trackers[symbol] = kz_tracker
 
+        # Use only completed bars for detection — exclude the current forming bar.
+        # The forming bar's high/low/close update mid-bar and can produce phantom
+        # rejection candles that disappear by bar close.  Backtest only uses
+        # completed bars, so this aligns live detection with backtest behavior.
+        df_completed = df_1h.iloc[:-1] if len(df_1h) > 1 else df_1h
+
         # Collect all signals from all detectors
         all_signals: list[dict] = []
 
         # 1. HVF Detector
         if "HVF" in config.ENABLED_PATTERNS:
-            pivots = compute_zigzag(df_1h, config.ZIGZAG_ATR_MULTIPLIER)
+            pivots = compute_zigzag(df_completed, config.ZIGZAG_ATR_MULTIPLIER)
             if len(pivots) >= 6:
                 hvf_patterns = detect_hvf_patterns(
-                    df=df_1h, symbol=symbol,
+                    df=df_completed, symbol=symbol,
                     timeframe=config.PRIMARY_TIMEFRAME,
                     pivots=pivots, df_4h=df_4h,
                 )
                 for p in hvf_patterns:
-                    p.score = score_pattern(p, df_1h, df_4h, df_d1)
+                    p.score = score_pattern(p, df_completed, df_4h, df_d1)
                     threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("HVF", config.SCORE_THRESHOLD)
                     if p.score >= threshold:
                         all_signals.append({
@@ -391,13 +397,13 @@ class HVFTrader:
 
         # 2. Viper Detector (skip excluded symbols)
         if "VIPER" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("VIPER", []):
-            viper_patterns = detect_viper_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
+            viper_patterns = detect_viper_patterns(df_completed, symbol, config.PRIMARY_TIMEFRAME)
             for p in viper_patterns:
                 # Direction filter (SHORT-only Viper)
                 allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("VIPER")
                 if allowed_dir and p.direction != allowed_dir:
                     continue
-                p.score = score_viper(p, df_1h)
+                p.score = score_viper(p, df_completed)
                 threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
                 if p.score >= threshold:
                     all_signals.append({
@@ -409,14 +415,14 @@ class HVFTrader:
         # 3. KZ Hunt Detector (skip excluded symbols)
         if "KZ_HUNT" in config.ENABLED_PATTERNS and kz_tracker and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("KZ_HUNT", []):
             kz_patterns = detect_kz_hunt_patterns(
-                df_1h, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
+                df_completed, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
             )
             for p in kz_patterns:
                 # Direction filter (LONG-only KZ Hunt)
                 allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("KZ_HUNT")
                 if allowed_dir and p.direction != allowed_dir:
                     continue
-                p.score = score_kz_hunt(p, df_1h)
+                p.score = score_kz_hunt(p, df_completed)
                 threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("KZ_HUNT", 50)
                 if p.score >= threshold:
                     all_signals.append({
@@ -427,9 +433,9 @@ class HVFTrader:
 
         # 4. London Sweep Detector (skip excluded symbols)
         if "LONDON_SWEEP" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("LONDON_SWEEP", []):
-            ls_patterns = detect_london_sweep_patterns(df_1h, symbol, config.PRIMARY_TIMEFRAME)
+            ls_patterns = detect_london_sweep_patterns(df_completed, symbol, config.PRIMARY_TIMEFRAME)
             for p in ls_patterns:
-                p.score = score_london_sweep(p, df_1h)
+                p.score = score_london_sweep(p, df_completed)
                 threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
                 if p.score >= threshold:
                     all_signals.append({
@@ -800,14 +806,76 @@ class HVFTrader:
                 )
             return
 
-        # Execute market order with spread-adjusted SL
-        order_result = self.order_manager.place_market_order(
-            symbol=symbol,
-            direction=direction,
-            lot_size=result.lot_size,
-            stop_loss=adjusted_sl,
-            comment=pattern_type,
-        )
+        # Execute market order(s) with spread-adjusted SL.
+        # Split into two positions: 60% with TP=T1 (MT5 handles at tick level)
+        # and 40% without TP (managed by trade monitor trailing stop).
+        # This ensures T1 is caught on any intra-bar wick, matching backtest behavior.
+        partial_pct = config.PARTIAL_CLOSE_PCT  # 0.60
+        partial_lots = round(result.lot_size * partial_pct, 2)
+        remaining_lots = round(result.lot_size - partial_lots, 2)
+
+        # Validate both lot sizes meet minimums
+        symbol_info_mt5 = self.connector.get_symbol_info(symbol)
+        vol_min = symbol_info_mt5.get("volume_min", 0.01) if symbol_info_mt5 else 0.01
+        can_split = partial_lots >= vol_min and remaining_lots >= vol_min
+
+        ticket_partial = None
+        if can_split and pattern.target_1:
+            # Place 60% position with TP=T1 (auto-closed by MT5 at tick level)
+            order_partial = self.order_manager.place_market_order(
+                symbol=symbol,
+                direction=direction,
+                lot_size=partial_lots,
+                stop_loss=adjusted_sl,
+                take_profit=pattern.target_1,
+                comment=f"{pattern_type} T1",
+            )
+            if order_partial is None:
+                logger.error(f"Partial order (60%) failed for {symbol}, falling back to single order")
+                can_split = False
+            else:
+                ticket_partial = order_partial["ticket"]
+
+            # Place 40% position without TP (trailing managed by trade monitor)
+            if can_split:
+                order_remaining = self.order_manager.place_market_order(
+                    symbol=symbol,
+                    direction=direction,
+                    lot_size=remaining_lots,
+                    stop_loss=adjusted_sl,
+                    comment=f"{pattern_type} T2",
+                )
+                if order_remaining is None:
+                    logger.error(
+                        f"Remaining order (40%) failed for {symbol}, "
+                        f"closing partial position"
+                    )
+                    self.order_manager.close_position(
+                        ticket_partial, symbol, direction, "failed_split"
+                    )
+                    can_split = False
+                    ticket_partial = None
+
+        if can_split and ticket_partial:
+            # Split order succeeded
+            order_result = order_remaining
+            fill_price = order_remaining["fill_price"]
+            ticket = order_remaining["ticket"]
+            logger.info(
+                f"[{pattern_type}] Split order: partial={partial_lots} lots "
+                f"ticket={ticket_partial} TP={pattern.target_1:.5f}, "
+                f"remaining={remaining_lots} lots ticket={ticket}"
+            )
+        else:
+            # Fallback: single order (original behavior for small lots)
+            ticket_partial = None
+            order_result = self.order_manager.place_market_order(
+                symbol=symbol,
+                direction=direction,
+                lot_size=result.lot_size,
+                stop_loss=adjusted_sl,
+                comment=pattern_type,
+            )
 
         if order_result is None:
             logger.error(f"Order execution failed for {symbol}")
@@ -855,6 +923,9 @@ class HVFTrader:
                     f"sent_sl={adjusted_sl:.5f} -> final_sl={final_sl:.5f} "
                     f"(fill={fill_price:.5f} vs pre-fill={live_entry:.5f})"
                 )
+                # Also update SL on partial position if split order
+                if ticket_partial:
+                    self.order_manager.modify_stop_loss(ticket_partial, symbol, final_sl)
             else:
                 logger.warning(
                     f"[{pattern_type}] SL modify failed, keeping sent_sl={adjusted_sl:.5f}"
@@ -877,7 +948,7 @@ class HVFTrader:
             slippage = pattern.entry_price - fill_price
 
         # Log trade
-        trade_record = self.trade_logger.log_trade_open({
+        trade_data = {
             "pattern_id": pattern_record.id,
             "symbol": symbol,
             "direction": direction,
@@ -893,7 +964,10 @@ class HVFTrader:
             "intended_entry": pattern.entry_price,
             "intended_sl": pattern.stop_loss,
             "slippage": slippage,
-        })
+        }
+        if ticket_partial:
+            trade_data["mt5_ticket_partial"] = ticket_partial
+        trade_record = self.trade_logger.log_trade_open(trade_data)
 
         # Update pattern status
         self.trade_logger.update_pattern_status(pattern_record.id, "TRIGGERED")

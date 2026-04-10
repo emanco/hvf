@@ -134,6 +134,11 @@ class OrderManager:
         symbol_info = mt5.symbol_info(symbol)
         if symbol_info:
             new_sl = round(new_sl, symbol_info.digits)
+
+        # Skip if SL is already at the requested level
+        if abs(new_sl - pos.sl) < (10 ** -symbol_info.digits if symbol_info else 1e-5):
+            return True
+
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "symbol": symbol,

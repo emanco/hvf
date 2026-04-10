@@ -98,9 +98,19 @@ class Reconciliator:
         for t in stale_tickets:
             self._missing_counts.pop(t, None)
 
+        # Collect partial position tickets so reconciliation ignores them
+        partial_tickets = {
+            t.mt5_ticket_partial
+            for t in internal_trades
+            if getattr(t, 'mt5_ticket_partial', None)
+        }
+
         # Check 2: MT5 positions not in internal records — try to re-adopt
         for ticket, pos in mt5_positions.items():
             if ticket not in internal_tickets:
+                # Skip split-order partial positions (managed by trade_monitor)
+                if ticket in partial_tickets:
+                    continue
                 # Only handle positions with our magic number
                 if pos.get("magic") != 20250305:
                     continue

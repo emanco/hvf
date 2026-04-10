@@ -37,6 +37,8 @@ class TradeMonitor:
         self._lowest_since_partial = {}   # ticket -> lowest price since partial (for shorts)
         self._missing_position_counts = {}  # ticket -> consecutive miss count
         self._atr_cache = {}  # symbol -> (timestamp, atr_value)
+        self._bar_cache = {}  # symbol -> (wall_ts, bar_time, bar_close) — completed H1 bar
+        self._last_invalidation_bar = {}  # trade_id -> bar_time last checked
 
     def start(self):
         """Start the trade monitoring loop."""
@@ -83,10 +85,11 @@ class TradeMonitor:
     def _check_trade(self, trade_record):
         """
         Check a single open trade for:
-        1. Invalidation (price revisits below 3L for longs / above 3H for shorts)
-        2. Target 1 hit (partial close + move SL to breakeven)
-        3. Trailing stop update (after partial)
-        4. Target 2 hit (full close)
+        1. Split-order T1 detection (if mt5_ticket_partial set, check if MT5 closed it)
+        2. Invalidation (price revisits below 3L for longs / above 3H for shorts)
+        3. Target 1 hit (partial close + move SL to breakeven) — legacy fallback
+        4. Trailing stop update (after partial)
+        5. Target 2 hit (full close)
         """
         ticket = trade_record.mt5_ticket
         if ticket is None:
@@ -119,6 +122,22 @@ class TradeMonitor:
         current_price = position["price_current"]
         direction = trade_record.direction
 
+        # ─── Split-order T1 detection ────────────────────────────────────
+        # If this trade has a split partial position (60% with TP=T1),
+        # check if MT5 closed it (T1 hit at tick level).
+        if not trade_record.partial_closed and getattr(trade_record, 'mt5_ticket_partial', None):
+            partial_pos = self.order_manager.get_position_by_ticket(
+                trade_record.mt5_ticket_partial
+            )
+            if partial_pos is None:
+                # Partial position closed — MT5 TP hit T1
+                logger.info(
+                    f"Trade {trade_record.id}: T1 hit by MT5 TP "
+                    f"(partial ticket {trade_record.mt5_ticket_partial} closed)"
+                )
+                self._handle_split_t1_hit(trade_record, ticket, position)
+                # Continue to trailing check below (don't return)
+
         # Get associated pattern for invalidation check
         pattern = None
         if trade_record.pattern_id:
@@ -126,8 +145,9 @@ class TradeMonitor:
             pattern = self.trade_logger.session.get(PatternRecord, trade_record.pattern_id)
 
         # ─── Check invalidation ──────────────────────────────────────────
-        # Grace period: skip invalidation check for first 2 H1 bars (2 hours)
-        # to avoid premature exits from normal entry-zone noise.
+        # Uses completed H1 bar close (not current tick) to match backtest
+        # behavior.  Only re-evaluates when a new bar completes.
+        # Grace period: skip for first 2 H1 bars (2 hours).
         if pattern and not trade_record.partial_closed:
             hours_since_open = 0
             if trade_record.opened_at:
@@ -139,21 +159,27 @@ class TradeMonitor:
                 ).total_seconds() / 3600
 
             if hours_since_open >= 2:
-                invalidated = False
-                if direction == "LONG" and current_price <= pattern.l3_price:
-                    invalidated = True
-                elif direction == "SHORT" and current_price >= pattern.h3_price:
-                    invalidated = True
+                bar_time, bar_close = self._get_completed_bar(trade_record.symbol)
+                if bar_time is not None:
+                    last_checked = self._last_invalidation_bar.get(trade_record.id)
+                    if last_checked != bar_time:
+                        self._last_invalidation_bar[trade_record.id] = bar_time
+                        invalidated = False
+                        if direction == "LONG" and bar_close <= pattern.l3_price:
+                            invalidated = True
+                        elif direction == "SHORT" and bar_close >= pattern.h3_price:
+                            invalidated = True
 
-                if invalidated:
-                    logger.warning(
-                        f"Trade {ticket} invalidated: price revisited "
-                        f"{'3L' if direction == 'LONG' else '3H'}"
-                    )
-                    self._close_trade(
-                        trade_record, ticket, position, "INVALIDATION"
-                    )
-                    return
+                        if invalidated:
+                            logger.warning(
+                                f"Trade {ticket} invalidated: H1 bar close "
+                                f"{bar_close:.5f} revisited "
+                                f"{'3L' if direction == 'LONG' else '3H'}"
+                            )
+                            self._close_trade(
+                                trade_record, ticket, position, "INVALIDATION"
+                            )
+                            return
 
         # ─── Check target 2 (full close) ─────────────────────────────────
         target_2_hit = False
@@ -168,21 +194,72 @@ class TradeMonitor:
             return
 
         # ─── Check target 1 (partial close) ──────────────────────────────
+        # Legacy path: only for trades without split orders (small lot fallback)
         if not trade_record.partial_closed and trade_record.target_1:
-            target_1_hit = False
-            if direction == "LONG" and current_price >= trade_record.target_1:
-                target_1_hit = True
-            elif direction == "SHORT" and current_price <= trade_record.target_1:
-                target_1_hit = True
+            if not getattr(trade_record, 'mt5_ticket_partial', None):
+                # No split order — use snapshot-based T1 detection
+                target_1_hit = False
+                if direction == "LONG" and current_price >= trade_record.target_1:
+                    target_1_hit = True
+                elif direction == "SHORT" and current_price <= trade_record.target_1:
+                    target_1_hit = True
 
-            if target_1_hit:
-                logger.info(f"Trade {ticket} hit target 1 @ {current_price}")
-                self._handle_partial_close(trade_record, ticket, position)
-                return
+                if target_1_hit:
+                    logger.info(f"Trade {ticket} hit target 1 @ {current_price}")
+                    self._handle_partial_close(trade_record, ticket, position)
+                    return
 
         # ─── Trailing stop (after partial close) ─────────────────────────
         if trade_record.partial_closed:
             self._update_trailing_stop(trade_record, ticket, position, current_price)
+
+    def _handle_split_t1_hit(self, trade_record, ticket, position):
+        """Handle T1 hit detected via MT5 TP on the split partial position.
+
+        The 60% partial position was closed by MT5 at T1 (tick-level precision).
+        Now move the remaining 40% position's SL to breakeven and start trailing.
+        """
+        direction = trade_record.direction
+        t1_price = trade_record.target_1
+
+        # Mark partial close in DB
+        self.trade_logger.log_partial_close(trade_record.id, t1_price)
+
+        # Move remaining position SL to breakeven (entry price)
+        breakeven_sl = trade_record.entry_price
+        self.order_manager.modify_stop_loss(
+            ticket, trade_record.symbol, breakeven_sl
+        )
+        self.trade_logger.log_trade_update(
+            trade_record.id, trailing_sl=breakeven_sl
+        )
+
+        # Initialize tracking for trailing stop
+        if direction == "LONG":
+            self._highest_since_partial[ticket] = position["price_current"]
+        else:
+            self._lowest_since_partial[ticket] = position["price_current"]
+
+        self.trade_logger.log_event(
+            "PARTIAL_CLOSE",
+            symbol=trade_record.symbol,
+            trade_id=trade_record.id,
+            details=f"T1 hit by MT5 TP @ {t1_price}, "
+                    f"SL moved to breakeven {breakeven_sl}",
+        )
+        logger.info(
+            f"Split T1 hit: trade {trade_record.id}, "
+            f"partial ticket {trade_record.mt5_ticket_partial} closed @ T1={t1_price}, "
+            f"remaining ticket {ticket} SL→breakeven={breakeven_sl}"
+        )
+        if self.alerter:
+            pip_size = 0.01 if "JPY" in trade_record.symbol else 0.0001
+            pnl_pips = (t1_price - trade_record.entry_price) / pip_size
+            if direction == "SHORT":
+                pnl_pips = -pnl_pips
+            self.alerter.alert_partial_close(
+                trade_record.symbol, direction, t1_price, pnl_pips,
+            )
 
     def _handle_partial_close(self, trade_record, ticket, position):
         """Close 50% of position and move SL to breakeven."""
@@ -364,9 +441,47 @@ class TradeMonitor:
             }
         return None
 
+    def _get_completed_bar(self, symbol):
+        """Return (bar_time, bar_close) for the latest completed H1 bar.
+
+        Cached per symbol, refreshed every 120s.  The forming bar
+        (iloc[-1]) is excluded — only the most recent closed bar is used.
+        Returns (None, None) on failure.
+        """
+        now = time.time()
+        cached = self._bar_cache.get(symbol)
+        if cached and (now - cached[0]) < 120:
+            return cached[1], cached[2]
+
+        from hvf_trader.data.data_fetcher import fetch_and_prepare
+        df = fetch_and_prepare(symbol, config.PRIMARY_TIMEFRAME, bars=5)
+        if df is None or len(df) < 2:
+            return None, None
+
+        # iloc[-1] is the forming bar; iloc[-2] is the last completed bar
+        completed = df.iloc[-2]
+        bar_time = completed["time"]
+        bar_close = float(completed["close"])
+        self._bar_cache[symbol] = (now, bar_time, bar_close)
+        return bar_time, bar_close
+
     def _close_trade(self, trade_record, ticket, position, reason):
         """Close a trade fully and update records."""
         direction = trade_record.direction
+
+        # If split order, also close the partial position if still open
+        partial_ticket = getattr(trade_record, 'mt5_ticket_partial', None)
+        if partial_ticket:
+            partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
+            if partial_pos:
+                logger.info(
+                    f"Closing partial position {partial_ticket} "
+                    f"(trade {trade_record.id} closing: {reason})"
+                )
+                self.order_manager.close_position(
+                    partial_ticket, trade_record.symbol, direction,
+                    f"{trade_record.pattern_type or 'AUTO'} {reason} partial"
+                )
 
         ptype = trade_record.pattern_type or "AUTO"
         result = self.order_manager.close_position(
@@ -396,6 +511,7 @@ class TradeMonitor:
             # Clean up tracking dicts
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._last_invalidation_bar.pop(trade_record.id, None)
 
     def _estimate_fallback_pnl(self, trade_record, close_price):
         """Estimate PnL when no deal history available.
@@ -440,6 +556,20 @@ class TradeMonitor:
         """
         if not MT5_AVAILABLE:
             return
+
+        # If split order, close the partial position too (if still open)
+        partial_ticket = getattr(trade_record, 'mt5_ticket_partial', None)
+        if partial_ticket:
+            partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
+            if partial_pos:
+                logger.info(
+                    f"Closing partial position {partial_ticket} "
+                    f"(remaining position {trade_record.mt5_ticket} server-closed)"
+                )
+                self.order_manager.close_position(
+                    partial_ticket, trade_record.symbol, trade_record.direction,
+                    f"{trade_record.pattern_type or 'AUTO'} server_close partial"
+                )
 
         ticket = trade_record.mt5_ticket
 
@@ -514,6 +644,7 @@ class TradeMonitor:
             )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._last_invalidation_bar.pop(trade_record.id, None)
             return
 
         # Find the closing deal — must match symbol, direction, and timing
@@ -591,6 +722,7 @@ class TradeMonitor:
 
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._last_invalidation_bar.pop(trade_record.id, None)
         else:
             # No matching close deal — estimate from trailing SL or entry price
             close_price = trade_record.trailing_sl or trade_record.entry_price
@@ -609,3 +741,6 @@ class TradeMonitor:
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, estimated_pnl, pnl_pips, reason
             )
+            self._highest_since_partial.pop(ticket, None)
+            self._lowest_since_partial.pop(ticket, None)
+            self._last_invalidation_bar.pop(trade_record.id, None)

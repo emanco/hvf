@@ -587,14 +587,16 @@ class BacktestEngine:
             return True
 
         # ─── Check target 2 (full close) ─────────────────────────────
-        if trade.direction == "LONG" and high >= trade.target_2:
+        # Use bar close (not high/low) to match live split-order behavior
+        # where T2 is detected via 30s price snapshots, not intra-bar wicks.
+        if trade.direction == "LONG" and close >= trade.target_2:
             trade.exit_price = trade.target_2
             trade.exit_bar = bar.name if isinstance(bar.name, int) else 0
             trade.exit_time = bar["time"]
             trade.exit_reason = "TARGET_2"
             self._calc_pnl(trade, pip_value)
             return True
-        elif trade.direction == "SHORT" and low <= trade.target_2:
+        elif trade.direction == "SHORT" and close <= trade.target_2:
             trade.exit_price = trade.target_2
             trade.exit_bar = bar.name if isinstance(bar.name, int) else 0
             trade.exit_time = bar["time"]
@@ -603,6 +605,9 @@ class BacktestEngine:
             return True
 
         # ─── Check target 1 (partial close simulation) ───────────────
+        # Use bar high/low here because live now places a limit order at T1
+        # (split-order approach), so MT5 catches T1 at tick level — matching
+        # the bar high/low check which also catches intra-bar touches.
         if not trade.partial_closed:
             if trade.direction == "LONG" and high >= trade.target_1:
                 trade.partial_closed = True

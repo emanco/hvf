@@ -91,6 +91,7 @@ class TradeRecord(Base):
     pattern_type = Column(String(20), default="HVF")  # HVF, VIPER, KZ_HUNT, LONDON_SWEEP
     pattern_metadata = Column(Text, nullable=True)  # JSON for pattern-specific data
     mt5_ticket = Column(Integer, nullable=True, unique=True)
+    mt5_ticket_partial = Column(Integer, nullable=True)  # 60% position ticket with TP=T1
 
     entry_price = Column(Float, nullable=False)
     stop_loss = Column(Float, nullable=False)

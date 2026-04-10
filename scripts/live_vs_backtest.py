@@ -53,10 +53,10 @@ conn.close()
 
 symbols = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
 live_start = datetime(2026, 3, 25, tzinfo=timezone.utc)
-live_end = datetime(2026, 4, 2, tzinfo=timezone.utc)
+live_end = datetime(2026, 4, 10, tzinfo=timezone.utc)
 
 print("=" * 70)
-print("LIVE vs BACKTEST COMPARISON: Mar 25 - Apr 2, 2026")
+print("LIVE vs BACKTEST COMPARISON: Mar 25 - Apr 10, 2026")
 print("=" * 70)
 
 # Print live trades summary
