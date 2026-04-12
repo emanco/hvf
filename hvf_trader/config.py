@@ -35,7 +35,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY"]
 # Which pattern detectors to run live. Others remain available for backtesting.
 ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest.
 PRIMARY_TIMEFRAME = "H1"
