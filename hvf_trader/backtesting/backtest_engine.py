@@ -3,7 +3,7 @@ Event-driven backtester that reuses the detector and risk code.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -141,6 +141,8 @@ class BacktestEngine:
         risk_pct: float = None,
         score_threshold: float = None,
         enabled_patterns: list[str] = None,
+        simulate_news_blocks: bool = False,
+        simulate_circuit_breaker: bool = False,
     ):
         self.starting_equity = starting_equity
         self.risk_pct = risk_pct or config.RISK_PCT
@@ -148,6 +150,71 @@ class BacktestEngine:
         self.equity = starting_equity
         # Which pattern types to detect. Default: HVF only (backward compatible)
         self.enabled_patterns = enabled_patterns or ["HVF"]
+        self.simulate_news_blocks = simulate_news_blocks
+        self.simulate_circuit_breaker = simulate_circuit_breaker
+
+    # ------------------------------------------------------------------
+    # News filter simulation helpers
+    # ------------------------------------------------------------------
+
+    # Map symbols to affected currencies (matches live news_filter.py)
+    _SYMBOL_CURRENCIES = {
+        "EURUSD": ["EUR", "USD"], "NZDUSD": ["NZD", "USD"],
+        "EURGBP": ["EUR", "GBP"], "USDCHF": ["USD", "CHF"],
+        "EURAUD": ["EUR", "AUD"], "GBPUSD": ["GBP", "USD"],
+    }
+
+    @staticmethod
+    def _generate_news_events(start_date: pd.Timestamp, end_date: pd.Timestamp) -> list[tuple]:
+        """Generate known recurring high-impact news event times.
+
+        Returns list of (event_name, event_time_utc, affected_currencies).
+        Covers the major recurring events that predictably block trades.
+        """
+        events = []
+        # NFP: First Friday of each month at 13:30 UTC (affects USD pairs)
+        current = start_date.to_pydatetime().replace(day=1, tzinfo=None)
+        end_dt = end_date.to_pydatetime().replace(tzinfo=None)
+        while current <= end_dt:
+            day = current
+            while day.weekday() != 4:  # Friday
+                day += timedelta(days=1)
+            nfp_time = day.replace(hour=13, minute=30, second=0, microsecond=0)
+            if start_date.to_pydatetime().replace(tzinfo=None) <= nfp_time <= end_dt:
+                events.append(("NFP", pd.Timestamp(nfp_time, tz="UTC"), ["USD"]))
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
+        return events
+
+    def _is_news_blocked(self, bar_time: pd.Timestamp, symbol: str, news_events: list) -> bool:
+        """Check if entry should be blocked due to high-impact news."""
+        window = timedelta(minutes=config.NEWS_BLOCK_MINUTES)
+        currencies = self._SYMBOL_CURRENCIES.get(symbol, [])
+        for _, event_time, affected in news_events:
+            if any(c in currencies for c in affected):
+                diff = abs((bar_time - event_time).total_seconds())
+                if diff <= window.total_seconds():
+                    return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Circuit breaker simulation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_period_start(bar_time: pd.Timestamp, level: str) -> pd.Timestamp:
+        """Get the start of the daily/weekly/monthly period for a bar time."""
+        t = bar_time
+        if level == "DAILY":
+            return pd.Timestamp(t.year, t.month, t.day)
+        elif level == "WEEKLY":
+            days_since_monday = t.weekday()
+            monday = t - timedelta(days=days_since_monday)
+            return pd.Timestamp(monday.year, monday.month, monday.day)
+        else:  # MONTHLY
+            return pd.Timestamp(t.year, t.month, 1)
 
     def run(
         self,
@@ -193,6 +260,31 @@ class BacktestEngine:
         # KZ tracker for Kill Zone Hunt
         kz_tracker = KillZoneTracker() if "KZ_HUNT" in self.enabled_patterns else None
 
+        # News filter: pre-generate high-impact events for the data range
+        news_events = []
+        if self.simulate_news_blocks:
+            news_events = self._generate_news_events(
+                df_1h["time"].iloc[0], df_1h["time"].iloc[-1]
+            )
+
+        # Circuit breaker state
+        cb_tripped_until: dict[str, pd.Timestamp | None] = {
+            "DAILY": None, "WEEKLY": None, "MONTHLY": None,
+        }
+        cb_period_start_equity: dict[str, float] = {}
+        cb_period_key: dict[str, str] = {}
+        cb_period_pnl: dict[str, float] = {"DAILY": 0.0, "WEEKLY": 0.0, "MONTHLY": 0.0}
+        cb_limits = {
+            "DAILY": config.DAILY_LOSS_LIMIT_PCT,
+            "WEEKLY": config.WEEKLY_LOSS_LIMIT_PCT,
+            "MONTHLY": config.MONTHLY_LOSS_LIMIT_PCT,
+        }
+        # Per-pattern consecutive loss tracking
+        pattern_consec_losses: dict[str, int] = {}
+        pattern_paused_until_bar: dict[str, int] = {}  # bar_idx when pause expires
+        PATTERN_LOSS_PAUSE_THRESHOLD = 3
+        PATTERN_PAUSE_BARS = 48  # 48 H1 bars = 48 hours
+
         # Minimum lookback for indicators and zigzag
         min_lookback = 250
         pip_value = config.PIP_VALUES.get(symbol, 0.0001)
@@ -215,6 +307,19 @@ class BacktestEngine:
                     result.trades.append(trade)
                     closed_trades.append(i)
 
+                    # Update circuit breaker PnL tracking
+                    if self.simulate_circuit_breaker:
+                        for level in ("DAILY", "WEEKLY", "MONTHLY"):
+                            cb_period_pnl[level] += trade.pnl_currency
+                        # Per-pattern consecutive loss tracking
+                        pt = trade.pattern_type
+                        if trade.pnl_pips > 0:
+                            pattern_consec_losses[pt] = 0
+                        else:
+                            pattern_consec_losses[pt] = pattern_consec_losses.get(pt, 0) + 1
+                            if pattern_consec_losses[pt] >= PATTERN_LOSS_PAUSE_THRESHOLD:
+                                pattern_paused_until_bar[pt] = bar_idx + PATTERN_PAUSE_BARS
+
             for i in sorted(closed_trades, reverse=True):
                 open_trades.pop(i)
                 highest_since_partial.pop(i, None)
@@ -223,6 +328,19 @@ class BacktestEngine:
             # ─── Update KZ tracker ─────────────────────────────────────
             if kz_tracker and "time" in df_1h.columns:
                 kz_tracker.update(bar["time"], bar["high"], bar["low"], bar_idx)
+
+            # ─── Circuit breaker period tracking ──────────────────────────
+            if self.simulate_circuit_breaker and hasattr(bar["time"], "year"):
+                bar_time = bar["time"]
+                for level in ("DAILY", "WEEKLY", "MONTHLY"):
+                    period_start = self._get_period_start(bar_time, level)
+                    pkey = period_start.isoformat()
+                    if cb_period_key.get(level) != pkey:
+                        # New period — reset PnL and capture start equity
+                        cb_period_pnl[level] = 0.0
+                        cb_period_start_equity[level] = self.equity
+                        cb_period_key[level] = pkey
+                        cb_tripped_until[level] = None
 
             # ─── Check armed patterns for entry ──────────────────────────
             triggered = []
@@ -256,6 +374,30 @@ class BacktestEngine:
                         confirmed = bar["close"] < pattern.entry_price
 
                 if confirmed and len(open_trades) < config.MAX_CONCURRENT_TRADES:
+                    # News filter check (matches live risk_manager gate 3)
+                    if self.simulate_news_blocks and news_events:
+                        if self._is_news_blocked(bar["time"], symbol, news_events):
+                            triggered.append(j)
+                            continue
+
+                    # Circuit breaker check (matches live risk_manager gate 1)
+                    if self.simulate_circuit_breaker:
+                        cb_blocked = False
+                        for level in ("DAILY", "WEEKLY", "MONTHLY"):
+                            base_eq = cb_period_start_equity.get(level, self.starting_equity)
+                            if base_eq > 0 and cb_period_pnl[level] < 0:
+                                loss_pct = abs(cb_period_pnl[level]) / base_eq * 100.0
+                                if loss_pct >= cb_limits[level]:
+                                    cb_blocked = True
+                                    break
+                        if cb_blocked:
+                            triggered.append(j)
+                            continue
+                        # Per-pattern consecutive loss pause
+                        if pattern_paused_until_bar.get(pat_type, 0) > bar_idx:
+                            triggered.append(j)
+                            continue
+
                     # Same-symbol dedup (matches live risk_manager.py:159-166)
                     already_on_symbol = any(t.symbol == symbol for t in open_trades)
                     if already_on_symbol:
@@ -358,13 +500,15 @@ class BacktestEngine:
             window_start = max(0, bar_idx - 499)
             window_df = df_1h.iloc[window_start:bar_idx + 1].reset_index(drop=True)
             # Smaller window for non-HVF detectors (built when Viper or others need it)
+            # Exclude current bar from detection (bar_idx) to match live behavior:
+            # live uses df_completed = df_1h.iloc[:-1], only scanning completed bars.
             small_window_df = None
             kz_window_df = None
             if scan_viper or scan_slow_others:
                 small_window_start = max(0, bar_idx - 199)
-                small_window_df = df_1h.iloc[small_window_start:bar_idx + 1].reset_index(drop=True)
+                small_window_df = df_1h.iloc[small_window_start:bar_idx].reset_index(drop=True)
                 # KZ Hunt needs original indices (kz_tracker stores df_1h bar_idx)
-                kz_window_df = df_1h.iloc[small_window_start:bar_idx + 1]
+                kz_window_df = df_1h.iloc[small_window_start:bar_idx]
 
             if len(window_df) >= 100:
                 all_candidates: list[dict] = []
@@ -433,7 +577,7 @@ class BacktestEngine:
                         already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
                         if already_armed:
                             continue
-                        p.score = score_kz_hunt(p, small_window_df)
+                        p.score = score_kz_hunt(p, kz_window_df)
                         threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("KZ_HUNT", 50)
                         if p.score >= threshold:
                             all_candidates.append({

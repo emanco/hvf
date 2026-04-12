@@ -35,7 +35,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["NZDUSD", "EURGBP", "USDCHF", "EURAUD"]  # EURUSD paused 2026-04-10: 10% WR across 10 trades, -$391
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
 # Which pattern detectors to run live. Others remain available for backtesting.
 ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — 27 live trades PF=0.06, marginal in backtest (PF=0.91/62T)
 PRIMARY_TIMEFRAME = "H1"

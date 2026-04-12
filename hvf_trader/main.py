@@ -359,13 +359,25 @@ class HVFTrader:
         df_4h = fetch_and_prepare(symbol, config.CONFIRMATION_TIMEFRAME, bars=200)
         df_d1 = fetch_and_prepare(symbol, "D1", bars=100)
 
-        # Rebuild KZ tracker from recent history so indices match current DataFrame
-        kz_tracker = KillZoneTracker()
-        lookback = min(200, len(df_1h))
-        for i in range(len(df_1h) - lookback, len(df_1h)):
-            bar = df_1h.iloc[i]
-            kz_tracker.update(bar["time"], bar["high"], bar["low"], i)
-        self._kz_trackers[symbol] = kz_tracker
+        # Update KZ tracker incrementally — only process bars newer than last update.
+        # This matches the backtest's continuous tracker (single instance fed every bar).
+        # On first scan after startup the tracker is empty so we warm up from 200 bars.
+        kz_tracker = self._kz_trackers[symbol]
+        if not hasattr(kz_tracker, '_last_bar_time') or kz_tracker._last_bar_time is None:
+            # First run: warm up from 200 bars (all completed bars)
+            lookback = min(200, len(df_1h) - 1)  # -1 to exclude forming bar
+            for i in range(len(df_1h) - 1 - lookback, len(df_1h) - 1):
+                bar = df_1h.iloc[i]
+                kz_tracker.update(bar["time"], bar["high"], bar["low"], i)
+            kz_tracker._last_bar_time = df_1h["time"].iloc[-2] if len(df_1h) > 1 else None
+        else:
+            # Incremental: only update with completed bars newer than last update
+            for i in range(len(df_1h) - 1):  # exclude forming bar
+                bar = df_1h.iloc[i]
+                if bar["time"] > kz_tracker._last_bar_time:
+                    kz_tracker.update(bar["time"], bar["high"], bar["low"], i)
+            if len(df_1h) > 1:
+                kz_tracker._last_bar_time = df_1h["time"].iloc[-2]
 
         # Use only completed bars for detection — exclude the current forming bar.
         # The forming bar's high/low/close update mid-bar and can produce phantom

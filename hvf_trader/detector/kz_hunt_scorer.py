@@ -19,8 +19,12 @@ from hvf_trader import config
 def score_kz_hunt(pattern: KZHuntPattern, df: pd.DataFrame) -> float:
     """Score a validated KZ Hunt pattern on 5 components."""
     score = 0.0
-    idx = min(pattern.rejection_bar_idx, len(df) - 1)
-    bar = df.iloc[idx]
+    idx = pattern.rejection_bar_idx
+    if idx in df.index:
+        bar = df.loc[idx]
+    else:
+        bar = df.iloc[-1]  # fallback: last bar in window
+        idx = df.index[-1]
 
     # ─── 1. Rejection Quality (0-25) ──────────────────────────────────
     body = abs(bar["close"] - bar["open"])
@@ -56,7 +60,7 @@ def score_kz_hunt(pattern: KZHuntPattern, df: pd.DataFrame) -> float:
 
     # ─── 3. EMA200 Alignment (0-20) ───────────────────────────────────
     if "ema_200" in df.columns:
-        ema = df["ema_200"].iloc[idx]
+        ema = df["ema_200"].loc[idx] if idx in df.index else df["ema_200"].iloc[-1]
         close = bar["close"]
         if not np.isnan(ema) and ema > 0:
             distance_pct = ((close - ema) / ema) * 100.0
@@ -84,7 +88,9 @@ def score_kz_hunt(pattern: KZHuntPattern, df: pd.DataFrame) -> float:
     vol_col = "tick_volume" if "tick_volume" in df.columns else "volume"
     if vol_col in df.columns:
         bar_vol = bar[vol_col]
-        avg_vol = df[vol_col].iloc[max(0, idx - 20):idx].mean() if idx > 1 else 0
+        # Use label-based position for volume average window
+        idx_pos = df.index.get_loc(idx) if idx in df.index else len(df) - 1
+        avg_vol = df[vol_col].iloc[max(0, idx_pos - 20):idx_pos].mean() if idx_pos > 1 else 0
         if avg_vol > 0 and not np.isnan(bar_vol):
             vol_ratio = bar_vol / avg_vol
             if vol_ratio >= 1.5:
