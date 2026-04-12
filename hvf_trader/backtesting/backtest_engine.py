@@ -778,20 +778,26 @@ class BacktestEngine:
 
     def _calc_pnl(self, trade: BacktestTrade, pip_value: float):
         """Calculate PnL for a closed trade."""
+        # Simulate exit spread: closing a LONG sells at bid (worse by half-spread),
+        # closing a SHORT buys at ask (worse by half-spread).  Uses the same 1.5 pip
+        # typical spread as entry SL widening — half-spread = 0.75 pips.
+        half_spread = pip_value * 0.75
         if trade.direction == "LONG":
-            raw_pips = (trade.exit_price - trade.entry_price) / pip_value
+            exit_price = trade.exit_price - half_spread
+            raw_pips = (exit_price - trade.entry_price) / pip_value
         else:
-            raw_pips = (trade.entry_price - trade.exit_price) / pip_value
+            exit_price = trade.exit_price + half_spread
+            raw_pips = (trade.entry_price - exit_price) / pip_value
 
-        # Account for partial close at T1
+        # Account for partial close at T1 (spread applied to both legs)
         partial_pct = config.PARTIAL_CLOSE_PCT
         if trade.partial_closed and trade.exit_reason != "STOP_LOSS":
             if trade.direction == "LONG":
-                partial_pips = (trade.partial_price - trade.entry_price) / pip_value
-                remaining_pips = (trade.exit_price - trade.entry_price) / pip_value
+                partial_pips = (trade.partial_price - half_spread - trade.entry_price) / pip_value
+                remaining_pips = (exit_price - trade.entry_price) / pip_value
             else:
-                partial_pips = (trade.entry_price - trade.partial_price) / pip_value
-                remaining_pips = (trade.entry_price - trade.exit_price) / pip_value
+                partial_pips = (trade.entry_price - (trade.partial_price + half_spread)) / pip_value
+                remaining_pips = (trade.entry_price - exit_price) / pip_value
             trade.pnl_pips = (partial_pips * partial_pct) + (remaining_pips * (1 - partial_pct))
         else:
             trade.pnl_pips = raw_pips
