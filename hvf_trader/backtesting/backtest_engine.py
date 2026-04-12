@@ -20,6 +20,8 @@ from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
 from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns
 from hvf_trader.detector.london_sweep_scorer import score_london_sweep
+from hvf_trader.detector.trend_ride_detector import detect_trend_ride_patterns
+from hvf_trader.detector.trend_ride_scorer import score_trend_ride
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.risk.position_sizer import calculate_lot_size, validate_lot_size
@@ -602,6 +604,28 @@ class BacktestEngine:
                         if p.score >= threshold:
                             all_candidates.append({
                                 "pattern": p, "pattern_type": "LONDON_SWEEP",
+                                "symbol": symbol, "direction": p.direction,
+                                "score": p.score, "pat_key": pat_key,
+                            })
+
+                # Trend Ride Detection (every bar, 200-bar window — Donchian breakout)
+                if scan_slow_others and "TREND_RIDE" in self.enabled_patterns and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("TREND_RIDE", []):
+                    tr_pats = detect_trend_ride_patterns(small_window_df, symbol, config.PRIMARY_TIMEFRAME)
+                    for p in tr_pats:
+                        allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("TREND_RIDE")
+                        if allowed_dir and p.direction != allowed_dir:
+                            continue
+                        pat_key = (round(p.entry_price, 5), round(p.donchian_high, 5), p.direction, "TREND_RIDE")
+                        if pat_key in triggered_pattern_keys:
+                            continue
+                        already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
+                        if already_armed:
+                            continue
+                        p.score = score_trend_ride(p, small_window_df)
+                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("TREND_RIDE", 50)
+                        if p.score >= threshold:
+                            all_candidates.append({
+                                "pattern": p, "pattern_type": "TREND_RIDE",
                                 "symbol": symbol, "direction": p.direction,
                                 "score": p.score, "pat_key": pat_key,
                             })
