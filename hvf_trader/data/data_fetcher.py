@@ -128,13 +128,6 @@ def add_indicators(
 
     # ─── EMA ─────────────────────────────────────────────────────────────────
     df["ema_200"] = close.ewm(span=ema_period, adjust=False).mean()
-    df["ema_20"] = close.ewm(span=20, adjust=False).mean()
-
-    # ─── Donchian Channel ────────────────────────────────────────────────────
-    donchian_period = config.DONCHIAN_PERIOD if hasattr(config, "DONCHIAN_PERIOD") else 55
-    # shift(1) excludes the current bar — breakout is close > prior N-bar high
-    df["donchian_high"] = high.shift(1).rolling(window=donchian_period).max()
-    df["donchian_low"] = low.shift(1).rolling(window=donchian_period).min()
 
     # ─── ADX ─────────────────────────────────────────────────────────────────
     prev_high = high.shift(1)

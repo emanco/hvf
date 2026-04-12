@@ -39,8 +39,6 @@ from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns, check_
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
 from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns, check_london_sweep_entry_confirmation
 from hvf_trader.detector.london_sweep_scorer import score_london_sweep
-from hvf_trader.detector.trend_ride_detector import detect_trend_ride_patterns, check_trend_ride_entry_confirmation
-from hvf_trader.detector.trend_ride_scorer import score_trend_ride
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
@@ -458,22 +456,6 @@ class HVFTrader:
                         "score": p.score,
                     })
 
-        # 5. Trend Ride Detector (ADX-filtered Donchian breakout, skip excluded symbols)
-        if "TREND_RIDE" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("TREND_RIDE", []):
-            tr_patterns = detect_trend_ride_patterns(df_completed, symbol, config.PRIMARY_TIMEFRAME)
-            for p in tr_patterns:
-                allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("TREND_RIDE")
-                if allowed_dir and p.direction != allowed_dir:
-                    continue
-                p.score = score_trend_ride(p, df_completed)
-                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("TREND_RIDE", 50)
-                if p.score >= threshold:
-                    all_signals.append({
-                        "pattern": p, "pattern_type": "TREND_RIDE",
-                        "symbol": symbol, "direction": p.direction,
-                        "score": p.score,
-                    })
-
         # Prioritize and arm
         prioritized = prioritize_signals(all_signals)
         armed_count = 0
@@ -657,15 +639,13 @@ class HVFTrader:
                 )
                 vol_avg = get_volume_average(df, 20)
                 confirmed = check_entry_confirmation(hvf_pattern, latest_bar, vol_avg)
-            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP", "TREND_RIDE"):
+            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP"):
                 # pattern_obj may be None for DB-loaded patterns; use record for price check
                 if pattern_obj is not None:
                     if pattern_type == "VIPER":
                         confirmed = check_viper_entry_confirmation(pattern_obj, latest_bar)
                     elif pattern_type == "KZ_HUNT":
                         confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
-                    elif pattern_type == "TREND_RIDE":
-                        confirmed = check_trend_ride_entry_confirmation(pattern_obj, latest_bar)
                     else:
                         confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
                 else:

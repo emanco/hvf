@@ -37,7 +37,7 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 # ─── Instruments ─────────────────────────────────────────────────────────────
 INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["KZ_HUNT", "TREND_RIDE"]  # HVF disabled — 27 live trades PF=0.06, marginal in backtest (PF=0.91/62T)
+ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest.
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -46,11 +46,6 @@ ZIGZAG_ATR_MULTIPLIER = 2.0       # Zigzag threshold = ATR% * this multiplier (t
 ATR_PERIOD = 14
 EMA_PERIOD = 200
 ADX_PERIOD = 14
-DONCHIAN_PERIOD = 55              # 55-bar Donchian channel for TREND_RIDE breakout
-TREND_RIDE_ADX_MIN = 20           # ADX must be > 20 for trend confirmation
-TREND_RIDE_ATR_SL_MULT = 1.5     # SL = 1.5x ATR from entry
-TREND_RIDE_T1_ATR_MULT = 1.5     # T1 = 1.5x ATR from entry (partial close)
-TREND_RIDE_T2_ATR_MULT = 5.0     # T2 = 5x ATR from entry (wide — trail exits first)
 
 HVF_ENTRY_BUFFER_PIPS = 3
 HVF_ATR_STOP_MULT = 0.5          # SL = 3L - (this * ATR14) (tightened from 1.0 for better RRR)
@@ -60,7 +55,6 @@ MIN_RRR_BY_PATTERN = {
     "VIPER": 1.0,
     "KZ_HUNT": 1.0,
     "LONDON_SWEEP": 1.0,
-    "TREND_RIDE": 1.0,
 }
 
 # Detection Filters
@@ -86,7 +80,6 @@ SCORE_THRESHOLD_BY_PATTERN = {
     "VIPER": 60,
     "KZ_HUNT": 50,
     "LONDON_SWEEP": 50,
-    "TREND_RIDE": 50,
 }
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
@@ -96,7 +89,6 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
     "VIPER": "SHORT",     # SHORT-only — LONGs are net negative across all pairs
     "KZ_HUNT": None,
     "LONDON_SWEEP": None,
-    "TREND_RIDE": None,   # Both directions — ADX+DI alignment already filters direction
 }
 
 # Per-pattern per-symbol exclusions.
@@ -135,7 +127,6 @@ RISK_PCT_BY_PATTERN = {
     "VIPER": 2.0,          # V2 aggressive — PF 1.50+ SHORT-only, push while account is small
     "KZ_HUNT": 1.0,        # Reduced from 2% — expert panel: 2% on correlated pairs too aggressive for micro account
     "LONDON_SWEEP": 0.5,
-    "TREND_RIDE": 0.5,     # Conservative until validated live — half of KZ_HUNT
 }
 DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 UTC
@@ -157,7 +148,6 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN = {
     "VIPER": 2.0,        # V2 — tighter trail to lock profits faster
     "KZ_HUNT": 1.0,      # V2 — tight trail on volume engine to secure gains
     "LONDON_SWEEP": 1.5,
-    "TREND_RIDE": 1.5,   # Wider trail — trends need room to breathe
 }
 
 # Per-pattern freshness (max bars from detection to arming)
@@ -166,7 +156,6 @@ PATTERN_FRESHNESS_BARS = {
     "VIPER": 10,          # Momentum continuation must be recent
     "KZ_HUNT": 24,
     "LONDON_SWEEP": 12,
-    "TREND_RIDE": 6,      # Donchian breakout must confirm quickly
 }
 
 # ─── News Filter ─────────────────────────────────────────────────────────────
@@ -176,7 +165,6 @@ MIN_STOP_PIPS_BY_PATTERN = {
     "KZ_HUNT": 8,        # Lowered from 15 (blocked all KZ entries) — 8 pips still filters noise
     "VIPER": 5,
     "LONDON_SWEEP": 5,
-    "TREND_RIDE": 10,    # 1.5x ATR stop — 10 pip min filters noise on trending pairs
 }
 
 NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact

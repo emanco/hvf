@@ -16,7 +16,6 @@ PATTERN_PRIORITY = {
     "VIPER": 2,
     "KZ_HUNT": 3,
     "LONDON_SWEEP": 4,
-    "TREND_RIDE": 5,
 }
 
 
