@@ -724,12 +724,24 @@ class TradeMonitor:
             self._lowest_since_partial.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
         else:
-            # No matching close deal — estimate from trailing SL or entry price
-            close_price = trade_record.trailing_sl or trade_record.entry_price
-            source = "trailing SL" if trade_record.trailing_sl else "entry (breakeven)"
-            reason = "TRAILING_STOP" if trade_record.trailing_sl else (
-                "BREAKEVEN_SL" if trade_record.partial_closed else "UNKNOWN"
-            )
+            # No matching close deal — estimate from best available price.
+            # Server-side closes are almost always SL hits on IC Markets.
+            if trade_record.trailing_sl:
+                close_price = trade_record.trailing_sl
+                source = "trailing SL"
+                reason = "TRAILING_STOP"
+            elif trade_record.stop_loss and not trade_record.partial_closed:
+                close_price = trade_record.stop_loss
+                source = "stop loss"
+                reason = "STOP_LOSS"
+            elif trade_record.partial_closed:
+                close_price = trade_record.entry_price
+                source = "entry (breakeven)"
+                reason = "BREAKEVEN_SL"
+            else:
+                close_price = trade_record.entry_price
+                source = "entry (no SL)"
+                reason = "UNKNOWN"
 
             estimated_pnl, pnl_pips = self._estimate_fallback_pnl(trade_record, close_price)
             logger.warning(

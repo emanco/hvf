@@ -155,7 +155,8 @@ class OrderManager:
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             logger.error(
-                f"Modify SL failed: retcode={result.retcode}, comment={result.comment}"
+                f"Modify SL failed: {symbol} ticket={ticket} new_sl={new_sl:.5f} "
+                f"retcode={result.retcode}, comment={result.comment}"
             )
             return False
 
