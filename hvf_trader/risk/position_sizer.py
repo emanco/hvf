@@ -23,7 +23,7 @@ def calculate_lot_size(
     stop_distance_price: float,
     symbol: str,
     point_value: float = None,
-    contract_size: float = 100_000,
+    contract_size: float = None,
     account_currency: str = "GBP",
     exchange_rate_to_account: float = 1.0,
 ) -> float:
@@ -70,6 +70,10 @@ def calculate_lot_size(
     if pip_size is None or pip_size <= 0:
         logger.error("No pip value found for symbol %s", symbol)
         return 0.0
+
+    # --- Resolve contract size ---
+    if contract_size is None:
+        contract_size = config.CONTRACT_SIZES.get(symbol, 100_000)
 
     # --- Core calculation ---
     risk_amount = equity * (risk_pct / 100.0)

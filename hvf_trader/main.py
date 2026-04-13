@@ -39,6 +39,8 @@ from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns, check_
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
 from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns, check_london_sweep_entry_confirmation
 from hvf_trader.detector.london_sweep_scorer import score_london_sweep
+from hvf_trader.detector.wedge_detector import detect_wedge_patterns, check_wedge_breakout, check_wedge_entry_confirmation
+from hvf_trader.detector.wedge_scorer import score_wedge
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
@@ -456,6 +458,26 @@ class HVFTrader:
                         "score": p.score,
                     })
 
+        # 5. Wedge Detector (D1 timeframe, skip excluded symbols)
+        if "WEDGE" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("WEDGE", []):
+            if df_d1 is not None and len(df_d1) >= config.WEDGE_MIN_BARS + 2 * config.WEDGE_SWING_LOOKBACK:
+                wedge_patterns = detect_wedge_patterns(df_d1, symbol, config.WEDGE_DETECTION_TIMEFRAME)
+                for p in wedge_patterns:
+                    allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("WEDGE")
+                    if allowed_dir and p.direction != allowed_dir:
+                        continue
+                    # Only arm if breakout is confirmed on the latest D1 bar
+                    d1_atr = df_d1["atr"].iloc[-1] if "atr" in df_d1.columns else 0
+                    if d1_atr > 0 and check_wedge_breakout(p, df_d1.iloc[-1], len(df_d1) - 1, d1_atr):
+                        p.score = score_wedge(p, df_d1)
+                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("WEDGE", 55)
+                        if p.score >= threshold:
+                            all_signals.append({
+                                "pattern": p, "pattern_type": "WEDGE",
+                                "symbol": symbol, "direction": p.direction,
+                                "score": p.score,
+                            })
+
         # Prioritize and arm
         prioritized = prioritize_signals(all_signals)
         armed_count = 0
@@ -639,13 +661,15 @@ class HVFTrader:
                 )
                 vol_avg = get_volume_average(df, 20)
                 confirmed = check_entry_confirmation(hvf_pattern, latest_bar, vol_avg)
-            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP"):
+            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP", "WEDGE"):
                 # pattern_obj may be None for DB-loaded patterns; use record for price check
                 if pattern_obj is not None:
                     if pattern_type == "VIPER":
                         confirmed = check_viper_entry_confirmation(pattern_obj, latest_bar)
                     elif pattern_type == "KZ_HUNT":
                         confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
+                    elif pattern_type == "WEDGE":
+                        confirmed = check_wedge_entry_confirmation(pattern_obj, latest_bar)
                     else:
                         confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
                 else:

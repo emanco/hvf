@@ -20,11 +20,43 @@ from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
 from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns
 from hvf_trader.detector.london_sweep_scorer import score_london_sweep
+from hvf_trader.detector.wedge_detector import detect_wedge_patterns, check_wedge_breakout, check_wedge_entry_confirmation
+from hvf_trader.detector.wedge_scorer import score_wedge
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.risk.position_sizer import calculate_lot_size, validate_lot_size
 
 logger = logging.getLogger(__name__)
+
+
+def _aggregate_h1_to_d1(df_h1: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Aggregate H1 OHLCV data into D1 bars with indicators for wedge detection."""
+    if df_h1 is None or len(df_h1) < 48:
+        return None
+
+    df = df_h1.copy()
+    df["date"] = df["time"].dt.date
+
+    vol_col = "tick_volume" if "tick_volume" in df.columns else "volume"
+
+    d1 = df.groupby("date").agg(
+        time=("time", "first"),
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        tick_volume=(vol_col, "sum"),
+    ).reset_index(drop=True)
+
+    if len(d1) < 20:
+        return None
+
+    # Compute ATR, EMA200, RSI on D1
+    from hvf_trader.data.data_fetcher import add_indicators
+    d1 = add_indicators(d1)
+    d1 = d1.dropna(subset=["atr"]).reset_index(drop=True)
+
+    return d1
 
 
 @dataclass
@@ -427,7 +459,10 @@ class BacktestEngine:
                         continue
 
                     # Min stop distance guard (matches live main.py:744-762)
-                    min_stop_pips = config.MIN_STOP_PIPS_BY_PATTERN.get(pat_type, 5)
+                    # Per-symbol override (metals have wider stops)
+                    min_stop_pips = config.MIN_STOP_PIPS_BY_SYMBOL.get(
+                        symbol, config.MIN_STOP_PIPS_BY_PATTERN.get(pat_type, 5)
+                    )
                     min_stop_dist = max(spread_price * 5, pip_sz * min_stop_pips)
                     if stop_dist < min_stop_dist:
                         triggered.append(j)
@@ -605,6 +640,36 @@ class BacktestEngine:
                                 "symbol": symbol, "direction": p.direction,
                                 "score": p.score, "pat_key": pat_key,
                             })
+
+                # Wedge Detection (every 24 bars = once per day, on D1-aggregated data)
+                scan_wedge = (bar_idx % 24 == 0) and "WEDGE" in self.enabled_patterns
+                if scan_wedge and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("WEDGE", []):
+                    # Aggregate H1 bars into D1 OHLCV for wedge detection
+                    d1_df = _aggregate_h1_to_d1(df_1h.iloc[:bar_idx])
+                    if d1_df is not None and len(d1_df) >= config.WEDGE_MIN_BARS + 2 * config.WEDGE_SWING_LOOKBACK:
+                        wedge_pats = detect_wedge_patterns(d1_df, symbol, config.WEDGE_DETECTION_TIMEFRAME)
+                        for p in wedge_pats:
+                            # Direction filter
+                            allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("WEDGE")
+                            if allowed_dir and p.direction != allowed_dir:
+                                continue
+                            pat_key = (round(p.entry_price, 5), round(p.widest_range, 5), p.direction, "WEDGE")
+                            if pat_key in triggered_pattern_keys:
+                                continue
+                            already_armed = any(a.get("pat_key") == pat_key for a in armed_patterns)
+                            if already_armed:
+                                continue
+                            # Check breakout on the latest D1 bar
+                            d1_atr = d1_df["atr"].iloc[-1] if "atr" in d1_df.columns and not np.isnan(d1_df["atr"].iloc[-1]) else 0
+                            if d1_atr > 0 and check_wedge_breakout(p, d1_df.iloc[-1], len(d1_df) - 1, d1_atr):
+                                p.score = score_wedge(p, d1_df)
+                                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("WEDGE", 55)
+                                if p.score >= threshold:
+                                    all_candidates.append({
+                                        "pattern": p, "pattern_type": "WEDGE",
+                                        "symbol": symbol, "direction": p.direction,
+                                        "score": p.score, "pat_key": pat_key,
+                                    })
 
                 # Prioritize and arm (matches live main.py:443-463)
                 prioritized = prioritize_signals(all_candidates)

@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 # Priority: lower number = higher priority
 PATTERN_PRIORITY = {
     "HVF": 1,
-    "VIPER": 2,
-    "KZ_HUNT": 3,
-    "LONDON_SWEEP": 4,
+    "WEDGE": 2,       # D1 breakout patterns — higher conviction than session-based
+    "VIPER": 3,
+    "KZ_HUNT": 4,
+    "LONDON_SWEEP": 5,
 }
 
 

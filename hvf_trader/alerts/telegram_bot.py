@@ -287,7 +287,7 @@ class TelegramAlerter:
         if go_live:
             from datetime import datetime as dt
             cutoff = dt.fromisoformat(go_live).replace(tzinfo=timezone.utc)
-            trades = [t for t in trades if t.closed_at and t.closed_at >= cutoff]
+            trades = [t for t in trades if t.closed_at and t.closed_at.replace(tzinfo=None) >= cutoff.replace(tzinfo=None)]
         if not trades:
             return
 

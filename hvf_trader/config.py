@@ -35,9 +35,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY", "EURJPY", "CHFJPY"]
+# XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
+# Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest.
+ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest. WEDGE available for backtesting only.
 PRIMARY_TIMEFRAME = "H1"
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -55,6 +57,7 @@ MIN_RRR_BY_PATTERN = {
     "VIPER": 1.0,
     "KZ_HUNT": 1.0,
     "LONDON_SWEEP": 1.0,
+    "WEDGE": 1.0,
 }
 
 # Detection Filters
@@ -80,6 +83,7 @@ SCORE_THRESHOLD_BY_PATTERN = {
     "VIPER": 60,
     "KZ_HUNT": 50,
     "LONDON_SWEEP": 50,
+    "WEDGE": 55,
 }
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
@@ -89,6 +93,7 @@ ALLOWED_DIRECTIONS_BY_PATTERN = {
     "VIPER": "SHORT",     # SHORT-only — LONGs are net negative across all pairs
     "KZ_HUNT": None,
     "LONDON_SWEEP": None,
+    "WEDGE": None,        # Both — rising wedge=SHORT, falling wedge=LONG
 }
 
 # Per-pattern per-symbol exclusions.
@@ -127,6 +132,7 @@ RISK_PCT_BY_PATTERN = {
     "VIPER": 2.0,          # V2 aggressive — PF 1.50+ SHORT-only, push while account is small
     "KZ_HUNT": 1.0,        # Reduced from 2% — expert panel: 2% on correlated pairs too aggressive for micro account
     "LONDON_SWEEP": 0.5,
+    "WEDGE": 0.5,          # Conservative — unproven pattern type
 }
 DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
 WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 UTC
@@ -148,6 +154,7 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN = {
     "VIPER": 2.0,        # V2 — tighter trail to lock profits faster
     "KZ_HUNT": 1.0,      # V2 — tight trail on volume engine to secure gains
     "LONDON_SWEEP": 1.5,
+    "WEDGE": 1.5,        # D1 patterns need more room
 }
 
 # Per-pattern freshness (max bars from detection to arming)
@@ -156,6 +163,7 @@ PATTERN_FRESHNESS_BARS = {
     "VIPER": 10,          # Momentum continuation must be recent
     "KZ_HUNT": 24,
     "LONDON_SWEEP": 12,
+    "WEDGE": 72,          # D1 breakouts can take several days to confirm
 }
 
 # ─── News Filter ─────────────────────────────────────────────────────────────
@@ -165,6 +173,7 @@ MIN_STOP_PIPS_BY_PATTERN = {
     "KZ_HUNT": 8,        # Lowered from 15 (blocked all KZ entries) — 8 pips still filters noise
     "VIPER": 5,
     "LONDON_SWEEP": 5,
+    "WEDGE": 10,          # D1 patterns have wider stops; per-symbol override in MIN_STOP_PIPS_BY_SYMBOL
 }
 
 NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact
@@ -216,6 +225,41 @@ ASIAN_CLOSE = 8
 WALKFORWARD_TRAIN_MONTHS = 6
 WALKFORWARD_TEST_MONTHS = 2
 
+# ─── Wedge Detection ────────────────────────────────────────────────────────
+WEDGE_DETECTION_TIMEFRAME = "D1"        # Primary detection timeframe
+WEDGE_MIN_TOUCHES = 3                   # Minimum touches per trendline
+WEDGE_MIN_BARS = 15                     # Minimum pattern duration (D1 bars)
+WEDGE_MAX_BARS = 120                    # Maximum pattern duration (D1 bars)
+WEDGE_SWING_LOOKBACK = 5               # N-bar lookback for swing detection
+WEDGE_MIN_R_SQUARED = 0.75             # Minimum trendline fit quality
+WEDGE_CONVERGENCE_MIN = 0.25           # Lines must converge by at least 25%
+WEDGE_BREAKOUT_ATR_BUFFER = 0.1        # Close must exceed trendline by 0.1x ATR
+WEDGE_SL_ATR_MULT = 0.5               # SL beyond opposite trendline + ATR buffer
+WEDGE_TARGET_1_MULT = 0.5             # T1: 50% of measured move (from midpoint)
+WEDGE_TARGET_2_MULT = 1.0             # T2: 100% of measured move (from midpoint)
+
+# ─── Contract Sizes ──────────────────────────────────────────────────────────
+# Standard lot size per instrument. Forex = 100,000 currency units (default).
+# Metals use different contract sizes.
+CONTRACT_SIZES = {
+    "XAUUSD": 100,       # 100 troy ounces
+    "XAGUSD": 5000,      # 5000 troy ounces
+    # All forex pairs default to 100,000 in position_sizer.py
+}
+
+# ─── Per-Symbol Overrides ────────────────────────────────────────────────────
+# Max absolute spread (price units). Default MAX_SPREAD_ABSOLUTE used for forex.
+MAX_SPREAD_ABSOLUTE_BY_SYMBOL = {
+    "XAUUSD": 0.50,      # $0.50 = 50 pips (gold spreads are wider)
+    "XAGUSD": 0.05,      # $0.05 for silver
+}
+
+# Min stop distance (pips). Overrides MIN_STOP_PIPS_BY_PATTERN when present.
+MIN_STOP_PIPS_BY_SYMBOL = {
+    "XAUUSD": 300,       # $3.00 minimum stop (gold is volatile)
+    "XAGUSD": 50,        # $0.50 minimum stop
+}
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,
@@ -228,6 +272,8 @@ PIP_VALUES = {
     "EURAUD": 0.0001,
     "USDJPY": 0.01,
     "GBPJPY": 0.01,
+    "EURJPY": 0.01,
+    "CHFJPY": 0.01,
     "XAUUSD": 0.01,
     "BTCUSD": 1.0,
     "US30": 1.0,
