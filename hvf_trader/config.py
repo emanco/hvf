@@ -83,7 +83,7 @@ SCORE_THRESHOLD_BY_PATTERN = {
     "VIPER": 60,
     "KZ_HUNT": 50,
     "LONDON_SWEEP": 50,
-    "WEDGE": 55,
+    "WEDGE": 40,
 }
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
@@ -227,12 +227,12 @@ WALKFORWARD_TEST_MONTHS = 2
 
 # ─── Wedge Detection ────────────────────────────────────────────────────────
 WEDGE_DETECTION_TIMEFRAME = "D1"        # Primary detection timeframe
-WEDGE_MIN_TOUCHES = 3                   # Minimum touches per trendline
+WEDGE_MIN_TOUCHES = 2                   # Minimum touches per trendline (quality handled by scorer)
 WEDGE_MIN_BARS = 15                     # Minimum pattern duration (D1 bars)
 WEDGE_MAX_BARS = 120                    # Maximum pattern duration (D1 bars)
 WEDGE_SWING_LOOKBACK = 5               # N-bar lookback for swing detection
-WEDGE_MIN_R_SQUARED = 0.75             # Minimum trendline fit quality
-WEDGE_CONVERGENCE_MIN = 0.25           # Lines must converge by at least 25%
+WEDGE_MIN_R_SQUARED = 0.65             # Minimum trendline fit quality (relaxed for gold's volatility)
+WEDGE_CONVERGENCE_MIN = 0.15           # Lines must converge by at least 15%
 WEDGE_BREAKOUT_ATR_BUFFER = 0.1        # Close must exceed trendline by 0.1x ATR
 WEDGE_SL_ATR_MULT = 0.5               # SL beyond opposite trendline + ATR buffer
 WEDGE_TARGET_1_MULT = 0.5             # T1: 50% of measured move (from midpoint)
@@ -243,7 +243,7 @@ WEDGE_TARGET_2_MULT = 1.0             # T2: 100% of measured move (from midpoint
 # Metals use different contract sizes.
 CONTRACT_SIZES = {
     "XAUUSD": 100,       # 100 troy ounces
-    "XAGUSD": 5000,      # 5000 troy ounces
+    "XAGUSD": 1000,      # 1000 troy ounces (IC Markets)
     # All forex pairs default to 100,000 in position_sizer.py
 }
 
@@ -275,6 +275,7 @@ PIP_VALUES = {
     "EURJPY": 0.01,
     "CHFJPY": 0.01,
     "XAUUSD": 0.01,
+    "XAGUSD": 0.001,
     "BTCUSD": 1.0,
     "US30": 1.0,
 }

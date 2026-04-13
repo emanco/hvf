@@ -152,22 +152,28 @@ def _find_trendline_touches(
     points: list[tuple[int, float]],
     slope: float,
     intercept: float,
+    tolerance_abs: float = 0.0,
     tolerance_pct: float = 0.003,
 ) -> list[tuple[int, float]]:
     """
     Find which swing points are within tolerance of the trendline.
 
     Args:
-        tolerance_pct: Maximum distance as fraction of price (0.3% default).
+        tolerance_abs: Absolute distance tolerance (e.g. ATR-based). Takes priority when > 0.
+        tolerance_pct: Fallback — maximum distance as fraction of price (0.3% default).
     """
     touches = []
     for idx, price in points:
         trendline_price = slope * idx + intercept
         if price == 0:
             continue
-        distance_pct = abs(price - trendline_price) / price
-        if distance_pct <= tolerance_pct:
-            touches.append((idx, price))
+        distance = abs(price - trendline_price)
+        if tolerance_abs > 0:
+            if distance <= tolerance_abs:
+                touches.append((idx, price))
+        else:
+            if distance / price <= tolerance_pct:
+                touches.append((idx, price))
     return touches
 
 
@@ -311,12 +317,17 @@ def detect_wedge_patterns(
             else:
                 apex_index = float(h_end_idx + duration)
 
-            # Validate touch points with tolerance
-            avg_price = df["close"].iloc[h_start_idx:h_end_idx + 1].mean()
-            # Scale tolerance: 0.3% for forex, wider for metals
-            tolerance = 0.003 if avg_price < 100 else 0.005
-            upper_touches = _find_trendline_touches(h_points, h_slope, h_intercept, tolerance)
-            lower_touches = _find_trendline_touches(l_points, l_slope, l_intercept, tolerance)
+            # Validate touch points with ATR-based tolerance
+            atr_col = "atr"
+            atr_val = 0.0
+            if atr_col in df.columns:
+                atr_val = df[atr_col].iloc[min(h_end_idx, len(df) - 1)]
+                if np.isnan(atr_val):
+                    atr_val = df[atr_col].dropna().iloc[-1] if not df[atr_col].dropna().empty else 0.0
+            # ATR-based: allow points within 0.5x ATR of trendline
+            touch_tolerance = 0.5 * atr_val if atr_val > 0 else 0.0
+            upper_touches = _find_trendline_touches(h_points, h_slope, h_intercept, tolerance_abs=touch_tolerance)
+            lower_touches = _find_trendline_touches(l_points, l_slope, l_intercept, tolerance_abs=touch_tolerance)
 
             if len(upper_touches) < min_touches or len(lower_touches) < min_touches:
                 continue
@@ -325,7 +336,6 @@ def detect_wedge_patterns(
             direction = "SHORT" if wedge_type == "RISING_WEDGE" else "LONG"
 
             # Get ATR at pattern end for level computation
-            atr_col = "atr"
             if atr_col in df.columns and h_end_idx < len(df):
                 current_atr = df[atr_col].iloc[min(h_end_idx, len(df) - 1)]
                 if np.isnan(current_atr):
@@ -376,23 +386,38 @@ def check_wedge_breakout(
     current_atr: float,
 ) -> bool:
     """
-    Check if the given bar breaks out of the wedge in the expected direction.
+    Check if the given bar breaks out of the wedge in either direction.
 
-    Breakout requires:
-    1. Close beyond the trendline boundary by at least WEDGE_BREAKOUT_ATR_BUFFER * ATR
-    2. Breakout direction matches wedge expectation
+    Uses trendline value at pattern end (not extrapolated to current bar)
+    to prevent false breakouts from trendline drift.
+
+    If breakout is opposite to textbook direction (e.g. rising wedge breaks UP
+    as continuation in a strong trend), flips the pattern direction and recomputes
+    trade levels. Hunt's measured move works regardless of breakout direction.
     """
     close = float(bar["close"])
     buffer = config.WEDGE_BREAKOUT_ATR_BUFFER * current_atr
+    ref_idx = wedge.end_index
 
-    if wedge.direction == "LONG":
-        # Falling wedge: expect upward breakout through upper trendline
-        upper_line = wedge.upper_slope * bar_index + wedge.upper_intercept
-        return close > upper_line + buffer
-    else:
-        # Rising wedge: expect downward breakout through lower trendline
-        lower_line = wedge.lower_slope * bar_index + wedge.lower_intercept
-        return close < lower_line - buffer
+    upper_line = wedge.upper_slope * ref_idx + wedge.upper_intercept
+    lower_line = wedge.lower_slope * ref_idx + wedge.lower_intercept
+
+    broke_up = close > upper_line + buffer
+    broke_down = close < lower_line - buffer
+
+    if not broke_up and not broke_down:
+        return False
+
+    # Determine actual breakout direction
+    actual_direction = "LONG" if broke_up else "SHORT"
+
+    # If breakout is opposite to textbook, flip direction and recompute levels
+    if actual_direction != wedge.direction:
+        wedge.direction = actual_direction
+        if current_atr > 0:
+            wedge.compute_levels(current_atr)
+
+    return True
 
 
 def check_wedge_entry_confirmation(

@@ -45,18 +45,27 @@ def score_wedge(
     elif avg_r2 >= 0.90:
         score += 15
     elif avg_r2 >= 0.85:
-        score += 10
+        score += 12
     elif avg_r2 >= 0.80:
+        score += 8
+    elif avg_r2 >= 0.70:
         score += 5
+    elif avg_r2 >= 0.65:
+        score += 3
 
     # 2. Touch count (0-15)
+    total_touches = len(wedge.upper_touches) + len(wedge.lower_touches)
     min_touches = min(len(wedge.upper_touches), len(wedge.lower_touches))
-    if min_touches >= 5:
+    if total_touches >= 8:
         score += 15
-    elif min_touches >= 4:
+    elif total_touches >= 6:
         score += 12
     elif min_touches >= 3:
+        score += 10
+    elif total_touches >= 5:
         score += 8
+    elif min_touches >= 2:
+        score += 5
 
     # 3. Convergence quality (0-15)
     if wedge.widest_range > 0:
@@ -69,8 +78,10 @@ def score_wedge(
     if convergence_pct >= 0.70:
         score += 15
     elif convergence_pct >= 0.50:
-        score += 10
+        score += 12
     elif convergence_pct >= 0.30:
+        score += 8
+    elif convergence_pct >= 0.15:
         score += 5
 
     # 4. Volume contraction (0-15)
