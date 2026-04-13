@@ -170,7 +170,7 @@ class TelegramCommandHandler:
         cs = self._currency_symbol()
         text = (
             f"<b>\U0001F4CA Bot Status</b>\n"
-            f"Time: {now.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            f"Time: {now.astimezone(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}\n\n"
             f"MT5: <b>{mt5_status}</b>\n"
             f"Open trades: <b>{len(open_trades)}</b>\n"
             f"Armed patterns: <b>{len(armed)}</b>\n\n"

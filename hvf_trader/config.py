@@ -34,6 +34,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DB_PATH}")
 # ─── Environment ─────────────────────────────────────────────────────────────
 ENVIRONMENT = os.getenv("ENVIRONMENT", "demo")
 
+# ─── Display Timezone ────────────────────────────────────────────────────────
+from zoneinfo import ZoneInfo
+DISPLAY_TZ = ZoneInfo("Europe/London")  # GMT/BST — used for Telegram display + scheduling
+
 # ─── Instruments ─────────────────────────────────────────────────────────────
 INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY", "EURJPY", "CHFJPY"]
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.

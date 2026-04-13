@@ -163,7 +163,7 @@ class TelegramAlerter:
             f"<b>\u26A0 Circuit Breaker Tripped</b>\n"
             f"Level: <b>{level}</b>\n"
             f"Loss: <b>{loss_pct:.1f}%</b>\n"
-            f"Trading paused until: {resumes_at.strftime('%Y-%m-%d %H:%M UTC')}"
+            f"Trading paused until: {resumes_at.astimezone(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}"
         )
         self.send_message(text)
 
@@ -234,7 +234,7 @@ class TelegramAlerter:
 
         text = (
             f"<b>\U0001F4CA Daily Summary</b>\n"
-            f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
+            f"Date: {datetime.now(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}\n\n"
             f"PnL today: <b>{emoji} {cs}{daily_pnl:+.2f}</b>\n"
             f"Trades closed: {total} (W:{wins} L:{losses})\n"
             f"Open trades: {len(open_trades)}\n"
