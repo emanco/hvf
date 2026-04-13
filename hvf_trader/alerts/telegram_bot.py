@@ -142,16 +142,18 @@ class TelegramAlerter:
         pnl: float,
         pnl_pips: float,
         reason: str,
+        estimated: bool = False,
     ):
         """Alert when a trade is fully closed."""
         emoji = "\u2705" if pnl >= 0 else "\u274C"
+        est_tag = "\n\u26A0\uFE0F <i>PnL estimated (no deal history)</i>" if estimated else ""
         text = (
             f"<b>{emoji} Trade Closed</b>\n"
             f"Symbol: <code>{symbol}</code> ({direction})\n"
             f"Close: <code>{close_price:.5f}</code>\n"
             f"PnL: <b>{pnl:+.2f}</b>\n"
             f"Pips: <b>{pnl_pips:+.1f}</b>\n"
-            f"Reason: {reason}"
+            f"Reason: {reason}{est_tag}"
         )
         self.send_message(text)
 
@@ -207,6 +209,29 @@ class TelegramAlerter:
             cs = config.ACCOUNT_CURRENCY_SYMBOL
 
         emoji = "\u2705" if daily_pnl >= 0 else "\u274C"
+
+        # Per-pair breakdown since go-live
+        pair_stats = {}
+        for t in all_trades:
+            sym = t.symbol
+            if sym not in pair_stats:
+                pair_stats[sym] = {"count": 0, "wins": 0, "pnl": 0.0, "pips": 0.0}
+            pair_stats[sym]["count"] += 1
+            if t.pnl and t.pnl > 0:
+                pair_stats[sym]["wins"] += 1
+            pair_stats[sym]["pnl"] += t.pnl or 0
+            pair_stats[sym]["pips"] += t.pnl_pips or 0
+
+        pair_lines = []
+        for sym in sorted(pair_stats, key=lambda s: pair_stats[s]["pips"], reverse=True):
+            s = pair_stats[sym]
+            wr = s["wins"] / s["count"] * 100 if s["count"] else 0
+            pair_emoji = "\u2705" if s["pips"] > 0 else "\u274C"
+            pair_lines.append(
+                f"{pair_emoji} <code>{sym}</code> {s['count']}T {wr:.0f}%WR {s['pips']:+.0f}p"
+            )
+        pair_text = "\n".join(pair_lines) if pair_lines else "No trades yet"
+
         text = (
             f"<b>\U0001F4CA Daily Summary</b>\n"
             f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n"
@@ -214,6 +239,7 @@ class TelegramAlerter:
             f"Trades closed: {total} (W:{wins} L:{losses})\n"
             f"Open trades: {len(open_trades)}\n"
             f"Armed patterns: {len(armed_patterns)}\n\n"
+            f"<b>Per pair (since go-live):</b>\n{pair_text}\n\n"
             f"Balance: <b>{cs}{balance:,.2f}</b> ({total_pnl:+.2f})"
         )
 

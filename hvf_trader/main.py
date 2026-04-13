@@ -145,9 +145,11 @@ class HVFTrader:
         )
 
         # ─── Performance Monitor ────────────────────────────────────────
+        # Alerts silenced (alerter=None) — still validating setup, alerts are noise.
+        # Re-enable by passing alerter=self.alerter once strategy is profitable.
         self.perf_monitor = PerformanceMonitor(
             trade_logger=self.trade_logger,
-            alerter=self.alerter,
+            alerter=None,
             circuit_breaker=self.circuit_breaker,
         )
 
@@ -321,7 +323,7 @@ class HVFTrader:
                 ):
                     if now.weekday() <= 4:  # Mon-Fri only
                         self.alerter.send_daily_summary(self.trade_logger, connector=self.connector)
-                    if now.weekday() == 6:  # Sunday — weekly performance summary
+                    if now.weekday() == 6:
                         self.alerter.send_performance_summary(self.trade_logger)
                     self._last_daily_summary = now
 

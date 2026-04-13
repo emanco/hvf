@@ -62,7 +62,7 @@ class PerformanceMonitor:
 
         # Send alerts (with cooldown) — batch into a single message
         pending = [(k, t) for k, t in alerts if self._should_alert(k)]
-        if pending:
+        if pending and self.alerter:
             combined = "\n\n".join(t for _, t in pending)
             self.alerter.send_message(combined)
             for k, _ in pending:

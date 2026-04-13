@@ -39,6 +39,25 @@ class TradeMonitor:
         self._atr_cache = {}  # symbol -> (timestamp, atr_value)
         self._bar_cache = {}  # symbol -> (wall_ts, bar_time, bar_close) — completed H1 bar
         self._last_invalidation_bar = {}  # trade_id -> bar_time last checked
+        self._recent_errors = []  # timestamps of recent errors for burst detection
+        self._last_error_alert = None  # throttle error burst alerts
+
+    def _track_error(self, error_msg: str):
+        """Track errors and alert on bursts (3+ in 5 minutes)."""
+        now = datetime.now(timezone.utc)
+        self._recent_errors.append(now)
+        # Prune entries older than 5 minutes
+        cutoff = now - timedelta(minutes=5)
+        self._recent_errors = [t for t in self._recent_errors if t > cutoff]
+        # Alert if 3+ errors in window and not alerted in last 30 min
+        if len(self._recent_errors) >= 3 and self.alerter:
+            if (self._last_error_alert is None
+                    or now - self._last_error_alert > timedelta(minutes=30)):
+                self._last_error_alert = now
+                self.alerter.alert_error(
+                    f"Error burst: {len(self._recent_errors)} errors in 5 min\n"
+                    f"Latest: {error_msg[:200]}"
+                )
 
     def start(self):
         """Start the trade monitoring loop."""
@@ -49,6 +68,7 @@ class TradeMonitor:
                 self._monitor_cycle()
             except Exception as e:
                 logger.error(f"Trade monitor error: {e}", exc_info=True)
+                self._track_error(str(e))
                 try:
                     self.trade_logger._session.rollback()
                 except Exception:
@@ -81,6 +101,7 @@ class TradeMonitor:
                     f"Error monitoring trade {trade_record.id}: {e}",
                     exc_info=True,
                 )
+                self._track_error(f"trade {trade_record.id}: {e}")
 
     def _check_trade(self, trade_record):
         """
@@ -507,6 +528,10 @@ class TradeMonitor:
                 trade_id=trade_record.id,
                 details=f"Reason={reason}, PnL={pnl:.2f}, Pips={pnl_pips:.1f}",
             )
+            if self.alerter:
+                self.alerter.alert_trade_closed(
+                    trade_record.symbol, direction, close_price, pnl, pnl_pips, reason
+                )
 
             # Clean up tracking dicts
             self._highest_since_partial.pop(ticket, None)
@@ -642,6 +667,11 @@ class TradeMonitor:
                 trade_id=trade_record.id,
                 details=f"Server-side close (no deals): {reason} at {source}, ~{pnl_pips:+.1f}p",
             )
+            if self.alerter:
+                self.alerter.alert_trade_closed(
+                    trade_record.symbol, trade_record.direction, close_price,
+                    pnl, pnl_pips, reason, estimated=True
+                )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
@@ -719,6 +749,11 @@ class TradeMonitor:
                 trade_id=trade_record.id,
                 details=f"Server-side close: {reason}, PnL={pnl:.2f}",
             )
+            if self.alerter:
+                self.alerter.alert_trade_closed(
+                    trade_record.symbol, trade_record.direction, close_price,
+                    pnl, pnl_pips, reason
+                )
 
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
@@ -753,6 +788,11 @@ class TradeMonitor:
             self.trade_logger.log_trade_close(
                 trade_record.id, close_price, estimated_pnl, pnl_pips, reason
             )
+            if self.alerter:
+                self.alerter.alert_trade_closed(
+                    trade_record.symbol, trade_record.direction, close_price,
+                    estimated_pnl, pnl_pips, reason, estimated=True
+                )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
