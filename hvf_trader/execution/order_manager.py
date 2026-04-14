@@ -139,6 +139,24 @@ class OrderManager:
         if abs(new_sl - pos.sl) < (10 ** -symbol_info.digits if symbol_info else 1e-5):
             return True
 
+        # Skip if new SL violates broker minimum stop distance
+        if symbol_info:
+            stops_level = getattr(symbol_info, "trade_stops_level", 0) or 0
+            freeze_level = getattr(symbol_info, "trade_freeze_level", 0) or 0
+            min_distance = max(stops_level, freeze_level) * symbol_info.point
+            if min_distance > 0:
+                current_price = pos.price_current
+                if pos.type == 0:  # BUY/LONG
+                    distance = current_price - new_sl
+                else:  # SELL/SHORT
+                    distance = new_sl - current_price
+                if distance < min_distance:
+                    logger.debug(
+                        f"SL too close to price: {symbol} ticket={ticket} "
+                        f"distance={distance:.5f} min={min_distance:.5f}, skipping"
+                    )
+                    return True
+
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "symbol": symbol,
