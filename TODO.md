@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-15
 
+## Next Up: Asian Gravity Strategy
+
+Build spec: `ASIAN_GRAVITY_BUILD_SPEC.md`
+
+### Phase 1: Shadow Trading
+- [ ] Add ASIAN_GRAVITY config block to config.py
+- [ ] Build asian_gravity_detector.py (tracker + entry signal)
+- [ ] Build asian_gravity_scanner.py (thread with signal logging, no execution)
+- [ ] Register thread in main.py with watchdog
+- [ ] Deploy and collect 30+ shadow signals over 8+ Wednesdays
+
+### Phase 2: Live Trading (after shadow validation)
+- [ ] Add execution path to scanner
+- [ ] Add _check_gravity_trade to trade_monitor.py (time exit)
+- [ ] Adapt risk_manager.py gates (spread, same-instrument, RRR)
+- [ ] Add per-strategy circuit breaker limits
+- [ ] Deploy with 0.5% risk, ramp to 2% after 10+ live trades
+
+### Phase 3: Expansion
+- [ ] Add Friday after 50+ trades confirm edge
+- [ ] Consider EURUSD as second pair after 100+ trades
+
+---
+
 ## Deferred Audit Findings
 
 ### M8 — RRR Threshold Review
