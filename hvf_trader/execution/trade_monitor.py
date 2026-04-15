@@ -110,13 +110,13 @@ class TradeMonitor:
 
     def _check_trade(self, trade_record):
         """
-        Check a single open trade for:
-        1. Split-order T1 detection (if mt5_ticket_partial set, check if MT5 closed it)
-        2. Invalidation (price revisits below 3L for longs / above 3H for shorts)
-        3. Target 1 hit (partial close + move SL to breakeven) — legacy fallback
-        4. Trailing stop update (after partial)
-        5. Target 2 hit (full close)
+        Check a single open trade. Asian Gravity trades are managed by their
+        own scanner thread (TP/SL broker-side, time exit at 06:00), so we
+        skip them here to avoid interference.
         """
+        # Asian Gravity trades are fully managed by AsianGravityScanner
+        if trade_record.pattern_type == "ASIAN_GRAVITY":
+            return
         ticket = trade_record.mt5_ticket
         if ticket is None:
             return

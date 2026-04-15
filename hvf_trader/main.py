@@ -153,6 +153,20 @@ class HVFTrader:
             circuit_breaker=self.circuit_breaker,
         )
 
+        # ─── Asian Gravity Scanner ─────────────────────────────────────
+        if config.ASIAN_GRAVITY["enabled"]:
+            from hvf_trader.asian_gravity_scanner import AsianGravityScanner
+            self.asian_gravity_scanner = AsianGravityScanner(
+                order_manager=self.order_manager,
+                trade_logger=self.trade_logger,
+                risk_manager=self.risk_manager,
+                circuit_breaker=self.circuit_breaker,
+                connector=self.connector,
+                alerter=self.alerter,
+            )
+        else:
+            self.asian_gravity_scanner = None
+
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
         for sym in config.INSTRUMENTS:
@@ -245,6 +259,15 @@ class HVFTrader:
             target=self.trade_monitor.start, daemon=True, name="TradeMonitor"
         )
         self._monitor_thread.start()
+
+        # Start Asian Gravity scanner (daemon thread)
+        if self.asian_gravity_scanner:
+            self._asian_gravity_thread = threading.Thread(
+                target=self.asian_gravity_scanner.start,
+                daemon=True, name="AsianGravity",
+            )
+            self._asian_gravity_thread.start()
+            logger.info("Asian Gravity scanner started")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -356,6 +379,23 @@ class HVFTrader:
                     target=self.trade_monitor.start, daemon=True, name="TradeMonitor"
                 )
                 self._monitor_thread.start()
+
+            # Watchdog: restart Asian Gravity scanner if it died
+            if self.asian_gravity_scanner and not self._asian_gravity_thread.is_alive():
+                logger.error("Asian Gravity thread died — restarting")
+                self.trade_logger.log_event(
+                    "ERROR", details="Asian Gravity thread died, restarting",
+                    severity="ERROR",
+                )
+                if self.alerter:
+                    self.alerter.send_message(
+                        "\U0001f6a8 <b>Asian Gravity thread died</b>\nRestarting automatically."
+                    )
+                self._asian_gravity_thread = threading.Thread(
+                    target=self.asian_gravity_scanner.start,
+                    daemon=True, name="AsianGravity",
+                )
+                self._asian_gravity_thread.start()
 
             # Sleep until next cycle (60 seconds)
             time.sleep(60)
