@@ -78,6 +78,7 @@ def _detach_record(record):
         l3_price=record.l3_price,
         score=record.score,
         pattern_type=record.pattern_type,
+        pattern_metadata=getattr(record, "pattern_metadata", None),
     )
 
 
@@ -1029,7 +1030,7 @@ class HVFTrader:
             "intended_entry": pattern.entry_price,
             "intended_sl": pattern.stop_loss,
             "slippage": slippage,
-            "pattern_metadata": pattern_record.pattern_metadata,
+            "pattern_metadata": getattr(pattern_record, "pattern_metadata", None),
         }
         if ticket_partial:
             trade_data["mt5_ticket_partial"] = ticket_partial
