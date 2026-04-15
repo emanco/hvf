@@ -63,6 +63,10 @@ Last updated: 2026-04-15
 - ~~No DB backup~~ — daily GZip backup at 22:00 UTC, 7-day retention
 - ~~Missing news filter for EURJPY/CHFJPY~~ — added to SYMBOL_CURRENCIES
 - ~~Entry confirmation using forming bar~~ — aligned to use completed bars like detection
+- ~~Telegram summary PnL/equity mismatch with MT5~~ — daily PnL from balance change, equity chart from snapshots
+- ~~/equity command broken~~ — updated to use snapshot-based chart method
+- ~~_detach_record missing pattern_metadata~~ — caused orphaned MT5 positions with no DB record; fixed with getattr fallback
+- ~~4 orphaned EURUSD positions~~ — closed manually (+$59.74), caused by pattern_metadata bug above
 
 ## Code Polish (Low Priority)
 
@@ -70,3 +74,4 @@ Last updated: 2026-04-15
 - Fix return type annotations on `close_position`/`partial_close` in order_manager.py
 - Remove dead imports for disabled pattern detectors in main.py
 - Add test coverage: risk manager, deal matching, split-order logic
+- Auto-adopt orphan positions: reconciliation detects unknown positions with bot magic number but only logs warnings, doesn't create DB records for them
