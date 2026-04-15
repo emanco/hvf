@@ -264,6 +264,35 @@ MIN_STOP_PIPS_BY_SYMBOL = {
     "XAGUSD": 50,        # $0.50 minimum stop
 }
 
+# ─── Asian Gravity Strategy ─────────────────────────────────────────────────
+ASIAN_GRAVITY = {
+    "enabled": True,
+    "instrument": "EURGBP",
+    "formation_timeframe": "M15",
+    "poll_interval_sec": 30,
+    "days": [2],                    # Wednesday only (0=Mon, 2=Wed, 4=Fri)
+    "formation_start_utc": 0,
+    "formation_end_utc": 2,
+    "trading_end_utc": 6,
+    "forced_exit_utc": 6,
+    "trigger_pips": 3,
+    "target_pips": 2,
+    "stop_pips": 4,
+    "max_range_pips": 10,
+    "max_spread_pips": 1.5,
+    "max_trades_per_session": 1,
+    "direction": "LONG",
+    "risk_pct": 0.5,                # Start conservative, ramp to 2.0 after validation
+    "daily_loss_limit_pct": 3.0,
+    "kill_switch_consecutive_losses": 2,
+}
+
+RISK_PCT_BY_PATTERN["ASIAN_GRAVITY"] = ASIAN_GRAVITY["risk_pct"]
+MIN_RRR_BY_PATTERN["ASIAN_GRAVITY"] = 0.5
+TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_GRAVITY"] = 0
+MIN_STOP_PIPS_BY_PATTERN["ASIAN_GRAVITY"] = 3
+PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,
