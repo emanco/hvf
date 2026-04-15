@@ -33,12 +33,9 @@ echo "[4/6] Uploading hvf_trader/ contents..."
 for dir in alerts backtesting data database detector execution monitoring risk tests; do
     scp -r "${LOCAL_PKG}/${dir}" "${VPS}:${REMOTE_DIR}/" 2>/dev/null
 done
-# Package files
-scp "${LOCAL_PKG}/__init__.py" \
-    "${LOCAL_PKG}/config.py" \
-    "${LOCAL_PKG}/main.py" \
-    "${LOCAL_PKG}/requirements.txt" \
-    "${VPS}:${REMOTE_DIR}/" 2>/dev/null
+# Package files (all .py at package root)
+scp ${LOCAL_PKG}/*.py "${VPS}:${REMOTE_DIR}/" 2>/dev/null
+scp "${LOCAL_PKG}/requirements.txt" "${VPS}:${REMOTE_DIR}/" 2>/dev/null
 echo "  Package uploaded."
 
 # 5. Upload top-level scripts and utility scripts
