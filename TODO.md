@@ -1,6 +1,6 @@
 # HVF Auto-Trader — Backlog
 
-Last updated: 2026-03-30
+Last updated: 2026-04-15
 
 ## Deferred Audit Findings
 
@@ -36,3 +36,37 @@ Last updated: 2026-03-30
 ### 5. Per-Pair Daily Trade Limit
 - Max 2 KZ_HUNT entries per pair per day
 - Prevents overtrading a single instrument in choppy conditions
+
+### 6. Portfolio-Level Backtest
+- Run all 8 pairs simultaneously with concurrent trade limits, correlation blocking, and circuit breakers active
+- Current per-pair backtests don't capture trade selection effects from risk gates
+
+### 7. Scoring Weight Re-Evaluation
+- Use `pattern_metadata` (now being collected since 2026-04-15) to run logistic regression on trade outcomes
+- Determine which scoring components actually predict profitability
+- Current weights (25/20/20/15/20) are unjustified by data
+
+### 8. Correlation-Aware Position Sizing
+- Scale lot size down when multiple correlated pairs are open simultaneously
+- e.g., if 3 EUR pairs open, reduce next EUR pair's lot by 50%
+
+## Completed (2026-04-15 Assessment)
+
+- ~~Rolling Sharpe calculation~~ — fixed: uses daily equity returns instead of raw pips
+- ~~pattern_metadata never populated~~ — now stores KZ session, range, extremes, rejection price
+- ~~pnl_estimated flag~~ — new column on TradeRecord, set at both estimated-close paths
+- ~~Performance monitor alerts silenced~~ — re-enabled
+- ~~Thread watchdog~~ — scanner checks if trade monitor is alive, auto-restarts
+- ~~Volume scorer fallback rewarding missing data~~ — changed from 7.5 to 0
+- ~~time.sleep(10) blocking trade monitor~~ — replaced with deferred retry
+- ~~Deal matching/PnL estimation duplicated~~ — extracted to shared deal_utils.py
+- ~~No DB backup~~ — daily GZip backup at 22:00 UTC, 7-day retention
+- ~~Missing news filter for EURJPY/CHFJPY~~ — added to SYMBOL_CURRENCIES
+- ~~Entry confirmation using forming bar~~ — aligned to use completed bars like detection
+
+## Code Polish (Low Priority)
+
+- Equity snapshot table pruning (~43k records/month, no archival)
+- Fix return type annotations on `close_position`/`partial_close` in order_manager.py
+- Remove dead imports for disabled pattern detectors in main.py
+- Add test coverage: risk manager, deal matching, split-order logic
