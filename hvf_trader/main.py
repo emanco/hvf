@@ -4,6 +4,7 @@ HVF Auto-Trader Orchestrator
 Graceful shutdown on SIGINT/SIGTERM
 """
 
+import json
 import logging
 import os
 import signal
@@ -145,11 +146,9 @@ class HVFTrader:
         )
 
         # ─── Performance Monitor ────────────────────────────────────────
-        # Alerts silenced (alerter=None) — still validating setup, alerts are noise.
-        # Re-enable by passing alerter=self.alerter once strategy is profitable.
         self.perf_monitor = PerformanceMonitor(
             trade_logger=self.trade_logger,
-            alerter=None,
+            alerter=self.alerter,
             circuit_breaker=self.circuit_breaker,
         )
 
@@ -241,10 +240,10 @@ class HVFTrader:
         self.health_checker.start()
 
         # Start trade monitor (daemon thread)
-        monitor_thread = threading.Thread(
-            target=self.trade_monitor.start, daemon=True
+        self._monitor_thread = threading.Thread(
+            target=self.trade_monitor.start, daemon=True, name="TradeMonitor"
         )
-        monitor_thread.start()
+        self._monitor_thread.start()
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -340,6 +339,22 @@ class HVFTrader:
                     f"Heartbeat: {cycle_count} cycles, "
                     f"armed={len(self._armed_patterns)}"
                 )
+
+            # Watchdog: restart trade monitor if it died
+            if not self._monitor_thread.is_alive():
+                logger.error("Trade monitor thread died — restarting")
+                self.trade_logger.log_event(
+                    "ERROR", details="Trade monitor thread died, restarting",
+                    severity="ERROR",
+                )
+                if self.alerter:
+                    self.alerter.send_message(
+                        "\U0001f6a8 <b>Trade monitor thread died</b>\nRestarting automatically."
+                    )
+                self._monitor_thread = threading.Thread(
+                    target=self.trade_monitor.start, daemon=True, name="TradeMonitor"
+                )
+                self._monitor_thread.start()
 
             # Sleep until next cycle (60 seconds)
             time.sleep(60)
@@ -572,6 +587,14 @@ class HVFTrader:
                 "h1_index": 0, "l1_index": 0,
                 "h2_index": 0, "l2_index": 0,
                 "h3_index": 0, "l3_index": 0,
+            })
+            # Store KZ-specific data for post-trade analysis
+            pattern_data["pattern_metadata"] = json.dumps({
+                "kz_name": pattern.kz_name,
+                "kz_high": pattern.kz_high,
+                "kz_low": pattern.kz_low,
+                "kz_range": pattern.kz_range,
+                "rejection_price": pattern.rejection_price,
             })
         else:
             # Other non-HVF patterns: disable invalidation by using extreme values
@@ -1006,6 +1029,7 @@ class HVFTrader:
             "intended_entry": pattern.entry_price,
             "intended_sl": pattern.stop_loss,
             "slippage": slippage,
+            "pattern_metadata": pattern_record.pattern_metadata,
         }
         if ticket_partial:
             trade_data["mt5_ticket_partial"] = ticket_partial

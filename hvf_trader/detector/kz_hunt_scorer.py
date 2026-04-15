@@ -102,7 +102,7 @@ def score_kz_hunt(pattern: KZHuntPattern, df: pd.DataFrame) -> float:
             else:
                 vol_score = 0.0
         else:
-            vol_score = 7.5
+            vol_score = 0.0
     else:
         vol_score = 7.5
     score += vol_score

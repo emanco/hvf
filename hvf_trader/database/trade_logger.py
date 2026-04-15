@@ -251,6 +251,7 @@ class TradeLogger:
         pnl: float,
         pnl_pips: float,
         close_reason: str,
+        pnl_estimated: bool = False,
     ) -> None:
         """Record trade closure with final P&L data.
 
@@ -262,6 +263,7 @@ class TradeLogger:
             close_reason: Why the trade closed (TARGET_1, TARGET_2,
                 TRAILING_STOP, INVALIDATION, MANUAL, CIRCUIT_BREAKER,
                 DISCONNECT).
+            pnl_estimated: True if PnL was estimated (no deal history).
         """
         record = self._session.get(TradeRecord, trade_id)
         if record is None:
@@ -283,6 +285,7 @@ class TradeLogger:
         record.pnl = pnl
         record.pnl_pips = pnl_pips
         record.close_reason = close_reason
+        record.pnl_estimated = pnl_estimated
         record.status = "CLOSED"
         try:
             self._session.commit()
@@ -554,6 +557,55 @@ class TradeLogger:
             cutoff = datetime.fromisoformat(since_date).replace(tzinfo=timezone.utc)
             query = query.filter(TradeRecord.closed_at >= cutoff)
         return query.order_by(TradeRecord.closed_at.asc()).all()
+
+    # ─── Equity Returns ──────────────────────────────────────────────────
+
+    def get_daily_equity_returns(self, since: datetime) -> list[float]:
+        """Compute daily percentage returns from equity snapshots.
+
+        Groups snapshots by date, takes the last equity value per day,
+        and computes day-over-day percentage returns.
+
+        Args:
+            since: Only include snapshots after this datetime.
+
+        Returns:
+            List of daily percentage returns (e.g., 0.01 = +1%).
+        """
+        from sqlalchemy import func
+
+        rows = (
+            self._session.query(
+                func.date(EquitySnapshot.timestamp).label("day"),
+                func.max(EquitySnapshot.id).label("last_id"),
+            )
+            .filter(EquitySnapshot.timestamp >= since)
+            .group_by(func.date(EquitySnapshot.timestamp))
+            .order_by(func.date(EquitySnapshot.timestamp))
+            .all()
+        )
+
+        if len(rows) < 2:
+            return []
+
+        # Fetch equity for each day's last snapshot
+        ids = [r.last_id for r in rows]
+        snapshots = (
+            self._session.query(EquitySnapshot.id, EquitySnapshot.equity)
+            .filter(EquitySnapshot.id.in_(ids))
+            .all()
+        )
+        equity_by_id = {s.id: s.equity for s in snapshots}
+        equities = [equity_by_id[rid] for rid in ids if rid in equity_by_id]
+
+        if len(equities) < 2:
+            return []
+
+        returns = []
+        for i in range(1, len(equities)):
+            if equities[i - 1] > 0:
+                returns.append((equities[i] - equities[i - 1]) / equities[i - 1])
+        return returns
 
     # ─── Circuit Breaker ────────────────────────────────────────────────
 

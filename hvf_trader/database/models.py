@@ -118,6 +118,7 @@ class TradeRecord(Base):
     # Close reason
     close_reason = Column(String(50), nullable=True)
     # TARGET_1, TARGET_2, TRAILING_STOP, INVALIDATION, MANUAL, CIRCUIT_BREAKER, DISCONNECT
+    pnl_estimated = Column(Boolean, default=False)  # True when PnL estimated from SL (no deal history)
 
     # Live vs backtest tracking
     intended_entry = Column(Float, nullable=True)  # Pattern's theoretical entry price

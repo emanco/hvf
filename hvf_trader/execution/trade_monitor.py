@@ -659,13 +659,14 @@ class TradeMonitor:
                 f"{' (includes partial profit)' if trade_record.partial_closed else ''}"
             )
             self.trade_logger.log_trade_close(
-                trade_record.id, close_price, pnl, pnl_pips, reason
+                trade_record.id, close_price, pnl, pnl_pips, reason,
+                pnl_estimated=True,
             )
             self.trade_logger.log_event(
                 "TRADE_CLOSED",
                 symbol=trade_record.symbol,
                 trade_id=trade_record.id,
-                details=f"Server-side close (no deals): {reason} at {source}, ~{pnl_pips:+.1f}p",
+                details=f"Server-side close (no deals): {reason} at {source}, ~{pnl_pips:+.1f}p (estimated)",
             )
             if self.alerter:
                 self.alerter.alert_trade_closed(

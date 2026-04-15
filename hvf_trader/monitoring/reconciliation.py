@@ -349,7 +349,8 @@ class Reconciliator:
 
         reason = "RECONCILIATION"
         self.trade_logger.log_trade_close(
-            trade.id, close_price, pnl_dollar, pnl_pips, reason
+            trade.id, close_price, pnl_dollar, pnl_pips, reason,
+            pnl_estimated=True,
         )
         self.trade_logger.log_event(
             "RECONCILIATION",

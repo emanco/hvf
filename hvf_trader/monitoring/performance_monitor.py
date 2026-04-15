@@ -134,36 +134,25 @@ class PerformanceMonitor:
         return alerts
 
     def _check_rolling_sharpe(self):
-        """Compute 60-day rolling Sharpe from per-trade returns.
+        """Compute 60-day rolling Sharpe from daily equity returns.
 
-        Sharpe = mean(returns) / std(returns) * sqrt(252 / avg_trades_per_day)
-        Simplified: annualized from trade-level returns.
+        Uses EquitySnapshot table to compute proper percentage returns,
+        then annualizes with sqrt(252).
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=config.PERF_SHARPE_WINDOW_DAYS)
-        # Never include trades before the go-live date (pre-fix data is unreliable)
         go_live = datetime.fromisoformat(config.PERF_GO_LIVE_DATE).replace(tzinfo=timezone.utc)
         if cutoff < go_live:
             cutoff = go_live
-        trades = self.trade_logger.get_trades_closed_since(cutoff)
 
-        if len(trades) < 20:
+        daily_returns = self.trade_logger.get_daily_equity_returns(since=cutoff)
+        if len(daily_returns) < 10:
             return []
 
-        # Use pnl_pips as returns (currency-neutral, consistent across pairs)
-        returns = [t.pnl_pips for t in trades if t.pnl_pips is not None]
-        if len(returns) < 20:
-            return []
-
-        mean_r = sum(returns) / len(returns)
-        variance = sum((r - mean_r) ** 2 for r in returns) / len(returns)
+        mean_r = sum(daily_returns) / len(daily_returns)
+        variance = sum((r - mean_r) ** 2 for r in daily_returns) / len(daily_returns)
         std_r = math.sqrt(variance) if variance > 0 else 0.001
 
-        # Annualize: trades span N days, so trades_per_year = len / days * 252
-        days_span = (trades[-1].closed_at - trades[0].closed_at).total_seconds() / 86400
-        if days_span < 1:
-            days_span = 1
-        trades_per_year = len(returns) / days_span * 252
-        sharpe = (mean_r / std_r) * math.sqrt(trades_per_year)
+        sharpe = (mean_r / std_r) * math.sqrt(252)
 
         alerts = []
 
@@ -172,7 +161,7 @@ class PerformanceMonitor:
             text = (
                 f"<b>\U0001f6a8 SHARPE CRITICAL</b>\n"
                 f"Rolling {config.PERF_SHARPE_WINDOW_DAYS}d Sharpe: <b>{sharpe:.2f}</b>\n"
-                f"{len(returns)} trades, avg {mean_r:+.1f}p/trade\n"
+                f"{len(daily_returns)} trading days, avg daily return {mean_r*100:+.3f}%\n"
                 f"<b>Recommendation: HALT TRADING</b>"
             )
             alerts.append((key, text))
@@ -181,14 +170,14 @@ class PerformanceMonitor:
             text = (
                 f"<b>\u26a0\ufe0f Sharpe Warning</b>\n"
                 f"Rolling {config.PERF_SHARPE_WINDOW_DAYS}d Sharpe: <b>{sharpe:.2f}</b>\n"
-                f"{len(returns)} trades, avg {mean_r:+.1f}p/trade\n"
+                f"{len(daily_returns)} trading days, avg daily return {mean_r*100:+.3f}%\n"
                 f"<b>Recommendation: reduce position size</b>"
             )
             alerts.append((key, text))
 
         logger.info(
-            "Rolling Sharpe: %.2f (%d trades, %dd window, avg %.1f pips/trade)",
-            sharpe, len(returns), config.PERF_SHARPE_WINDOW_DAYS, mean_r,
+            "Rolling Sharpe: %.2f (%d days, %dd window, avg daily return %.3f%%)",
+            sharpe, len(daily_returns), config.PERF_SHARPE_WINDOW_DAYS, mean_r * 100,
         )
         return alerts
 
