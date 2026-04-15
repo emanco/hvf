@@ -8,6 +8,11 @@ from datetime import datetime, timedelta, timezone
 
 from hvf_trader import config
 from hvf_trader.database.models import TradeRecord
+from hvf_trader.execution.deal_utils import (
+    search_deal_history,
+    find_close_deal,
+    estimate_fallback_pnl,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,63 +223,15 @@ class Reconciliator:
             self._close_fallback(trade, ticket)
             return
 
-        # Search deal history (7 days)
-        now = datetime.now(timezone.utc)
-        from_date = now - timedelta(days=7)
-
-        # Try position-filtered lookup first
-        deals = mt5.history_deals_get(from_date, now, position=ticket)
-
-        # IC Markets often returns nothing for position=ticket filter.
-        # Fall back to broad search filtered by symbol.
-        if not deals:
-            logger.info(
-                f"[RECONCILIATION] No deals for position={ticket}, "
-                f"trying broad search for {trade.symbol}"
-            )
-            all_deals = mt5.history_deals_get(from_date, now)
-            if all_deals:
-                deals = [d for d in all_deals if d.symbol == trade.symbol]
-
+        deals = search_deal_history(ticket, trade.symbol)
         if not deals:
             self._close_fallback(trade, ticket)
             return
 
-        # Find the closing deal — same logic as trade_monitor._handle_server_close
-        close_deal = None
-        expected_deal_type = 1 if trade.direction == "LONG" else 0
-        trade_open_time = trade.opened_at
-        if trade_open_time and trade_open_time.tzinfo is None:
-            trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
-        ticket = trade.mt5_ticket
-
-        # Two-pass matching (mirrors trade_monitor logic):
-        # Pass 1: exact position ticket match
-        for deal in deals:
-            if deal.position_id != ticket or deal.symbol != trade.symbol:
-                continue
-            if deal.type != expected_deal_type:
-                continue
-            if trade_open_time:
-                deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                if deal_time < (trade_open_time - timedelta(seconds=60)):
-                    continue
-            close_deal = deal
-
-        # Pass 2: broader entry-based matching
-        if not close_deal:
-            for deal in deals:
-                if deal.symbol != trade.symbol:
-                    continue
-                if deal.type != expected_deal_type:
-                    continue
-                if deal.entry not in (0, 1):
-                    continue
-                if trade_open_time:
-                    deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                    if deal_time < (trade_open_time - timedelta(seconds=60)):
-                        continue
-                close_deal = deal
+        close_deal = find_close_deal(
+            deals, trade.mt5_ticket, trade.symbol,
+            trade.direction, trade.opened_at,
+        )
 
         if close_deal:
             close_price = close_deal.price
@@ -307,12 +264,7 @@ class Reconciliator:
             self._close_fallback(trade, ticket)
 
     def _close_fallback(self, trade, ticket):
-        """Fallback close when no deal history is available.
-
-        Priority: trailing_sl > stop_loss > entry_price.
-        For partial-closed trades, combines known partial profit with
-        the estimated remainder close.
-        """
+        """Fallback close when no deal history is available."""
         if trade.trailing_sl:
             close_price = trade.trailing_sl
             source = "trailing SL"
@@ -323,29 +275,7 @@ class Reconciliator:
             close_price = trade.entry_price
             source = "entry (no SL available)"
 
-        pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-        original_lots = trade.lot_size or 0.01
-        dollar_per_pip = 10.0
-
-        if trade.direction == "LONG":
-            remainder_pips = (close_price - trade.entry_price) / pip_value
-        else:
-            remainder_pips = (trade.entry_price - close_price) / pip_value
-
-        if trade.partial_closed and trade.partial_close_price:
-            partial_pct = config.PARTIAL_CLOSE_PCT
-            remainder_pct = 1.0 - partial_pct
-            if trade.direction == "LONG":
-                partial_pips = (trade.partial_close_price - trade.entry_price) / pip_value
-            else:
-                partial_pips = (trade.entry_price - trade.partial_close_price) / pip_value
-            partial_pnl = partial_pips * dollar_per_pip * original_lots * partial_pct
-            remainder_pnl = remainder_pips * dollar_per_pip * original_lots * remainder_pct
-            pnl_dollar = partial_pnl + remainder_pnl
-            pnl_pips = (partial_pips * partial_pct) + (remainder_pips * remainder_pct)
-        else:
-            pnl_dollar = remainder_pips * dollar_per_pip * original_lots
-            pnl_pips = remainder_pips
+        pnl_dollar, pnl_pips = estimate_fallback_pnl(trade, close_price)
 
         reason = "RECONCILIATION"
         self.trade_logger.log_trade_close(

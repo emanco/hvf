@@ -17,6 +17,11 @@ except ImportError:
     mt5 = None
 
 from hvf_trader import config
+from hvf_trader.execution.deal_utils import (
+    search_deal_history,
+    find_close_deal,
+    estimate_fallback_pnl,
+)
 
 
 class TradeMonitor:
@@ -539,40 +544,8 @@ class TradeMonitor:
             self._last_invalidation_bar.pop(trade_record.id, None)
 
     def _estimate_fallback_pnl(self, trade_record, close_price):
-        """Estimate PnL when no deal history available.
-
-        For partial-closed trades, combines the known partial profit
-        with the estimated remainder close. Returns (pnl, pnl_pips).
-        """
-        pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
-        direction = trade_record.direction
-        original_lots = trade_record.lot_size or 0.01
-        dollar_per_pip = 10.0  # approximate $10/pip/standard lot
-
-        # Remainder pips (close_price vs entry)
-        if direction == "LONG":
-            remainder_pips = (close_price - trade_record.entry_price) / pip_value
-        else:
-            remainder_pips = (trade_record.entry_price - close_price) / pip_value
-
-        if trade_record.partial_closed and trade_record.partial_close_price:
-            partial_pct = config.PARTIAL_CLOSE_PCT  # 0.60
-            remainder_pct = 1.0 - partial_pct       # 0.40
-
-            if direction == "LONG":
-                partial_pips = (trade_record.partial_close_price - trade_record.entry_price) / pip_value
-            else:
-                partial_pips = (trade_record.entry_price - trade_record.partial_close_price) / pip_value
-
-            partial_pnl = partial_pips * dollar_per_pip * original_lots * partial_pct
-            remainder_pnl = remainder_pips * dollar_per_pip * original_lots * remainder_pct
-            total_pnl = partial_pnl + remainder_pnl
-            # Weighted pips across full position
-            total_pips = (partial_pips * partial_pct) + (remainder_pips * remainder_pct)
-            return total_pnl, total_pips
-        else:
-            pnl = remainder_pips * dollar_per_pip * original_lots
-            return pnl, remainder_pips
+        """Estimate PnL when no deal history available. Delegates to shared utility."""
+        return estimate_fallback_pnl(trade_record, close_price)
 
     def _handle_server_close(self, trade_record):
         """
@@ -598,35 +571,23 @@ class TradeMonitor:
 
         ticket = trade_record.mt5_ticket
 
-        # Search deal history (7 days to catch weekend gaps and delayed reporting)
-        now = datetime.now(timezone.utc)
-        from_date = now - timedelta(days=7)
-        deals = mt5.history_deals_get(from_date, now, position=ticket)
-
-        # IC Markets often returns nothing for position=ticket filter.
-        # Fall back to broad search filtered by symbol.
-        if not deals:
-            logger.info(
-                f"[TRADE_MONITOR] No deals for position={ticket}, "
-                f"trying broad search for {trade_record.symbol}"
-            )
-            all_deals = mt5.history_deals_get(from_date, now)
-            if all_deals:
-                deals = [d for d in all_deals if d.symbol == trade_record.symbol]
+        # Search deal history using shared utility (handles IC Markets broad fallback)
+        deals = search_deal_history(ticket, trade_record.symbol)
 
         if not deals:
-            # IC Markets deals can take seconds to appear. Retry once after delay.
-            logger.info(
-                f"[TRADE_MONITOR] No deals for {trade_record.symbol} ticket={ticket}, "
-                f"retrying in 10s..."
-            )
-            time.sleep(10)
-            now = datetime.now(timezone.utc)
-            deals = mt5.history_deals_get(from_date, now, position=ticket)
-            if not deals:
-                all_deals = mt5.history_deals_get(from_date, now)
-                if all_deals:
-                    deals = [d for d in all_deals if d.symbol == trade_record.symbol]
+            # IC Markets deals can take seconds to appear. Defer to next cycle
+            # instead of blocking the entire monitor thread with sleep.
+            retry_key = f"deal_retry_{ticket}"
+            retry_count = self._missing_position_counts.get(retry_key, 0)
+            if retry_count < 2:
+                self._missing_position_counts[retry_key] = retry_count + 1
+                logger.info(
+                    f"[TRADE_MONITOR] No deals for {trade_record.symbol} ticket={ticket}, "
+                    f"deferring to next cycle (attempt {retry_count + 1}/2)"
+                )
+                return
+            # Exhausted retries, clean up and proceed with fallback
+            self._missing_position_counts.pop(retry_key, None)
 
         if not deals:
             # Final safety check: is the position actually still alive in MT5?
@@ -678,19 +639,12 @@ class TradeMonitor:
             self._last_invalidation_bar.pop(trade_record.id, None)
             return
 
-        # Find the closing deal — must match symbol, direction, and timing
-        close_deal = None
-        # Expected close deal type: LONG closes with SELL (1), SHORT with BUY (0)
-        expected_deal_type = 1 if trade_record.direction == "LONG" else 0
-        trade_open_time = trade_record.opened_at
-        if trade_open_time and trade_open_time.tzinfo is None:
-            trade_open_time = trade_open_time.replace(tzinfo=timezone.utc)
-
         # Log raw deals for diagnostics (IC Markets deal format debugging)
+        expected_deal_type = 1 if trade_record.direction == "LONG" else 0
         logger.info(
             f"[DEAL_SEARCH] {trade_record.symbol} ticket={ticket}: "
             f"{len(deals)} deals found. Looking for type={expected_deal_type}, "
-            f"after={trade_open_time}"
+            f"after={trade_record.opened_at}"
         )
         for d in deals[:10]:
             deal_time = datetime.fromtimestamp(d.time, tz=timezone.utc)
@@ -700,34 +654,11 @@ class TradeMonitor:
                 f"time={deal_time}"
             )
 
-        # Two-pass matching:
-        # Pass 1: exact position ticket match (most reliable when available)
-        for deal in deals:
-            if deal.position_id != ticket or deal.symbol != trade_record.symbol:
-                continue
-            if deal.type != expected_deal_type:
-                continue
-            if trade_open_time:
-                deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                if deal_time < (trade_open_time - timedelta(seconds=60)):
-                    continue
-            close_deal = deal
-
-        # Pass 2: fallback to entry-based matching (broader, for IC Markets quirks)
-        if not close_deal:
-            for deal in deals:
-                if deal.symbol != trade_record.symbol:
-                    continue
-                if deal.type != expected_deal_type:
-                    continue
-                # Accept entry=1 (standard exit) or entry=0 (some brokers use for SL fills)
-                if deal.entry not in (0, 1):
-                    continue
-                if trade_open_time:
-                    deal_time = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                    if deal_time < (trade_open_time - timedelta(seconds=60)):
-                        continue
-                close_deal = deal
+        # Two-pass matching using shared utility
+        close_deal = find_close_deal(
+            deals, ticket, trade_record.symbol,
+            trade_record.direction, trade_record.opened_at,
+        )
 
         if close_deal:
             close_price = close_deal.price
@@ -787,7 +718,8 @@ class TradeMonitor:
                 f"{' (includes partial profit)' if trade_record.partial_closed else ''}."
             )
             self.trade_logger.log_trade_close(
-                trade_record.id, close_price, estimated_pnl, pnl_pips, reason
+                trade_record.id, close_price, estimated_pnl, pnl_pips, reason,
+                pnl_estimated=True,
             )
             if self.alerter:
                 self.alerter.alert_trade_closed(
