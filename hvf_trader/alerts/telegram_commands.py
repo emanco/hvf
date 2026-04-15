@@ -232,33 +232,35 @@ class TelegramCommandHandler:
         self.alerter.send_message("\n".join(lines))
 
     def _cmd_equity(self):
-        """Send equity chart."""
-        all_trades = self.trade_logger.get_all_closed_trades(
-            since_date=config.PERF_GO_LIVE_DATE
+        """Send equity chart using real MT5 snapshots."""
+        go_live_dt = datetime.fromisoformat(config.PERF_GO_LIVE_DATE).replace(
+            tzinfo=timezone.utc
         )
-        if not all_trades:
-            self.alerter.send_message("<b>No closed trades yet</b>")
+        equity_ts = self.trade_logger.get_equity_timeseries(since=go_live_dt)
+        if not equity_ts:
+            self.alerter.send_message("<b>No equity data yet</b>")
             return
-
-        total_pnl = sum(t.pnl for t in all_trades if t.pnl)
 
         account = self.connector.get_account_info()
         if account:
             balance = account["balance"]
             equity = account["equity"]
-            starting_equity = balance - total_pnl
         else:
-            starting_equity = config.STARTING_EQUITY
-            balance = starting_equity + total_pnl
-            equity = balance
+            balance = equity_ts[-1]["balance"]
+            equity = equity_ts[-1]["equity"]
+
+        starting_balance = equity_ts[0]["balance"]
+        total_pnl = balance - starting_balance
 
         cs = self._currency_symbol()
-        chart_path = self.alerter._generate_equity_chart(all_trades, starting_equity, cs)
+        chart_path = self.alerter._generate_equity_chart_from_snapshots(
+            equity_ts, starting_balance, cs
+        )
         if chart_path:
             caption = (
                 f"<b>Equity: {cs}{equity:,.2f}</b>\n"
                 f"Balance: {cs}{balance:,.2f} ({total_pnl:+.2f})\n"
-                f"Trades: {len(all_trades)}"
+                f"Since: {config.PERF_GO_LIVE_DATE}"
             )
             self.alerter.send_photo(chart_path, caption=caption)
         else:
