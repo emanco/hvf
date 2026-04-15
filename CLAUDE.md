@@ -4,7 +4,7 @@
 Automated forex trading bot running KZ Hunt (Kill Zone Hunt) strategy on 5 pairs via MetaTrader 5. Deployed to a Windows VPS, managed as an NSSM service. Python, SQLAlchemy, Telegram alerts.
 
 ## Current State (as of 2026-04-01)
-- **Active strategy**: KZ_HUNT only (all 5 pairs)
+- **Active strategy**: KZ_HUNT only (all 8 pairs)
 - **Disabled**: HVF (PF=0.06 live after 27 trades), Viper (net negative 10yr), London Sweep (net negative)
 - **Account**: IC Markets Demo, ~$10.5k balance, 1% risk per trade
 - **Account history**: Started $700 (2026-03-06), $10k deposit added 2026-03-31
@@ -192,7 +192,7 @@ C:\hvf_trader\venv\Scripts\python.exe -c "import sqlite3; conn = sqlite3.connect
 
 ```
 ENABLED_PATTERNS = ["KZ_HUNT"]
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY", "EURJPY", "CHFJPY"]
 RISK_PCT_BY_PATTERN = {"KZ_HUNT": 1.0}          # 1% equity per trade
 MIN_RRR_BY_PATTERN = {"KZ_HUNT": 1.0}            # minimum reward:risk
 SCORE_THRESHOLD_BY_PATTERN = {"KZ_HUNT": 50}     # minimum score to arm

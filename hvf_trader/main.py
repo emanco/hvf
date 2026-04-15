@@ -629,7 +629,11 @@ class HVFTrader:
             if df is None or df.empty:
                 continue
 
-            latest_bar = df.iloc[-1]
+            # Use the last completed bar for confirmation — the forming bar's
+            # "close" is just the current price and can trigger entries on
+            # intra-bar wicks that retrace by bar close.  Detection already
+            # strips the forming bar (line 390); confirmation must match.
+            latest_bar = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
 
             # Check expiry using actual time since detection (per-pattern freshness)
             expiry_bars = config.PATTERN_FRESHNESS_BARS.get(pattern_type, config.PATTERN_EXPIRY_BARS)

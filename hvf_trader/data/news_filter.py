@@ -24,6 +24,8 @@ SYMBOL_CURRENCIES = {
     "AUDUSD": ["AUD", "USD"],
     "USDJPY": ["USD", "JPY"],
     "GBPJPY": ["GBP", "JPY"],
+    "EURJPY": ["EUR", "JPY"],
+    "CHFJPY": ["CHF", "JPY"],
     "XAUUSD": ["XAU", "USD"],
 }
 
