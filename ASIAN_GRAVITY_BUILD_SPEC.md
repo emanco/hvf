@@ -12,18 +12,23 @@
 Pair:           EURGBP
 Session:        Asian (00:00-06:00 UTC)
 Days:           Wednesday only (weekday index 2)
-Timeframe:      M5 (5-minute bars) for monitoring, M15 fallback if M5 unavailable
-Formation:      00:00-02:00 UTC — measure high/low to get session range
+Formation:      M15 bars during 00:00-02:00 UTC — measure high/low for session range
+Entry detect:   Live tick polling (mt5.symbol_info_tick) every 30s during 02:00-06:00
 Range filter:   Skip session if formation range > 10 pips
 Direction:      LONG only
-Trigger:        Price drops 3 pips below session open (00:00 bar open price)
+Trigger:        Tick bid drops 3 pips below session open (00:00 bar open price)
 Entry:          Market order at trigger level (session_open - 3 pips)
-Take Profit:    +2 pips from entry (session_open - 1 pip)
-Stop Loss:      -4 pips from entry (session_open - 7 pips)
+Take Profit:    +2 pips from entry — set on MT5 order (broker-side tick-level execution)
+Stop Loss:      -4 pips from entry — set on MT5 order (broker-side tick-level execution)
 Max trades:     1 per session (no re-entries)
-Forced exit:    06:00 UTC — close at market
+Forced exit:    06:00 UTC — close at market if still open
 Spread check:   Skip if spread > 1.5 pips at entry time
 ```
+
+### Two-Phase Data Approach
+- **Formation (00:00-02:00)**: Use M15 bars (available on IC Markets) to measure range
+- **Trading (02:00-06:00)**: Use `mt5.symbol_info_tick("EURGBP")` polled every 30 seconds for near-instant trigger detection. No M5 bars needed.
+- **Execution**: TP and SL set on the MT5 order — broker executes at tick level, giving better fills than any bar-based detection
 
 ### Backtest Results (M5, 60 days, Jan 22 - Apr 15, 2026)
 - Trades: 10
@@ -136,32 +141,53 @@ class AsianGravityScanner:
         self._open_trade_id = None  # DB trade ID if a trade is open
     
     def start(self):
-        """Main loop: poll every 60s, only active 00:00-06:00 UTC."""
+        """Main loop: poll every 30s, only active 00:00-06:00 UTC on Wednesdays."""
         # while self._running:
         #   now = utc_now()
-        #   if not asian_session_active(now):
+        #   
+        #   # Sleep outside Asian session
+        #   if now.hour >= 6 or now.hour < 0:
         #       sleep(60); continue
         #   
-        #   # Check day filter (Wednesday only)
+        #   # Day filter: Wednesday only
         #   if now.weekday() != 2:
         #       sleep(60); continue
-        #
-        #   # Fetch latest M5 bars
-        #   df = fetch_and_prepare("EURGBP", "M5", bars=50)
         #   
-        #   # Update tracker with new bars
-        #   tracker.update(...)
+        #   # FORMATION PHASE (00:00-02:00): use M15 bars
+        #   if now.hour < 2:
+        #       df = fetch_and_prepare("EURGBP", "M15", bars=20)
+        #       tracker.update_formation(df)  # track session open, high, low
+        #       sleep(60); continue
         #   
-        #   # If in TRADING state and no open trade:
-        #   #   Check spread
-        #   #   Check gravity entry signal
-        #   #   If signal: run risk checks, execute, log to DB
+        #   # Check range filter at transition
+        #   if tracker.state == "FORMING":
+        #       tracker.finalize_formation()
+        #       if tracker.range_pips > 10:
+        #           tracker.state = "DONE"  # skip tonight
+        #           sleep(60); continue
+        #       tracker.state = "TRADING"
         #   
-        #   # If trade is open:
-        #   #   TP and SL are set on MT5 (broker-side execution)
-        #   #   Just check for time exit at 06:00
+        #   # TRADING PHASE (02:00-06:00): use live tick for instant detection
+        #   if tracker.state == "TRADING" and not tracker.traded_today:
+        #       tick = mt5.symbol_info_tick("EURGBP")
+        #       if tick is None:
+        #           sleep(30); continue
+        #       
+        #       # Check trigger: bid dropped 3 pips below session open
+        #       if tick.bid <= tracker.session_open - trigger_pips * pip:
+        #           # Check spread
+        #           spread = (tick.ask - tick.bid) / pip
+        #           if spread > max_spread_pips:
+        #               sleep(30); continue  # spread too wide, wait
+        #           # Execute entry
+        #           self._execute_entry(tick.bid, tick.ask, spread)
+        #           tracker.traded_today = True
         #   
-        #   sleep(60)
+        #   # TIME EXIT: force close at 06:00
+        #   if now.hour >= 6 and self._open_trade_id:
+        #       self._check_time_exit()
+        #   
+        #   sleep(30)  # 30s poll during trading phase
         pass
     
     def stop(self):
@@ -204,7 +230,8 @@ Adapt to use the same `AsianGravityTracker` and signal logic as the live code.
 ASIAN_GRAVITY = {
     "enabled": False,          # Enable after shadow trading phase
     "instrument": "EURGBP",
-    "timeframe": "M5",         # M15 fallback
+    "formation_timeframe": "M15",  # for range measurement
+    "poll_interval_sec": 30,       # tick polling during trading phase
     "days": [2],               # Wednesday only (0=Mon, 2=Wed)
     "formation_start_utc": 0,
     "formation_end_utc": 2,
@@ -347,36 +374,57 @@ def _check_gravity_trade(self, trade_record):
 ## Data Flow
 
 ```
-Every 60 seconds during 00:00-06:00 UTC Wednesday:
+FORMATION PHASE — Every 60s during 00:00-02:00 UTC Wednesday:
 
-fetch_and_prepare("EURGBP", "M5", bars=50)
-    |
-    v
-AsianGravityTracker.update(bars)
-    |
-    +--> State: FORMING (00:00-02:00)
-    |       Track high/low, compute range
-    |
-    +--> State: TRADING (02:00-06:00)
-    |       If range > 10 pips → DONE (skip)
-    |       If no trade yet:
-    |           current_bid = connector.get_tick("EURGBP").bid
-    |           If bid <= session_open - 3 pips:
-    |               Check spread <= 1.5 pips
-    |               Check circuit breaker
-    |               Calculate lot size (2% risk, 4-pip stop)
-    |               place_market_order(
-    |                   symbol="EURGBP", direction="LONG",
-    |                   sl=entry - 4 pips, tp=entry + 2 pips
-    |               )
-    |               log_trade_open(pattern_type="ASIAN_GRAVITY")
-    |               Telegram alert
-    |               → State: DONE (1 trade per session)
-    |
-    +--> State: DONE
-            If hour >= 6 and trade still open:
-                close_position() → TIME_EXIT
+    fetch_and_prepare("EURGBP", "M15", bars=20)
+        |
+        v
+    AsianGravityTracker.update_formation(bars)
+        - Record session open (00:00 bar open price)
+        - Track running high/low from M15 bars
+        - At 02:00: compute range = high - low
+        - If range > 10 pips -> State: DONE (skip tonight)
+        - Else -> State: TRADING
+
+
+TRADING PHASE — Every 30s during 02:00-06:00 UTC Wednesday:
+
+    tick = mt5.symbol_info_tick("EURGBP")
+        |
+        v
+    Check trigger: tick.bid <= session_open - 3 pips?
+        |
+        +--> No: sleep 30s, check again
+        |
+        +--> Yes:
+                Check spread: (tick.ask - tick.bid) <= 1.5 pips?
+                Check circuit breaker
+                Calculate lot size (2% risk, 4-pip stop)
+                    |
+                    v
+                place_market_order(
+                    symbol="EURGBP", direction="LONG",
+                    sl=entry - 4 pips,    <-- broker-side, tick-level
+                    tp=entry + 2 pips,    <-- broker-side, tick-level
+                )
+                log_trade_open(pattern_type="ASIAN_GRAVITY")
+                Log pattern_metadata: {session_open, range, trigger_price}
+                Telegram alert
+                -> State: DONE (1 trade per session)
+
+
+TIME EXIT — At 06:00 UTC:
+
+    If trade still open (TP/SL not yet hit by broker):
+        close_position() at market
+        log_trade_close(close_reason="TIME_EXIT")
 ```
+
+### Why Tick Polling Works Better Than Bar Detection
+- **Speed**: Detects trigger within 30 seconds vs 15 minutes (M15)
+- **No M5 dependency**: IC Markets demo doesn't serve M5 history — tick data is always available
+- **Execution**: TP and SL set on MT5 order at placement — broker executes at tick level
+- **Simplicity**: Formation uses M15 (available). Trading uses ticks (always available). No gaps.
 
 ---
 
@@ -384,7 +432,7 @@ AsianGravityTracker.update(bars)
 
 1. **TP and SL are broker-side** (set on the MT5 order). The trade monitor only handles time exit at 06:00. This means TP/SL execute at tick level, not bar level — more accurate than the backtest.
 
-2. **Separate thread, not part of the KZ Hunt scanner loop.** The KZ Hunt scanner runs on H1 bars and only acts on new bar closes. The Asian Gravity scanner needs M5 awareness and only runs during a 6-hour window. Different cadence, different logic.
+2. **Separate thread, not part of the KZ Hunt scanner loop.** The KZ Hunt scanner runs on H1 bars and only acts on new bar closes. The Asian Gravity scanner uses M15 for formation and live ticks for entry detection, and only runs during a 6-hour window on Wednesdays. Different cadence, different logic.
 
 3. **1 trade per session, no re-entries.** This is the key insight from the backtest — re-entries after a stop kill the edge. The scanner tracks `_traded_today` and stops looking once an entry happens.
 
@@ -392,7 +440,7 @@ AsianGravityTracker.update(bars)
 
 5. **Wednesday only (initially).** Can expand to Wednesday + Friday after 50+ trades confirm the edge. The config uses a `days` list so adding Friday is a one-line change.
 
-6. **M5 preferred, M15 fallback.** IC Markets currently only serves M15. If M5 becomes available (different account type or terminal update), switch to M5 for finer resolution. The detector works on either — it just needs bar timestamps, OHLC, and the ability to identify 00:00 UTC bars.
+6. **M15 for formation, live ticks for trading.** IC Markets demo doesn't serve M5 history, so formation range is measured from M15 bars (8 bars in the 2-hour window — plenty). Entry detection uses `mt5.symbol_info_tick()` polled every 30 seconds for near-instant trigger detection. This is actually better than bar-based detection at any timeframe.
 
 ---
 
