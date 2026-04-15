@@ -105,18 +105,20 @@ class AsianGravityTracker:
     def check_trigger(self, bid: float, ask: float, pip_value: float,
                       trigger_pips: float, target_pips: float,
                       stop_pips: float, max_spread_pips: float,
-                      symbol: str) -> AsianGravitySignal | None:
-        """Check if the live tick triggers a LONG entry.
+                      symbol: str,
+                      direction: str = "LONG") -> AsianGravitySignal | None:
+        """Check if the live tick triggers an entry.
 
         Args:
             bid: Current bid price.
             ask: Current ask price.
             pip_value: Price per pip.
-            trigger_pips: Distance below session open to trigger entry.
+            trigger_pips: Distance from session open to trigger entry.
             target_pips: TP distance from entry.
             stop_pips: SL distance from entry.
             max_spread_pips: Maximum allowed spread.
             symbol: Instrument symbol.
+            direction: "LONG" (buy dips) or "SHORT" (sell rallies).
 
         Returns:
             AsianGravitySignal if triggered, None otherwise.
@@ -124,28 +126,29 @@ class AsianGravityTracker:
         if self.state != "TRADING" or self.traded_today:
             return None
 
-        trigger_price = self.session_open - trigger_pips * pip_value
-
-        if bid > trigger_price:
-            return None  # Price hasn't dropped enough
-
-        # Check spread
+        # Check spread first
         spread_pips = (ask - bid) / pip_value
         if spread_pips > max_spread_pips:
-            logger.debug(
-                f"[ASIAN_GRAVITY] Trigger hit but spread too wide: "
-                f"{spread_pips:.1f}p > {max_spread_pips}p"
-            )
             return None
 
-        # LONG entry at the ask (buying)
-        entry_price = ask
-        take_profit = entry_price + target_pips * pip_value
-        stop_loss = entry_price - stop_pips * pip_value
+        if direction == "LONG":
+            trigger_price = self.session_open - trigger_pips * pip_value
+            if bid > trigger_price:
+                return None
+            entry_price = ask  # buying at ask
+            take_profit = entry_price + target_pips * pip_value
+            stop_loss = entry_price - stop_pips * pip_value
+        else:  # SHORT
+            trigger_price = self.session_open + trigger_pips * pip_value
+            if ask < trigger_price:
+                return None
+            entry_price = bid  # selling at bid
+            take_profit = entry_price - target_pips * pip_value
+            stop_loss = entry_price + stop_pips * pip_value
 
         return AsianGravitySignal(
             symbol=symbol,
-            direction="LONG",
+            direction=direction,
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,

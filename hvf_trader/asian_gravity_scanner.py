@@ -159,6 +159,7 @@ class AsianGravityScanner:
             stop_pips=cfg["stop_pips"],
             max_spread_pips=cfg["max_spread_pips"],
             symbol=sym,
+            direction=cfg["direction"],
         )
 
         if signal:
@@ -201,7 +202,7 @@ class AsianGravityScanner:
 
         # Place order with TP and SL on MT5
         result = self._order_manager.place_market_order(
-            symbol=sym, direction="LONG", lot_size=lot_size,
+            symbol=sym, direction=signal.direction, lot_size=lot_size,
             stop_loss=signal.stop_loss, take_profit=signal.take_profit,
             comment="ASIAN_GRAVITY",
         )
@@ -225,7 +226,7 @@ class AsianGravityScanner:
         pattern_data = {
             "symbol": sym,
             "timeframe": cfg["formation_timeframe"],
-            "direction": "LONG",
+            "direction": signal.direction,
             "detected_at": datetime.now(timezone.utc),
             "score": 100,  # gravity signal, no scoring
             "status": "TRIGGERED",
@@ -250,7 +251,7 @@ class AsianGravityScanner:
         trade_data = {
             "pattern_id": pattern_record.id,
             "symbol": sym,
-            "direction": "LONG",
+            "direction": signal.direction,
             "pattern_type": "ASIAN_GRAVITY",
             "mt5_ticket": ticket,
             "entry_price": fill_price,
@@ -320,13 +321,19 @@ class AsianGravityScanner:
             close_price = close_deal.price
             pnl = close_deal.profit
             pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-            pnl_pips = (close_price - trade.entry_price) / pip_value
+            if trade.direction == "LONG":
+                pnl_pips = (close_price - trade.entry_price) / pip_value
+            else:
+                pnl_pips = (trade.entry_price - close_price) / pip_value
             reason = "TAKE_PROFIT" if pnl > 0 else "STOP_LOSS"
         else:
             # Estimate from TP/SL levels
             close_price = trade.target_1  # assume TP hit (most likely)
             pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-            pnl_pips = (close_price - trade.entry_price) / pip_value
+            if trade.direction == "LONG":
+                pnl_pips = (close_price - trade.entry_price) / pip_value
+            else:
+                pnl_pips = (trade.entry_price - close_price) / pip_value
             pnl = pnl_pips * 10.0 * trade.lot_size  # approximate
             reason = "TAKE_PROFIT"
 
@@ -371,7 +378,10 @@ class AsianGravityScanner:
         if result:
             close_price = result["fill_price"] if isinstance(result, dict) else 0
             pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-            pnl_pips = (close_price - trade.entry_price) / pip_value
+            if trade.direction == "LONG":
+                pnl_pips = (close_price - trade.entry_price) / pip_value
+            else:
+                pnl_pips = (trade.entry_price - close_price) / pip_value
 
             # Get actual PnL from position profit
             pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) if isinstance(result, dict) else 0

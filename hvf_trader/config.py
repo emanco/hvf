@@ -270,18 +270,18 @@ ASIAN_GRAVITY = {
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
     "poll_interval_sec": 30,
-    "days": [2],                    # Wednesday only (0=Mon, 2=Wed, 4=Fri)
+    "days": [3],                    # Thursday only (0=Mon, 3=Thu)
     "formation_start_utc": 0,
     "formation_end_utc": 2,
     "trading_end_utc": 6,
     "forced_exit_utc": 6,
-    "trigger_pips": 3,
+    "trigger_pips": 5,
     "target_pips": 2,
-    "stop_pips": 4,
-    "max_range_pips": 10,
+    "stop_pips": 8,
+    "max_range_pips": 20,
     "max_spread_pips": 1.5,
     "max_trades_per_session": 1,
-    "direction": "LONG",
+    "direction": "SHORT",           # EURGBP drifts UP on Thu nights, sell the rally
     "risk_pct": 2.0,
     "daily_loss_limit_pct": 3.0,
     "kill_switch_consecutive_losses": 2,

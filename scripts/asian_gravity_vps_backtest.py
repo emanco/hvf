@@ -47,18 +47,22 @@ def init_mt5():
 
 
 def fetch_data():
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=LOOKBACK_YEARS * 365)
-    rates = mt5.copy_rates_range(SYMBOL, mt5.TIMEFRAME_M15, start, now)
-    if rates is None or len(rates) == 0:
-        # Try H1 as fallback
-        print("M15 not available, trying H1...")
-        rates = mt5.copy_rates_range(SYMBOL, mt5.TIMEFRAME_H1, start, now)
-        if rates is None or len(rates) == 0:
-            print("No data available")
-            return None, None
-        return rates, "H1"
-    return rates, "M15"
+    # Use copy_rates_from_pos (works when copy_rates_range doesn't on IC Markets)
+    # Try M5 first, then M15, then H1
+    for tf_name, tf, count in [
+        ("M5", mt5.TIMEFRAME_M5, 50000),
+        ("M15", mt5.TIMEFRAME_M15, 50000),
+        ("H1", mt5.TIMEFRAME_H1, 100000),
+    ]:
+        rates = mt5.copy_rates_from_pos(SYMBOL, tf, 0, count)
+        if rates is not None and len(rates) > 0:
+            first = datetime.fromtimestamp(rates[0][0], tz=timezone.utc)
+            last = datetime.fromtimestamp(rates[-1][0], tz=timezone.utc)
+            print(f"  {tf_name}: {len(rates)} bars, {first.date()} to {last.date()}")
+            return rates, tf_name
+        print(f"  {tf_name}: not available, trying next...")
+    print("No data available")
+    return None, None
 
 
 def run_backtest(rates, timeframe):
