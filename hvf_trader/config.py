@@ -282,12 +282,12 @@ ASIAN_GRAVITY = {
     "max_spread_pips": 1.5,
     "max_trades_per_session": 1,
     "direction": "LONG",
-    "risk_pct": 0.5,                # Start conservative, ramp to 2.0 after validation
+    "risk_pct": 2.0,
     "daily_loss_limit_pct": 3.0,
     "kill_switch_consecutive_losses": 2,
 }
 
-RISK_PCT_BY_PATTERN["ASIAN_GRAVITY"] = ASIAN_GRAVITY["risk_pct"]
+RISK_PCT_BY_PATTERN["ASIAN_GRAVITY"] = 2.0
 MIN_RRR_BY_PATTERN["ASIAN_GRAVITY"] = 0.5
 TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_GRAVITY"] = 0
 MIN_STOP_PIPS_BY_PATTERN["ASIAN_GRAVITY"] = 3
