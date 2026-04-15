@@ -558,6 +558,73 @@ class TradeLogger:
             query = query.filter(TradeRecord.closed_at >= cutoff)
         return query.order_by(TradeRecord.closed_at.asc()).all()
 
+    # ─── Equity Queries ────────────────────────────────────────────────
+
+    def get_previous_day_closing_balance(self) -> float | None:
+        """Get the last balance snapshot from the previous calendar day.
+
+        Returns:
+            The closing balance from yesterday, or None if no snapshots exist.
+        """
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        snapshot = (
+            self._session.query(EquitySnapshot)
+            .filter(EquitySnapshot.timestamp < today_start)
+            .order_by(EquitySnapshot.timestamp.desc())
+            .first()
+        )
+        return snapshot.balance if snapshot else None
+
+    def get_equity_timeseries(self, since: datetime) -> list[dict]:
+        """Get daily closing equity values from snapshots.
+
+        Groups snapshots by date and returns the last equity/balance per day.
+        Uses real MT5 data, so it includes swaps, commissions, and all
+        position PnL regardless of how the bot tracks them.
+
+        Args:
+            since: Only include snapshots after this datetime.
+
+        Returns:
+            List of dicts with keys: date (datetime), balance, equity.
+        """
+        from sqlalchemy import func
+
+        rows = (
+            self._session.query(
+                func.date(EquitySnapshot.timestamp).label("day"),
+                func.max(EquitySnapshot.id).label("last_id"),
+            )
+            .filter(EquitySnapshot.timestamp >= since)
+            .group_by(func.date(EquitySnapshot.timestamp))
+            .order_by(func.date(EquitySnapshot.timestamp))
+            .all()
+        )
+
+        if not rows:
+            return []
+
+        ids = [r.last_id for r in rows]
+        snapshots = (
+            self._session.query(EquitySnapshot)
+            .filter(EquitySnapshot.id.in_(ids))
+            .all()
+        )
+        snap_by_id = {s.id: s for s in snapshots}
+
+        result = []
+        for r in rows:
+            s = snap_by_id.get(r.last_id)
+            if s:
+                result.append({
+                    "date": s.timestamp,
+                    "balance": s.balance,
+                    "equity": s.equity,
+                })
+        return result
+
     # ─── Equity Returns ──────────────────────────────────────────────────
 
     def get_daily_equity_returns(self, since: datetime) -> list[float]:
