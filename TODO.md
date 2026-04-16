@@ -43,25 +43,29 @@ Last updated: 2026-04-16
 ### 2. Keltner Channel Breakout (backtested negative)
 - Backtested: PF 0.90, -11,839p. Simple trend-following doesn't work on forex H1.
 
-### 3. Quiet-Hours Mean Reversion (BB + RSI)
-- [ ] Verify IC Markets quiet-hour spreads on AUDNZD, NZDCAD, AUDCAD
+### 3. ICT Silver Bullet (high potential, moderate complexity)
+- Three 1-hour windows per day for liquidity sweep reversals
+- Similar to KZ Hunt (fade fake moves) but on M1-M5 with tight time windows
+- Active ForexFactory thread with MT5 EAs: thread #1343550
+- Challenge: automating Fair Value Gap detection
+- Pairs: EURUSD, GBPUSD | Timeframe: M1-M5
+
+### 4. Asian Range False-Breakout (natural London Breakout hedge)
+- Price breaks Asian range at London open then reverses back inside
+- Opposite of London Breakout — catches the days LB hits SL
+- Structurally anti-correlated with London Breakout
+- GitHub reference implementation exists
+- Pairs: GBPUSD | Timeframe: M5-H1
+
+### 5. Quiet-Hours Mean Reversion (BB + RSI)
+- [ ] Verify IC Markets quiet-hour spreads on cross pairs
 - [ ] Backtest BB(20,2) + RSI(14) during 21:00-01:00 UTC
 - Fills time gap between London close and Asian open
+- Pairs: AUDNZD, NZDCAD, AUDCAD | Timeframe: M15
 
-### 4. Opening Range Breakout (ORB)
+### 6. Opening Range Breakout (ORB)
 - [ ] Backtest first 15-30 min breakout at London/NY open
 - Needs M5 data infrastructure
-- Pairs: majors | Timeframe: H4
-
-### 4. Quiet-Hours Mean Reversion (BB + RSI)
-- [ ] Verify IC Markets quiet-hour spreads on cross pairs first
-- [ ] Backtest BB(20,2) + RSI(14) on AUDNZD, AUDCAD, NZDCAD during 21:00-01:00 UTC
-- [ ] New scanner thread for quiet hours
-- Pairs: crosses | Timeframe: M15
-
-### 5. Opening Range Breakout (ORB)
-- [ ] Backtest first 15-30 min breakout at London/NY open
-- [ ] Needs M5 data (same infra as Asian Gravity)
 - Pairs: GBPUSD, EURUSD | Timeframe: M5
 
 ---
