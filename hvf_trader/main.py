@@ -158,6 +158,21 @@ class HVFTrader:
         else:
             self.asian_gravity_scanner = None
 
+        # ─── Quantum London Scanner ───────────────────────────────────
+        if config.QUANTUM_LONDON.get("enabled"):
+            from hvf_trader.asian_gravity_scanner import AsianGravityScanner as QLScanner
+            self.quantum_london_scanner = QLScanner(
+                order_manager=self.order_manager,
+                trade_logger=self.trade_logger,
+                risk_manager=self.risk_manager,
+                circuit_breaker=self.circuit_breaker,
+                connector=self.connector,
+                alerter=self.alerter,
+                cfg=config.QUANTUM_LONDON,
+            )
+        else:
+            self.quantum_london_scanner = None
+
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
         for sym in config.INSTRUMENTS:
@@ -265,6 +280,15 @@ class HVFTrader:
             )
             self._asian_gravity_thread.start()
             logger.info("Asian Gravity scanner started")
+
+        # Start Quantum London scanner (daemon thread)
+        if self.quantum_london_scanner:
+            self._quantum_london_thread = threading.Thread(
+                target=self.quantum_london_scanner.start,
+                daemon=True, name="QuantumLondon",
+            )
+            self._quantum_london_thread.start()
+            logger.info("Quantum London scanner started")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -380,6 +404,23 @@ class HVFTrader:
                     target=self.trade_monitor.start, daemon=True, name="TradeMonitor"
                 )
                 self._monitor_thread.start()
+
+            # Watchdog: restart Quantum London scanner if it died
+            if self.quantum_london_scanner and not self._quantum_london_thread.is_alive():
+                logger.error("Quantum London thread died — restarting")
+                self.trade_logger.log_event(
+                    "ERROR", details="Quantum London thread died, restarting",
+                    severity="ERROR",
+                )
+                if self.alerter:
+                    self.alerter.send_message(
+                        "\U0001f6a8 <b>Quantum London thread died</b>\nRestarting automatically."
+                    )
+                self._quantum_london_thread = threading.Thread(
+                    target=self.quantum_london_scanner.start,
+                    daemon=True, name="QuantumLondon",
+                )
+                self._quantum_london_thread.start()
 
             # Watchdog: restart Asian Gravity scanner if it died
             if self.asian_gravity_scanner and not self._asian_gravity_thread.is_alive():

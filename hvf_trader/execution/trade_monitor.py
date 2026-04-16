@@ -116,7 +116,7 @@ class TradeMonitor:
         """
         # Asian Gravity and London Breakout trades have broker-side TP/SL
         # and time-based exit managed by their own scanners
-        if trade_record.pattern_type in ("ASIAN_GRAVITY", "LONDON_BO"):
+        if trade_record.pattern_type in ("ASIAN_GRAVITY", "LONDON_BO", "QUANTUM_LONDON"):
             return
         ticket = trade_record.mt5_ticket
         if ticket is None:

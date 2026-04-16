@@ -293,6 +293,38 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_GRAVITY"] = 0
 MIN_STOP_PIPS_BY_PATTERN["ASIAN_GRAVITY"] = 3
 PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 
+# ─── Quantum London Strategy ────────────────────────────────────────────────
+QUANTUM_LONDON = {
+    "enabled": True,
+    "instrument": "EURGBP",
+    "formation_timeframe": "M15",
+    "poll_interval_sec": 30,
+    "days": [0, 1, 2, 3],              # Mon-Thu
+    "formation_start_utc": 22,          # Daily open at 22:00 UTC (00:00 GMT+2)
+    "formation_end_utc": 0,             # No formation needed — just grab the 22:00 open
+    "trading_start_utc": 0,             # Trading window: 00:00-05:00 UTC
+    "trading_end_utc": 5,
+    "forced_exit_utc": 5,              # Exit before Frankfurt pre-market
+    "trigger_pips": 8,
+    "target_pips": 5,
+    "stop_pips": 18,
+    "max_range_pips": 999,              # No range filter — use daily open deviation only
+    "max_spread_pips": 1.2,
+    "max_trades_per_session": 1,
+    "direction": "BOTH",
+    "risk_pct": 5.0,
+    "daily_loss_limit_pct": 5.0,
+    "kill_switch_consecutive_losses": 3,
+    "pattern_type": "QUANTUM_LONDON",
+    "daily_open_utc_hour": 22,          # Reference price: bar open at this UTC hour
+}
+
+RISK_PCT_BY_PATTERN["QUANTUM_LONDON"] = QUANTUM_LONDON["risk_pct"]
+MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.25
+TRAILING_STOP_ATR_MULT_BY_PATTERN["QUANTUM_LONDON"] = 0
+MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 3
+PATTERN_FRESHNESS_BARS["QUANTUM_LONDON"] = 1
+
 # ─── London Breakout Strategy ───────────────────────────────────────────────
 LONDON_BREAKOUT = {
     "enabled": True,

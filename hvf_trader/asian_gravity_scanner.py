@@ -32,7 +32,7 @@ class AsianGravityScanner:
     """Dedicated scanner for the Asian Gravity strategy."""
 
     def __init__(self, order_manager, trade_logger, risk_manager,
-                 circuit_breaker, connector, alerter):
+                 circuit_breaker, connector, alerter, cfg=None):
         self._tracker = AsianGravityTracker()
         self._order_manager = order_manager
         self._trade_logger = trade_logger
@@ -42,21 +42,23 @@ class AsianGravityScanner:
         self._alerter = alerter
         self._running = False
         self._open_trade_id = None
-        self._cfg = config.ASIAN_GRAVITY
+        self._cfg = cfg or config.ASIAN_GRAVITY
+        self._pattern_type = self._cfg.get("pattern_type", "ASIAN_GRAVITY")
+        self._daily_open_captured = False
 
     def start(self):
         """Main loop. Runs until stop() is called."""
         self._running = True
-        logger.info("[ASIAN_GRAVITY] Scanner thread started")
+        logger.info("[%s] Scanner thread started", self._pattern_type)
 
         while self._running:
             try:
                 self._tick()
             except Exception as e:
-                logger.error(f"[ASIAN_GRAVITY] Scanner error: {e}", exc_info=True)
+                logger.error("[%s] Scanner error: %s", self._pattern_type, e, exc_info=True)
             time.sleep(self._cfg["poll_interval_sec"])
 
-        logger.info("[ASIAN_GRAVITY] Scanner thread stopped")
+        logger.info("[%s] Scanner thread stopped", self._pattern_type)
 
     def stop(self):
         self._running = False
@@ -71,76 +73,114 @@ class AsianGravityScanner:
         cfg = self._cfg
         sym = cfg["instrument"]
         pip = config.PIP_VALUES.get(sym, 0.0001)
+        pt = self._pattern_type
 
-        # Outside Asian session: reset tracker if needed
-        if hour >= cfg["forced_exit_utc"] or hour < cfg["formation_start_utc"]:
-            if self._tracker.state not in ("IDLE", "DONE"):
-                self._force_exit_if_open()
-                self._tracker.state = "DONE"
-            # Reset at end of session for next day
-            if hour >= cfg["forced_exit_utc"] and self._tracker.state == "DONE":
-                self._tracker.reset()
-            return
+        daily_open_hour = cfg.get("daily_open_utc_hour")  # None for Asian Gravity, 22 for QL
+        trading_start = cfg.get("trading_start_utc", cfg.get("formation_end_utc", 2))
+        forced_exit = cfg["forced_exit_utc"]
 
-        # Day filter
-        if weekday not in cfg["days"]:
-            return
+        # ─── Capture daily open at 22:00 UTC (Quantum London mode) ───
 
-        # ─── Formation phase (00:00 - 02:00) ─────────────────────────
-
-        if hour < cfg["formation_end_utc"]:
-            if self._tracker.state == "IDLE":
-                # Start new session — get the first M15 bar for session open
-                df = fetch_and_prepare(sym, cfg["formation_timeframe"], bars=5)
-                if df is None or df.empty:
-                    return
-                bar = df.iloc[-1]
-                self._tracker.start_session(
-                    bar_open=bar["open"], bar_high=bar["high"],
-                    bar_low=bar["low"], date=str(now.date()),
-                )
-                logger.info(
-                    f"[ASIAN_GRAVITY] Formation started: "
-                    f"open={bar['open']:.5f}, date={now.date()}"
-                )
-            elif self._tracker.state == "FORMING":
-                # Update formation with latest M15 bar
+        if daily_open_hour is not None:
+            if hour == daily_open_hour and not self._daily_open_captured:
                 df = fetch_and_prepare(sym, cfg["formation_timeframe"], bars=5)
                 if df is not None and not df.empty:
                     bar = df.iloc[-1]
-                    self._tracker.update_formation(bar["high"], bar["low"])
-            return
-
-        # ─── Transition: formation → trading at 02:00 ────────────────
-
-        if self._tracker.state == "FORMING":
-            self._tracker.finalize_formation(pip, cfg["max_range_pips"])
-            if self._tracker.state == "DONE":
-                # Range filter skipped this session
-                if self._alerter:
-                    self._alerter.send_message(
-                        f"<b>[ASIAN_GRAVITY]</b> Session skipped\n"
-                        f"Range: {self._tracker.range_pips:.1f} pips "
-                        f"(max: {cfg['max_range_pips']})"
+                    self._tracker.start_session(
+                        bar_open=bar["open"], bar_high=bar["high"],
+                        bar_low=bar["low"], date=str(now.date()),
                     )
+                    # Skip formation — go straight to trading
+                    self._tracker.finalize_formation(pip, cfg["max_range_pips"])
+                    self._daily_open_captured = True
+                    logger.info(
+                        "[%s] Daily open captured: %.5f, date=%s",
+                        pt, bar["open"], now.date())
+
+                    # News filter
+                    from hvf_trader.data.news_filter import has_high_impact_same_day
+                    if has_high_impact_same_day(sym):
+                        self._tracker.state = "DONE"
+                        logger.info("[%s] Session skipped: high-impact event today", pt)
+                        return
                 return
 
-            # Same-day high-impact news filter: skip the entire session
-            # if a central bank decision or NFP is scheduled for today.
-            # These events cause directional flow that breaks gravity.
-            from hvf_trader.data.news_filter import has_high_impact_same_day
-            if has_high_impact_same_day(sym):
+            # Between daily open capture (22:00) and trading start (00:00): wait
+            if hour > daily_open_hour or hour < trading_start:
+                if hour >= forced_exit and hour < daily_open_hour:
+                    # After exit, before next open: reset
+                    if self._tracker.state != "IDLE":
+                        self._force_exit_if_open()
+                        self._tracker.reset()
+                        self._daily_open_captured = False
+                return
+
+            # Day filter (check the trading day, not the open day)
+            if weekday not in cfg["days"]:
+                return
+
+            # Force exit
+            if hour >= forced_exit:
+                self._force_exit_if_open()
                 self._tracker.state = "DONE"
-                logger.info(
-                    f"[ASIAN_GRAVITY] Session skipped: "
-                    f"high-impact event scheduled today"
-                )
-                if self._alerter:
-                    self._alerter.send_message(
-                        f"<b>[ASIAN_GRAVITY]</b> Session skipped\n"
-                        f"High-impact event scheduled today for {sym}"
-                    )
                 return
+
+        else:
+            # ─── Original Asian Gravity mode (00:00 UTC session open) ──
+
+            # Outside session
+            if hour >= forced_exit or hour < cfg["formation_start_utc"]:
+                if self._tracker.state not in ("IDLE", "DONE"):
+                    self._force_exit_if_open()
+                    self._tracker.state = "DONE"
+                if hour >= forced_exit and self._tracker.state == "DONE":
+                    self._tracker.reset()
+                return
+
+            # Day filter
+            if weekday not in cfg["days"]:
+                return
+
+            # Formation phase
+            if hour < cfg.get("formation_end_utc", 2):
+                if self._tracker.state == "IDLE":
+                    df = fetch_and_prepare(sym, cfg["formation_timeframe"], bars=5)
+                    if df is None or df.empty:
+                        return
+                    bar = df.iloc[-1]
+                    self._tracker.start_session(
+                        bar_open=bar["open"], bar_high=bar["high"],
+                        bar_low=bar["low"], date=str(now.date()),
+                    )
+                    logger.info("[%s] Formation started: open=%.5f, date=%s",
+                                pt, bar["open"], now.date())
+                elif self._tracker.state == "FORMING":
+                    df = fetch_and_prepare(sym, cfg["formation_timeframe"], bars=5)
+                    if df is not None and not df.empty:
+                        bar = df.iloc[-1]
+                        self._tracker.update_formation(bar["high"], bar["low"])
+                return
+
+            # Transition: formation -> trading
+            if self._tracker.state == "FORMING":
+                self._tracker.finalize_formation(pip, cfg["max_range_pips"])
+                if self._tracker.state == "DONE":
+                    if self._alerter:
+                        self._alerter.send_message(
+                            "<b>[{}]</b> Session skipped\n"
+                            "Range: {:.1f} pips (max: {})".format(
+                                pt, self._tracker.range_pips, cfg["max_range_pips"]))
+                    return
+
+                from hvf_trader.data.news_filter import has_high_impact_same_day
+                if has_high_impact_same_day(sym):
+                    self._tracker.state = "DONE"
+                    logger.info("[%s] Session skipped: high-impact event today", pt)
+                    if self._alerter:
+                        self._alerter.send_message(
+                            "<b>[{}]</b> Session skipped\n"
+                            "High-impact event scheduled today".format(pt))
+                    return
 
         # ─── Trading phase (02:00 - 06:00) ───────────────────────────
 
@@ -185,20 +225,21 @@ class AsianGravityScanner:
     # ─── Execution ────────────────────────────────────────────────────
 
     def _execute(self, signal):
-        """Execute a LONG entry with broker-side TP and SL."""
+        """Execute an entry with broker-side TP and SL."""
         cfg = self._cfg
         sym = signal.symbol
+        pt = self._pattern_type
 
         # Circuit breaker check
         if self._circuit_breaker.is_tripped:
-            logger.info("[ASIAN_GRAVITY] Circuit breaker tripped, skipping entry")
+            logger.info("[%s] Circuit breaker tripped, skipping entry", pt)
             self._tracker.mark_traded()
             return
 
         # Position sizing
         account = self._connector.get_account_info()
         if not account:
-            logger.error("[ASIAN_GRAVITY] Cannot get account info")
+            logger.error("[%s] Cannot get account info", pt)
             return
 
         equity = account["equity"]
@@ -213,7 +254,7 @@ class AsianGravityScanner:
         )
 
         if lot_size <= 0:
-            logger.warning("[ASIAN_GRAVITY] Lot size zero, skipping")
+            logger.warning("[%s] Lot size zero, skipping", pt)
             self._tracker.mark_traded()
             return
 
@@ -221,11 +262,11 @@ class AsianGravityScanner:
         result = self._order_manager.place_market_order(
             symbol=sym, direction=signal.direction, lot_size=lot_size,
             stop_loss=signal.stop_loss, take_profit=signal.take_profit,
-            comment="ASIAN_GRAVITY",
+            comment=self._pattern_type,
         )
 
         if not result:
-            logger.error("[ASIAN_GRAVITY] Order placement failed")
+            logger.error("[%s] Order placement failed", pt)
             self._tracker.mark_traded()
             return
 
@@ -252,7 +293,7 @@ class AsianGravityScanner:
             "target_1": signal.take_profit,
             "target_2": signal.take_profit,
             "rrr": cfg["target_pips"] / cfg["stop_pips"],
-            "pattern_type": "ASIAN_GRAVITY",
+            "pattern_type": self._pattern_type,
             "pattern_metadata": pattern_metadata,
             "h1_price": 0, "l1_price": 0,
             "h2_price": 0, "l2_price": 0,
@@ -269,7 +310,7 @@ class AsianGravityScanner:
             "pattern_id": pattern_record.id,
             "symbol": sym,
             "direction": signal.direction,
-            "pattern_type": "ASIAN_GRAVITY",
+            "pattern_type": self._pattern_type,
             "mt5_ticket": ticket,
             "entry_price": fill_price,
             "stop_loss": signal.stop_loss,
@@ -289,14 +330,14 @@ class AsianGravityScanner:
         self._tracker.mark_traded()
 
         logger.info(
-            f"[ASIAN_GRAVITY] LONG {sym}: fill={fill_price:.5f}, "
+            f"[{pt}] {signal.direction} {sym}: fill={fill_price:.5f}, "
             f"TP={signal.take_profit:.5f}, SL={signal.stop_loss:.5f}, "
             f"lots={lot_size}, spread={signal.spread_pips:.1f}p"
         )
 
         if self._alerter:
             self._alerter.send_message(
-                f"<b>[ASIAN_GRAVITY] LONG {sym}</b>\n"
+                f"<b>[{pt}] {signal.direction} {sym}</b>\n"
                 f"Entry: {fill_price:.5f}\n"
                 f"TP: {signal.take_profit:.5f} (+{cfg['target_pips']}p)\n"
                 f"SL: {signal.stop_loss:.5f} (-{cfg['stop_pips']}p)\n"
@@ -309,6 +350,7 @@ class AsianGravityScanner:
 
     def _check_if_closed(self):
         """Check if broker closed the trade (TP or SL hit)."""
+        pt = self._pattern_type
         if not self._open_trade_id or not MT5_AVAILABLE:
             return
 
@@ -360,14 +402,14 @@ class AsianGravityScanner:
         )
 
         logger.info(
-            f"[ASIAN_GRAVITY] Trade closed: {reason}, "
+            f"[{pt}] Trade closed: {reason}, "
             f"PnL={pnl:.2f} ({pnl_pips:+.1f} pips)"
         )
 
         if self._alerter:
             emoji = "\u2705" if pnl > 0 else "\u274C"
             self._alerter.send_message(
-                f"<b>{emoji} [ASIAN_GRAVITY] {reason}</b>\n"
+                f"<b>{emoji} [{pt}] {reason}</b>\n"
                 f"Close: {close_price:.5f}\n"
                 f"PnL: {pnl:+.2f} ({pnl_pips:+.1f} pips)"
             )
@@ -375,7 +417,8 @@ class AsianGravityScanner:
         self._open_trade_id = None
 
     def _force_exit_if_open(self):
-        """Force close any open trade at session end (06:00 UTC)."""
+        """Force close any open trade at session end."""
+        pt = self._pattern_type
         if not self._open_trade_id:
             return
 
@@ -389,7 +432,7 @@ class AsianGravityScanner:
 
         ticket = trade.mt5_ticket
         result = self._order_manager.close_position(
-            ticket, trade.symbol, trade.direction, "ASIAN_GRAVITY time_exit"
+            ticket, trade.symbol, trade.direction, "{} time_exit".format(pt)
         )
 
         if result:
@@ -408,17 +451,17 @@ class AsianGravityScanner:
             )
 
             logger.info(
-                f"[ASIAN_GRAVITY] Time exit: {pnl_pips:+.1f} pips, PnL={pnl:+.2f}"
+                f"[{pt}] Time exit: {pnl_pips:+.1f} pips, PnL={pnl:+.2f}"
             )
 
             if self._alerter:
                 emoji = "\u2705" if pnl > 0 else "\u274C"
                 self._alerter.send_message(
-                    f"<b>{emoji} [ASIAN_GRAVITY] TIME EXIT</b>\n"
+                    f"<b>{emoji} [{pt}] TIME EXIT</b>\n"
                     f"Close: {close_price:.5f}\n"
                     f"PnL: {pnl:+.2f} ({pnl_pips:+.1f} pips)"
                 )
         else:
-            logger.error(f"[ASIAN_GRAVITY] Failed to close position {ticket}")
+            logger.error(f"[{pt}] Failed to close position {ticket}")
 
         self._open_trade_id = None

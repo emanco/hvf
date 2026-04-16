@@ -131,6 +131,17 @@ class AsianGravityTracker:
         if spread_pips > max_spread_pips:
             return None
 
+        if direction == "BOTH":
+            # Mean-reversion: check both directions, enter whichever triggers
+            long_trigger = self.session_open - trigger_pips * pip_value
+            short_trigger = self.session_open + trigger_pips * pip_value
+            if bid <= long_trigger:
+                direction = "LONG"
+            elif ask >= short_trigger:
+                direction = "SHORT"
+            else:
+                return None
+
         if direction == "LONG":
             trigger_price = self.session_open - trigger_pips * pip_value
             if bid > trigger_price:
