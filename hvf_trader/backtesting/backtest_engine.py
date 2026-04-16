@@ -11,20 +11,25 @@ import numpy as np
 import pandas as pd
 
 from hvf_trader import config
-from hvf_trader.detector.zigzag import compute_zigzag
-from hvf_trader.detector.hvf_detector import detect_hvf_patterns, HVFPattern
-from hvf_trader.detector.pattern_scorer import score_pattern
-from hvf_trader.detector.viper_detector import detect_viper_patterns
-from hvf_trader.detector.viper_scorer import score_viper
 from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
-from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns
-from hvf_trader.detector.london_sweep_scorer import score_london_sweep
-from hvf_trader.detector.wedge_detector import detect_wedge_patterns, check_wedge_breakout, check_wedge_entry_confirmation
-from hvf_trader.detector.wedge_scorer import score_wedge
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.risk.position_sizer import calculate_lot_size, validate_lot_size
+
+# Lazy imports for disabled strategies (avoid ImportError if files missing)
+try:
+    from hvf_trader.detector.zigzag import compute_zigzag
+    from hvf_trader.detector.hvf_detector import detect_hvf_patterns, HVFPattern
+    from hvf_trader.detector.pattern_scorer import score_pattern
+    from hvf_trader.detector.viper_detector import detect_viper_patterns
+    from hvf_trader.detector.viper_scorer import score_viper
+    from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns
+    from hvf_trader.detector.london_sweep_scorer import score_london_sweep
+    from hvf_trader.detector.wedge_detector import detect_wedge_patterns, check_wedge_breakout, check_wedge_entry_confirmation
+    from hvf_trader.detector.wedge_scorer import score_wedge
+except ImportError:
+    pass  # Disabled strategies — not needed for KZ Hunt backtest
 
 logger = logging.getLogger(__name__)
 
