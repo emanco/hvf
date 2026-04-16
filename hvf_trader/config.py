@@ -266,11 +266,11 @@ MIN_STOP_PIPS_BY_SYMBOL = {
 
 # ─── Asian Gravity Strategy ─────────────────────────────────────────────────
 ASIAN_GRAVITY = {
-    "enabled": True,
+    "enabled": False,               # Superseded by Quantum London (better params, 95% WR)
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
     "poll_interval_sec": 30,
-    "days": [3],                    # Thursday only (0=Mon, 3=Thu)
+    "days": [3],
     "formation_start_utc": 0,
     "formation_end_utc": 2,
     "trading_end_utc": 6,
@@ -281,7 +281,7 @@ ASIAN_GRAVITY = {
     "max_range_pips": 20,
     "max_spread_pips": 1.5,
     "max_trades_per_session": 1,
-    "direction": "SHORT",           # EURGBP drifts UP on Thu nights, sell the rally
+    "direction": "SHORT",
     "risk_pct": 2.0,
     "daily_loss_limit_pct": 3.0,
     "kill_switch_consecutive_losses": 2,
