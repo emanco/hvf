@@ -2,32 +2,55 @@
 
 Last updated: 2026-04-16
 
-## Asian Gravity Strategy — LIVE
-- [x] Built and deployed (Thursday SHORT EURGBP, T5/T2/S8, rng<20)
+## Active Strategies
+
+### KZ Hunt — LIVE (collecting post-fix data)
+- [x] Entry confirmation bug fixed (forming bar → completed bar)
+- [ ] Collect 30-50 post-fix trades to validate WR improvement
+- [ ] If WR stays below 45% after 50 trades, needs fundamental review
+- Live WR: 36% (69 trades) vs 61% backtest. Bug fix should improve this.
+
+### London Breakout — LIVE (first trade next Monday)
+- [x] Built and deployed (GBPUSD Mon-Tue, rng 12-20, TP=1.0x, exit@13)
+- [x] Backtested: PF 1.77, 66% WR, +575p over 8 years
+- [ ] Collect 20+ live trades to validate
+
+### Quantum London — LIVE (first trade tonight)
+- [x] Built and deployed (EURGBP Mon-Thu, T8/T5/S18, both dirs, 5% risk)
+- [x] Daily open at 22:00 UTC (GMT+2) — critical timezone fix
+- [x] Backtested: 95% WR, PF 17.86, +415p over 8 months (119 trades)
 - [x] Same-day news filter (skip central bank days)
-- [ ] Collect 20+ live trades to validate 79% WR
-- [ ] Consider adding Friday after validation
-- [ ] Consider tighter range filter (rng<12) if WR holds
+- [ ] Collect 50+ live trades to validate
+- [ ] Consider EURCHF as second pair (backtested negative — needs more research)
 
-## New Strategies Pipeline (research: `STRATEGY_RESEARCH_2026-04-16.md`)
+### Asian Gravity — DISABLED
+- Superseded by Quantum London (same pair, better params, 95% vs 79% WR)
 
-### 1. London Breakout — NEXT BUILD
-- [ ] Backtest on H1 data (Asian range high/low breakout at London open)
-- [ ] Build detector + scorer
-- [ ] Conflict resolution with KZ Hunt (same session, opposite logic)
-- [ ] Deploy and validate
-- Pairs: GBPUSD, EURUSD, GBPJPY | Timeframe: H1 | Claimed PF: >1.5
+## Infrastructure
 
-### 2. EMA 200 Pullback + ADX
-- [ ] Backtest pullback-to-EMA-zone entries when ADX > 25
-- [ ] Build detector (uses existing indicators: EMA 200, ADX 14, ATR 14)
-- [ ] Natural hedge for KZ Hunt — profits when trends are strong
-- Pairs: majors | Timeframe: H1 entry, H4/D1 trend filter
+### Local Backtesting
+- [x] CSV data exported from VPS: 9 pairs x H1 (8yr) + M5 (8mo) at backtests/data/
+- [ ] Fix KZ Hunt local backtest — needs full indicator pipeline matching fetch_and_prepare
+- [ ] Periodic re-export of newer data from VPS
 
-### 3. Keltner Channel Breakout
-- [ ] Backtest Keltner (EMA 20 +/- 2x ATR) breakouts with ADX confirmation
-- [ ] Zero new indicators — EMA + ATR already computed
-- [ ] Fires on volatility expansion (opposite to KZ Hunt's regime)
+### Strategy Research Pipeline
+- Research report: `STRATEGY_RESEARCH_2026-04-16.md`
+- Quantum London report: `QUANTUM_LONDON_REPORT.md`
+
+### 1. EMA 200 Pullback + ADX (backtested negative — needs refinement)
+- Backtested with basic params: PF 0.86, -5,424p. Needs additional filters or different approach.
+
+### 2. Keltner Channel Breakout (backtested negative)
+- Backtested: PF 0.90, -11,839p. Simple trend-following doesn't work on forex H1.
+
+### 3. Quiet-Hours Mean Reversion (BB + RSI)
+- [ ] Verify IC Markets quiet-hour spreads on AUDNZD, NZDCAD, AUDCAD
+- [ ] Backtest BB(20,2) + RSI(14) during 21:00-01:00 UTC
+- Fills time gap between London close and Asian open
+
+### 4. Opening Range Breakout (ORB)
+- [ ] Backtest first 15-30 min breakout at London/NY open
+- Needs M5 data infrastructure
 - Pairs: majors | Timeframe: H4
 
 ### 4. Quiet-Hours Mean Reversion (BB + RSI)
