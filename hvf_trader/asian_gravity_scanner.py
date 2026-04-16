@@ -125,6 +125,23 @@ class AsianGravityScanner:
                     )
                 return
 
+            # Same-day high-impact news filter: skip the entire session
+            # if a central bank decision or NFP is scheduled for today.
+            # These events cause directional flow that breaks gravity.
+            from hvf_trader.data.news_filter import has_high_impact_same_day
+            if has_high_impact_same_day(sym):
+                self._tracker.state = "DONE"
+                logger.info(
+                    f"[ASIAN_GRAVITY] Session skipped: "
+                    f"high-impact event scheduled today"
+                )
+                if self._alerter:
+                    self._alerter.send_message(
+                        f"<b>[ASIAN_GRAVITY]</b> Session skipped\n"
+                        f"High-impact event scheduled today for {sym}"
+                    )
+                return
+
         # ─── Trading phase (02:00 - 06:00) ───────────────────────────
 
         if self._tracker.state != "TRADING":

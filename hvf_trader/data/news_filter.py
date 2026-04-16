@@ -92,6 +92,58 @@ def has_upcoming_news(symbol: str, window_minutes: int = None) -> bool:
     return False
 
 
+def has_high_impact_same_day(symbol: str) -> bool:
+    """Check if any high-impact news is scheduled for today (UTC).
+
+    Used by Asian Gravity to skip the entire overnight session before
+    central bank decisions, NFP, etc. The standard 30-min window doesn't
+    catch events that happen 8-12 hours after the Asian session.
+
+    Args:
+        symbol: instrument symbol (e.g. "EURGBP")
+
+    Returns:
+        True if a high-impact event for this symbol's currencies is
+        scheduled anywhere today (UTC). Also returns True for the day
+        before major holidays (Easter, Christmas) — but those need a
+        separate calendar; this only checks ForexFactory events.
+    """
+    if is_cache_stale():
+        return True  # fail-closed
+
+    currencies = SYMBOL_CURRENCIES.get(symbol, [])
+    if not currencies:
+        return False
+
+    events = load_cached_events()
+    if not events:
+        return False
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(hours=24)
+
+    for event in events:
+        if event.get("impact") != "High":
+            continue
+        if event.get("country") not in currencies:
+            continue
+
+        event_time = _parse_event_time(event.get("date", ""))
+        if event_time is None:
+            continue
+
+        if today_start <= event_time < today_end:
+            logger.info(
+                f"High-impact same-day event blocking {symbol}: "
+                f"{event.get('title', 'Unknown')} ({event['country']}) "
+                f"at {event_time:%H:%M UTC}"
+            )
+            return True
+
+    return False
+
+
 def get_upcoming_events(hours_ahead: int = 24) -> list[dict]:
     """Get upcoming medium+ impact events in the next N hours.
 
