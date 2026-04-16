@@ -299,7 +299,7 @@ QUANTUM_LONDON = {
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
     "poll_interval_sec": 30,
-    "days": [0, 1, 2, 3],              # Mon-Thu
+    "days": [1, 2, 3, 4],              # Mon-Thu nights (trading happens Tue-Fri 00:00-05:00 UTC)
     "formation_start_utc": 22,          # Daily open at 22:00 UTC (00:00 GMT+2)
     "formation_end_utc": 0,             # No formation needed — just grab the 22:00 open
     "trading_start_utc": 0,             # Trading window: 00:00-05:00 UTC
