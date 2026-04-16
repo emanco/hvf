@@ -293,6 +293,25 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_GRAVITY"] = 0
 MIN_STOP_PIPS_BY_PATTERN["ASIAN_GRAVITY"] = 3
 PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 
+# ─── London Breakout Strategy ───────────────────────────────────────────────
+LONDON_BREAKOUT = {
+    "enabled": True,
+    "instrument": "GBPUSD",
+    "days": [0, 1],                 # Monday + Tuesday (0=Mon, 1=Tue)
+    "min_range_pips": 12,
+    "max_range_pips": 20,
+    "tp_multiplier": 1.0,           # TP = 1.0x Asian range from entry
+    "exit_hour_utc": 13,            # Force close at 13:00 UTC
+    "spread_pips": 1.0,
+    "risk_pct": 1.0,
+}
+
+RISK_PCT_BY_PATTERN["LONDON_BO"] = LONDON_BREAKOUT["risk_pct"]
+MIN_RRR_BY_PATTERN["LONDON_BO"] = 0.5
+TRAILING_STOP_ATR_MULT_BY_PATTERN["LONDON_BO"] = 0
+MIN_STOP_PIPS_BY_PATTERN["LONDON_BO"] = 10
+PATTERN_FRESHNESS_BARS["LONDON_BO"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,

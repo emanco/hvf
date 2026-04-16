@@ -114,8 +114,9 @@ class TradeMonitor:
         own scanner thread (TP/SL broker-side, time exit at 06:00), so we
         skip them here to avoid interference.
         """
-        # Asian Gravity trades are fully managed by AsianGravityScanner
-        if trade_record.pattern_type == "ASIAN_GRAVITY":
+        # Asian Gravity and London Breakout trades have broker-side TP/SL
+        # and time-based exit managed by their own scanners
+        if trade_record.pattern_type in ("ASIAN_GRAVITY", "LONDON_BO"):
             return
         ticket = trade_record.mt5_ticket
         if ticket is None:

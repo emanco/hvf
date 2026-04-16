@@ -172,6 +172,12 @@ class HVFTrader:
         for sym in config.INSTRUMENTS:
             self._kz_trackers[sym] = KillZoneTracker()
 
+        # ─── London Breakout Tracker ──────────────────────────────────
+        self._london_bo_tracker = None
+        if config.LONDON_BREAKOUT.get("enabled"):
+            from hvf_trader.detector.london_breakout import LondonBreakoutTracker
+            self._london_bo_tracker = LondonBreakoutTracker()
+
         # ─── State ───────────────────────────────────────────────────────
         self._running = False
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
@@ -293,6 +299,10 @@ class HVFTrader:
                 for symbol in config.INSTRUMENTS:
                     self._scan_instrument(symbol)
 
+                # London Breakout: check for Asian range breakout
+                if self._london_bo_tracker:
+                    self._scan_london_breakout(now)
+
                 # Entry monitor: check armed patterns for confirmation
                 self._check_armed_patterns()
 
@@ -399,6 +409,214 @@ class HVFTrader:
 
             # Sleep until next cycle (60 seconds)
             time.sleep(60)
+
+    def _scan_london_breakout(self, now):
+        """Scan for London Breakout on GBPUSD.
+
+        Runs within the main scanner loop on H1 bars.
+        - 00:00-07:00 UTC: track Asian range
+        - 07:00 UTC: lock range, apply filters
+        - 08:00-13:00 UTC: detect breakout, execute
+        - 13:00 UTC: force close if open
+        """
+        cfg = config.LONDON_BREAKOUT
+        sym = cfg["instrument"]
+        hour = now.hour
+        weekday = now.weekday()
+
+        # Day filter
+        if weekday not in cfg["days"]:
+            return
+
+        # Outside relevant hours
+        if hour >= cfg["exit_hour_utc"]:
+            # Force close any open London BO trade
+            self._force_close_london_bo()
+            if self._london_bo_tracker.state != "IDLE":
+                self._london_bo_tracker.reset()
+            return
+
+        # Fetch latest H1 bar
+        df = fetch_and_prepare(sym, config.PRIMARY_TIMEFRAME, bars=10)
+        if df is None or df.empty:
+            return
+
+        latest = df.iloc[-1]
+        bar_time = df.index[-1]
+
+        # Formation phase (00:00-07:00)
+        if hour < 7:
+            self._london_bo_tracker.update_asian_bar(
+                latest["high"], latest["low"], bar_time,
+            )
+            return
+
+        # Lock range at 07:00
+        if self._london_bo_tracker.state == "FORMING":
+            qualified = self._london_bo_tracker.finalize_range(cfg)
+            if not qualified:
+                logger.info(
+                    "[LONDON_BO] Session skipped: {}".format(
+                        self._london_bo_tracker.skipped_reason))
+                return
+
+            # Same-day news filter
+            from hvf_trader.data.news_filter import has_high_impact_same_day
+            if has_high_impact_same_day(sym):
+                self._london_bo_tracker.state = "DONE"
+                logger.info("[LONDON_BO] Session skipped: high-impact event today")
+                return
+
+        # Trading phase (08:00-13:00)
+        if hour < 8:
+            return  # wait for London open
+
+        if self._london_bo_tracker.traded_today:
+            return
+
+        signal = self._london_bo_tracker.check_breakout(latest, cfg)
+        if signal:
+            self._execute_london_breakout(signal)
+
+    def _execute_london_breakout(self, signal):
+        """Execute a London Breakout trade."""
+        cfg = config.LONDON_BREAKOUT
+        sym = signal.symbol
+
+        # Circuit breaker
+        if self.circuit_breaker.is_tripped:
+            self._london_bo_tracker.mark_traded()
+            return
+
+        # Position sizing
+        account = self.connector.get_account_info()
+        if not account:
+            return
+        equity = account["equity"]
+        stop_distance = abs(signal.entry_price - signal.stop_loss)
+
+        from hvf_trader.risk.position_sizer import calculate_lot_size
+        lot_size = calculate_lot_size(
+            equity=equity, risk_pct=cfg["risk_pct"],
+            stop_distance_price=stop_distance, symbol=sym,
+            account_currency=account.get("currency", "USD"),
+        )
+        if lot_size <= 0:
+            self._london_bo_tracker.mark_traded()
+            return
+
+        # Place order with TP and SL
+        result = self.order_manager.place_market_order(
+            symbol=sym, direction=signal.direction, lot_size=lot_size,
+            stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+            comment="LONDON_BO",
+        )
+        if not result:
+            logger.error("[LONDON_BO] Order placement failed")
+            self._london_bo_tracker.mark_traded()
+            return
+
+        ticket = result["ticket"]
+        fill_price = result["fill_price"]
+        metadata = self._london_bo_tracker.get_pattern_metadata()
+
+        # Log pattern
+        pattern_data = {
+            "symbol": sym,
+            "timeframe": config.PRIMARY_TIMEFRAME,
+            "direction": signal.direction,
+            "detected_at": datetime.now(timezone.utc),
+            "score": signal.score,
+            "status": "TRIGGERED",
+            "entry_price": fill_price,
+            "stop_loss": signal.stop_loss,
+            "target_1": signal.take_profit,
+            "target_2": signal.take_profit,
+            "rrr": abs(signal.take_profit - fill_price) / abs(fill_price - signal.stop_loss) if abs(fill_price - signal.stop_loss) > 0 else 0,
+            "pattern_type": "LONDON_BO",
+            "pattern_metadata": metadata,
+            "h1_price": 0, "l1_price": 0,
+            "h2_price": 0, "l2_price": 0,
+            "h3_price": signal.asian_high, "l3_price": signal.asian_low,
+            "h1_index": 0, "l1_index": 0,
+            "h2_index": 0, "l2_index": 0,
+            "h3_index": 0, "l3_index": 0,
+        }
+        pattern_record = self.trade_logger.log_pattern(pattern_data)
+
+        # Log trade
+        if signal.direction == "LONG":
+            slippage = fill_price - signal.entry_price
+        else:
+            slippage = signal.entry_price - fill_price
+
+        trade_data = {
+            "pattern_id": pattern_record.id,
+            "symbol": sym,
+            "direction": signal.direction,
+            "pattern_type": "LONDON_BO",
+            "mt5_ticket": ticket,
+            "entry_price": fill_price,
+            "stop_loss": signal.stop_loss,
+            "target_1": signal.take_profit,
+            "target_2": signal.take_profit,
+            "lot_size": lot_size,
+            "opened_at": datetime.now(timezone.utc),
+            "status": "OPEN",
+            "intended_entry": signal.entry_price,
+            "intended_sl": signal.stop_loss,
+            "slippage": slippage,
+            "pattern_metadata": metadata,
+        }
+        trade_record = self.trade_logger.log_trade_open(trade_data)
+        self._london_bo_tracker.mark_traded()
+
+        logger.info(
+            "[LONDON_BO] {} {}: fill={:.5f}, TP={:.5f}, SL={:.5f}, "
+            "lots={}, range={:.0f}p".format(
+                signal.direction, sym, fill_price, signal.take_profit,
+                signal.stop_loss, lot_size, signal.asian_range_pips))
+
+        if self.alerter:
+            self.alerter.send_message(
+                "<b>[LONDON_BO] {} {}</b>\n"
+                "Entry: {:.5f}\n"
+                "TP: {:.5f}\nSL: {:.5f}\n"
+                "Lots: {}\n"
+                "Asian range: {:.0f}p ({:.5f}-{:.5f})".format(
+                    signal.direction, sym, fill_price,
+                    signal.take_profit, signal.stop_loss,
+                    lot_size, signal.asian_range_pips,
+                    signal.asian_low, signal.asian_high))
+
+    def _force_close_london_bo(self):
+        """Force close any open LONDON_BO trade at exit hour."""
+        from hvf_trader.database.models import TradeRecord
+        open_trades = self.trade_logger.get_open_trades()
+        for trade in open_trades:
+            if trade.pattern_type != "LONDON_BO":
+                continue
+            ticket = trade.mt5_ticket
+            result = self.order_manager.close_position(
+                ticket, trade.symbol, trade.direction, "LONDON_BO time_exit"
+            )
+            if result:
+                close_price = result["fill_price"] if isinstance(result, dict) else 0
+                pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
+                if trade.direction == "LONG":
+                    pnl_pips = (close_price - trade.entry_price) / pip_value
+                else:
+                    pnl_pips = (trade.entry_price - close_price) / pip_value
+                pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) if isinstance(result, dict) else 0
+                self.trade_logger.log_trade_close(
+                    trade.id, close_price, pnl, pnl_pips, "TIME_EXIT"
+                )
+                logger.info("[LONDON_BO] Time exit: {:+.1f} pips".format(pnl_pips))
+                if self.alerter:
+                    emoji = "\u2705" if pnl > 0 else "\u274C"
+                    self.alerter.send_message(
+                        "<b>{} [LONDON_BO] TIME EXIT</b>\n"
+                        "PnL: {:+.1f} pips".format(emoji, pnl_pips))
 
     def _scan_instrument(self, symbol: str):
         """Scan a single instrument for patterns across all detectors."""
