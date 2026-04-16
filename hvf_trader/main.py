@@ -31,17 +31,8 @@ from hvf_trader.monitoring.health_check import HealthChecker
 from hvf_trader.monitoring.reconciliation import Reconciliator
 from hvf_trader.alerts.telegram_bot import TelegramAlerter
 from hvf_trader.alerts.telegram_commands import TelegramCommandHandler
-from hvf_trader.detector.zigzag import compute_zigzag
-from hvf_trader.detector.hvf_detector import detect_hvf_patterns, check_entry_confirmation
-from hvf_trader.detector.pattern_scorer import score_pattern
-from hvf_trader.detector.viper_detector import detect_viper_patterns, check_viper_entry_confirmation
-from hvf_trader.detector.viper_scorer import score_viper
 from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns, check_kz_hunt_entry_confirmation
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
-from hvf_trader.detector.london_sweep_detector import detect_london_sweep_patterns, check_london_sweep_entry_confirmation
-from hvf_trader.detector.london_sweep_scorer import score_london_sweep
-from hvf_trader.detector.wedge_detector import detect_wedge_patterns, check_wedge_breakout, check_wedge_entry_confirmation
-from hvf_trader.detector.wedge_scorer import score_wedge
 from hvf_trader.detector.killzone_tracker import KillZoneTracker
 from hvf_trader.detector.signal_prioritizer import prioritize_signals
 from hvf_trader.data.data_fetcher import fetch_and_prepare, get_volume_average
@@ -633,10 +624,6 @@ class HVFTrader:
 
         self._last_scan_bar[symbol] = latest_time
 
-        # Fetch multi-TF data
-        df_4h = fetch_and_prepare(symbol, config.CONFIRMATION_TIMEFRAME, bars=200)
-        df_d1 = fetch_and_prepare(symbol, "D1", bars=100)
-
         # Update KZ tracker incrementally — only process bars newer than last update.
         # This matches the backtest's continuous tracker (single instance fed every bar).
         # On first scan after startup the tracker is empty so we warm up from 200 bars.
@@ -666,49 +653,12 @@ class HVFTrader:
         # Collect all signals from all detectors
         all_signals: list[dict] = []
 
-        # 1. HVF Detector
-        if "HVF" in config.ENABLED_PATTERNS:
-            pivots = compute_zigzag(df_completed, config.ZIGZAG_ATR_MULTIPLIER)
-            if len(pivots) >= 6:
-                hvf_patterns = detect_hvf_patterns(
-                    df=df_completed, symbol=symbol,
-                    timeframe=config.PRIMARY_TIMEFRAME,
-                    pivots=pivots, df_4h=df_4h,
-                )
-                for p in hvf_patterns:
-                    p.score = score_pattern(p, df_completed, df_4h, df_d1)
-                    threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("HVF", config.SCORE_THRESHOLD)
-                    if p.score >= threshold:
-                        all_signals.append({
-                            "pattern": p, "pattern_type": "HVF",
-                            "symbol": symbol, "direction": p.direction,
-                            "score": p.score,
-                        })
-
-        # 2. Viper Detector (skip excluded symbols)
-        if "VIPER" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("VIPER", []):
-            viper_patterns = detect_viper_patterns(df_completed, symbol, config.PRIMARY_TIMEFRAME)
-            for p in viper_patterns:
-                # Direction filter (SHORT-only Viper)
-                allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("VIPER")
-                if allowed_dir and p.direction != allowed_dir:
-                    continue
-                p.score = score_viper(p, df_completed)
-                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("VIPER", 50)
-                if p.score >= threshold:
-                    all_signals.append({
-                        "pattern": p, "pattern_type": "VIPER",
-                        "symbol": symbol, "direction": p.direction,
-                        "score": p.score,
-                    })
-
-        # 3. KZ Hunt Detector (skip excluded symbols)
+        # KZ Hunt Detector
         if "KZ_HUNT" in config.ENABLED_PATTERNS and kz_tracker and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("KZ_HUNT", []):
             kz_patterns = detect_kz_hunt_patterns(
                 df_completed, symbol, config.PRIMARY_TIMEFRAME, kz_tracker,
             )
             for p in kz_patterns:
-                # Direction filter (LONG-only KZ Hunt)
                 allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("KZ_HUNT")
                 if allowed_dir and p.direction != allowed_dir:
                     continue
@@ -720,39 +670,6 @@ class HVFTrader:
                         "symbol": symbol, "direction": p.direction,
                         "score": p.score,
                     })
-
-        # 4. London Sweep Detector (skip excluded symbols)
-        if "LONDON_SWEEP" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("LONDON_SWEEP", []):
-            ls_patterns = detect_london_sweep_patterns(df_completed, symbol, config.PRIMARY_TIMEFRAME)
-            for p in ls_patterns:
-                p.score = score_london_sweep(p, df_completed)
-                threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("LONDON_SWEEP", 50)
-                if p.score >= threshold:
-                    all_signals.append({
-                        "pattern": p, "pattern_type": "LONDON_SWEEP",
-                        "symbol": symbol, "direction": p.direction,
-                        "score": p.score,
-                    })
-
-        # 5. Wedge Detector (D1 timeframe, skip excluded symbols)
-        if "WEDGE" in config.ENABLED_PATTERNS and symbol not in config.PATTERN_SYMBOL_EXCLUSIONS.get("WEDGE", []):
-            if df_d1 is not None and len(df_d1) >= config.WEDGE_MIN_BARS + 2 * config.WEDGE_SWING_LOOKBACK:
-                wedge_patterns = detect_wedge_patterns(df_d1, symbol, config.WEDGE_DETECTION_TIMEFRAME)
-                for p in wedge_patterns:
-                    allowed_dir = config.ALLOWED_DIRECTIONS_BY_PATTERN.get("WEDGE")
-                    if allowed_dir and p.direction != allowed_dir:
-                        continue
-                    # Only arm if breakout is confirmed on the latest D1 bar
-                    d1_atr = df_d1["atr"].iloc[-1] if "atr" in df_d1.columns else 0
-                    if d1_atr > 0 and check_wedge_breakout(p, df_d1.iloc[-1], len(df_d1) - 1, d1_atr):
-                        p.score = score_wedge(p, df_d1)
-                        threshold = config.SCORE_THRESHOLD_BY_PATTERN.get("WEDGE", 55)
-                        if p.score >= threshold:
-                            all_signals.append({
-                                "pattern": p, "pattern_type": "WEDGE",
-                                "symbol": symbol, "direction": p.direction,
-                                "score": p.score,
-                            })
 
         # Prioritize and arm
         prioritized = prioritize_signals(all_signals)
@@ -928,42 +845,14 @@ class HVFTrader:
                 expired.append(armed)
                 continue
 
-            # Entry confirmation depends on pattern type
+            # Entry confirmation: KZ_HUNT is the only armed-then-confirmed strategy
             confirmed = False
-            if pattern_type == "HVF":
-                from hvf_trader.detector.hvf_detector import HVFPattern
-                from hvf_trader.detector.zigzag import Pivot
-                hvf_pattern = HVFPattern(
-                    symbol=symbol, timeframe=record.timeframe,
-                    direction=direction,
-                    h1=Pivot(0, record.h1_price, "H", pd.NaT),
-                    l1=Pivot(0, record.l1_price, "L", pd.NaT),
-                    h2=Pivot(0, record.h2_price, "H", pd.NaT),
-                    l2=Pivot(0, record.l2_price, "L", pd.NaT),
-                    h3=Pivot(0, record.h3_price, "H", pd.NaT),
-                    l3=Pivot(0, record.l3_price, "L", pd.NaT),
-                    entry_price=record.entry_price,
-                    stop_loss=record.stop_loss,
-                    target_1=record.target_1,
-                    target_2=record.target_2,
-                )
-                vol_avg = get_volume_average(df, 20)
-                confirmed = check_entry_confirmation(hvf_pattern, latest_bar, vol_avg)
-            elif pattern_type in ("VIPER", "KZ_HUNT", "LONDON_SWEEP", "WEDGE"):
-                # pattern_obj may be None for DB-loaded patterns; use record for price check
+            if pattern_type == "KZ_HUNT":
                 if pattern_obj is not None:
-                    if pattern_type == "VIPER":
-                        confirmed = check_viper_entry_confirmation(pattern_obj, latest_bar)
-                    elif pattern_type == "KZ_HUNT":
-                        confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
-                    elif pattern_type == "WEDGE":
-                        confirmed = check_wedge_entry_confirmation(pattern_obj, latest_bar)
-                    else:
-                        confirmed = check_london_sweep_entry_confirmation(pattern_obj, latest_bar)
+                    confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
                 else:
                     # DB-loaded pattern (no pattern_obj after restart):
-                    # same simple confirmation as fresh patterns.
-                    # Pattern freshness (24-bar expiry) already guards against stale entries.
+                    # simple price confirmation. Freshness expiry guards against stale entries.
                     close_price = latest_bar.get("close")
                     if close_price is not None and record.entry_price:
                         if direction == "LONG":
