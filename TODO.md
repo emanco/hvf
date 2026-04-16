@@ -1,28 +1,45 @@
 # HVF Auto-Trader — Backlog
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
-## Next Up: Asian Gravity Strategy
+## Asian Gravity Strategy — LIVE
+- [x] Built and deployed (Thursday SHORT EURGBP, T5/T2/S8, rng<20)
+- [x] Same-day news filter (skip central bank days)
+- [ ] Collect 20+ live trades to validate 79% WR
+- [ ] Consider adding Friday after validation
+- [ ] Consider tighter range filter (rng<12) if WR holds
 
-Build spec: `ASIAN_GRAVITY_BUILD_SPEC.md`
+## New Strategies Pipeline (research: `STRATEGY_RESEARCH_2026-04-16.md`)
 
-### Phase 1: Shadow Trading
-- [ ] Add ASIAN_GRAVITY config block to config.py
-- [ ] Build asian_gravity_detector.py (tracker + entry signal)
-- [ ] Build asian_gravity_scanner.py (thread with signal logging, no execution)
-- [ ] Register thread in main.py with watchdog
-- [ ] Deploy and collect 30+ shadow signals over 8+ Wednesdays
+### 1. London Breakout — NEXT BUILD
+- [ ] Backtest on H1 data (Asian range high/low breakout at London open)
+- [ ] Build detector + scorer
+- [ ] Conflict resolution with KZ Hunt (same session, opposite logic)
+- [ ] Deploy and validate
+- Pairs: GBPUSD, EURUSD, GBPJPY | Timeframe: H1 | Claimed PF: >1.5
 
-### Phase 2: Live Trading (after shadow validation)
-- [ ] Add execution path to scanner
-- [ ] Add _check_gravity_trade to trade_monitor.py (time exit)
-- [ ] Adapt risk_manager.py gates (spread, same-instrument, RRR)
-- [ ] Add per-strategy circuit breaker limits
-- [ ] Deploy with 0.5% risk, ramp to 2% after 10+ live trades
+### 2. EMA 200 Pullback + ADX
+- [ ] Backtest pullback-to-EMA-zone entries when ADX > 25
+- [ ] Build detector (uses existing indicators: EMA 200, ADX 14, ATR 14)
+- [ ] Natural hedge for KZ Hunt — profits when trends are strong
+- Pairs: majors | Timeframe: H1 entry, H4/D1 trend filter
 
-### Phase 3: Expansion
-- [ ] Add Friday after 50+ trades confirm edge
-- [ ] Consider EURUSD as second pair after 100+ trades
+### 3. Keltner Channel Breakout
+- [ ] Backtest Keltner (EMA 20 +/- 2x ATR) breakouts with ADX confirmation
+- [ ] Zero new indicators — EMA + ATR already computed
+- [ ] Fires on volatility expansion (opposite to KZ Hunt's regime)
+- Pairs: majors | Timeframe: H4
+
+### 4. Quiet-Hours Mean Reversion (BB + RSI)
+- [ ] Verify IC Markets quiet-hour spreads on cross pairs first
+- [ ] Backtest BB(20,2) + RSI(14) on AUDNZD, AUDCAD, NZDCAD during 21:00-01:00 UTC
+- [ ] New scanner thread for quiet hours
+- Pairs: crosses | Timeframe: M15
+
+### 5. Opening Range Breakout (ORB)
+- [ ] Backtest first 15-30 min breakout at London/NY open
+- [ ] Needs M5 data (same infra as Asian Gravity)
+- Pairs: GBPUSD, EURUSD | Timeframe: M5
 
 ---
 
