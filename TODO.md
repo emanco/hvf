@@ -4,24 +4,26 @@ Last updated: 2026-04-16
 
 ## Active Strategies
 
-### KZ Hunt — LIVE (collecting post-fix data)
+### KZ Hunt — LIVE (post-fix data looking strong)
 - [x] Entry confirmation bug fixed (forming bar → completed bar)
-- [ ] Collect 30-50 post-fix trades to validate WR improvement
+- Post-fix: 9 trades, **78% WR, +53 pips** — promising
+- [ ] Collect 30-50 post-fix trades to confirm WR improvement
 - [ ] If WR stays below 45% after 50 trades, needs fundamental review
-- Live WR: 36% (69 trades) vs 61% backtest. Bug fix should improve this.
 
-### London Breakout — LIVE (first trade next Monday)
+### London Breakout — LIVE (first trade Monday Apr 20)
 - [x] Built and deployed (GBPUSD Mon-Tue, rng 12-20, TP=1.0x, exit@13)
 - [x] Backtested: PF 1.77, 66% WR, +575p over 8 years
+- [x] Tested other GBP pairs — only GBPUSD works (GBPAUD/CAD/NZD/CHF all negative)
 - [ ] Collect 20+ live trades to validate
 
-### Quantum London — LIVE (first trade tonight)
+### Quantum London — LIVE (first trade Monday Apr 20 night)
 - [x] Built and deployed (EURGBP Mon-Thu, T8/T5/S18, both dirs, 5% risk)
 - [x] Daily open at 22:00 UTC (GMT+2) — critical timezone fix
 - [x] Backtested: 95% WR, PF 17.86, +415p over 8 months (119 trades)
 - [x] Same-day news filter (skip central bank days)
+- [x] Force-exit bug fixed (22>=5 killed session at open) — fixed Apr 17
+- [x] Day filter verified: days=[1,2,3,4] at trading time = Mon-Thu nights ✓
 - [ ] Collect 50+ live trades to validate
-- [ ] Consider EURCHF as second pair (backtested negative — needs more research)
 
 ### Asian Gravity — DISABLED
 - Superseded by Quantum London (same pair, better params, 95% vs 79% WR)
