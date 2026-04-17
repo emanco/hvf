@@ -119,8 +119,9 @@ class AsianGravityScanner:
             if weekday not in cfg["days"]:
                 return
 
-            # Force exit
-            if hour >= forced_exit:
+            # Force exit — only during the trading window (after midnight),
+            # not during the pre-midnight capture window (22:00-23:59)
+            if hour >= forced_exit and hour < daily_open_hour:
                 self._force_exit_if_open()
                 self._tracker.state = "DONE"
                 return
