@@ -153,8 +153,27 @@ class TelegramCommandHandler:
         now = datetime.now(timezone.utc)
         open_trades = self.trade_logger.get_open_trades()
         armed = self.trade_logger.get_armed_patterns()
-        daily_pnl = self.trade_logger.get_daily_pnl()
-        weekly_pnl = self.trade_logger.get_weekly_pnl()
+
+        # Use MT5 balance change for accurate PnL (includes swaps, commissions, all legs)
+        account = self.connector.get_account_info()
+        if account:
+            balance = account["balance"]
+            prev_day_bal = self.trade_logger.get_previous_day_closing_balance()
+            daily_pnl = balance - prev_day_bal if prev_day_bal else self.trade_logger.get_daily_pnl()
+
+            # Weekly: get Monday's opening balance from equity snapshots
+            today = now.date()
+            days_since_mon = today.weekday()
+            monday = today - __import__("datetime").timedelta(days=days_since_mon)
+            monday_dt = datetime(monday.year, monday.month, monday.day, tzinfo=timezone.utc)
+            week_snapshots = self.trade_logger.get_equity_timeseries(since=monday_dt)
+            if week_snapshots:
+                weekly_pnl = balance - week_snapshots[0]["balance"]
+            else:
+                weekly_pnl = self.trade_logger.get_weekly_pnl()
+        else:
+            daily_pnl = self.trade_logger.get_daily_pnl()
+            weekly_pnl = self.trade_logger.get_weekly_pnl()
 
         # Count today's closed trades
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -270,21 +289,29 @@ class TelegramCommandHandler:
 
     def _cmd_balance(self):
         account = self.connector.get_account_info()
-        all_trades = self.trade_logger.get_all_closed_trades(since_date=config.PERF_GO_LIVE_DATE)
-        total_pnl = sum(t.pnl for t in all_trades if t.pnl) if all_trades else 0
-        trade_count = len(all_trades) if all_trades else 0
-        wins = sum(1 for t in all_trades if t.pnl and t.pnl > 0) if all_trades else 0
-
         if account:
             balance = account["balance"]
             equity = account["equity"]
+            cs = config.CURRENCY_SYMBOLS.get(account.get("currency", ""), config.ACCOUNT_CURRENCY_SYMBOL)
         else:
-            balance = config.STARTING_EQUITY + total_pnl
+            balance = config.STARTING_EQUITY
             equity = balance
+            cs = config.ACCOUNT_CURRENCY_SYMBOL
 
+        # Total PnL from equity snapshots (accurate, includes swaps/commissions)
+        go_live_dt = datetime.fromisoformat(config.PERF_GO_LIVE_DATE).replace(tzinfo=timezone.utc)
+        equity_ts = self.trade_logger.get_equity_timeseries(since=go_live_dt)
+        if equity_ts:
+            total_pnl = balance - equity_ts[0]["balance"]
+        else:
+            total_pnl = 0
+
+        # Trade count from DB
+        all_trades = self.trade_logger.get_all_closed_trades(since_date=config.PERF_GO_LIVE_DATE)
+        trade_count = len(all_trades) if all_trades else 0
+        wins = sum(1 for t in all_trades if t.pnl and t.pnl > 0) if all_trades else 0
         wr = (wins / trade_count * 100) if trade_count > 0 else 0
 
-        cs = self._currency_symbol()
         text = (
             f"<b>\U0001F4B0 Balance</b>\n\n"
             f"Balance: <b>{cs}{balance:,.2f}</b>\n"
