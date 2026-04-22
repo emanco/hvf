@@ -1,28 +1,35 @@
 # HVF Auto-Trader — Backlog
 
-Last updated: 2026-04-16
+Last updated: 2026-04-22
 
 ## Active Strategies
 
-### KZ Hunt — LIVE (post-fix data looking strong)
-- [x] Entry confirmation bug fixed (forming bar → completed bar)
-- Post-fix: 9 trades, **78% WR, +53 pips** — promising
-- [ ] Collect 30-50 post-fix trades to confirm WR improvement
-- [ ] If WR stays below 45% after 50 trades, needs fundamental review
+### KZ Hunt — LIVE (post-fix PF 1.31 on 15 trades)
+- [x] Entry confirmation bug fixed (forming bar → completed bar, 2026-04-15)
+- Post-fix: 15 trades, **73% WR, PF 1.31**, +$172 DB / +$396 balance Δ (5 days)
+- Lifetime since go-live: 79 trades, balance down 8.3% (pre-fix period dominates)
+- [ ] Collect 35+ more post-fix trades to confirm edge holds (target: 50 total)
+- [ ] If PF drifts below 1.0 at 30+ post-fix trades, stop and rethink
 
-### London Breakout — LIVE (first trade Monday Apr 20)
+### London Breakout — LIVE (never actually traded yet)
 - [x] Built and deployed (GBPUSD Mon-Tue, rng 12-20, TP=1.0x, exit@13)
 - [x] Backtested: PF 1.77, 66% WR, +575p over 8 years
 - [x] Tested other GBP pairs — only GBPUSD works (GBPAUD/CAD/NZD/CHF all negative)
-- [ ] Collect 20+ live trades to validate
+- [x] bar_time crash fixed (2026-04-21); Tue 4/21 range locked OK, news-filter skipped
+- [x] Windowed news filter (00:00–13:00 UTC) — 2026-04-22
+- [x] Telegram alerts on range-locked + session-skipped
+- [ ] Collect 20+ live trades to validate (next opportunity: Mon 2026-04-27)
 
-### Quantum London — LIVE (first trade Monday Apr 20 night)
+### Quantum London — LIVE (captured twice, never triggered)
 - [x] Built and deployed (EURGBP Mon-Thu, T8/T5/S18, both dirs, 5% risk)
 - [x] Daily open at 22:00 UTC (GMT+2) — critical timezone fix
 - [x] Backtested: 95% WR, PF 17.86, +415p over 8 months (119 trades)
 - [x] Same-day news filter (skip central bank days)
 - [x] Force-exit bug fixed (22>=5 killed session at open) — fixed Apr 17
 - [x] Day filter verified: days=[1,2,3,4] at trading time = Mon-Thu nights ✓
+- [x] Daily-open reset bug fixed (2026-04-20) — dead-code reset branch, flag never reset
+- [x] Telegram alerts on daily-open capture + news-filter skip
+- [x] Captured 2026-04-20 (no trigger, 6-pip range), 2026-04-21 (news-filtered by GBP CPI)
 - [ ] Collect 50+ live trades to validate
 
 ### Asian Gravity — DISABLED
@@ -96,7 +103,9 @@ Last updated: 2026-04-16
 ## Feature Backlog (Expert Panel Recommendations)
 
 ### 1. Portfolio Correlation Guard
-- Block if 3+ same-direction USD or EUR exposure open simultaneously
+- [x] JPY-group guard shipped 2026-04-22 (blocks 2nd same-direction JPY-cross entry)
+- [ ] Extend to USD group (3+ same-direction USD pairs)
+- [ ] Extend to EUR group (3+ same-direction EUR pairs)
 - Prevents correlated drawdowns on macro moves
 
 ### 2. Backtest Alternative SL Strategy
@@ -127,6 +136,23 @@ Last updated: 2026-04-16
 ### 8. Correlation-Aware Position Sizing
 - Scale lot size down when multiple correlated pairs are open simultaneously
 - e.g., if 3 EUR pairs open, reduce next EUR pair's lot by 50%
+
+## Completed (2026-04-22 Session — commit 9aba719)
+
+- ~~QL daily-open reset bug~~ — dead-code reset branch; flag never reset across days
+- ~~LB bar_time crash~~ — `df.index[-1]` (int) → `df["time"].iloc[-1]` (Timestamp)
+- ~~Per-(pattern, symbol) consecutive-loss circuit breaker~~ — new DB table, auto-seeded from trade history, 3-loss pause for 48h
+- ~~record_pattern_result was dead code~~ — now wired from `log_trade_close`, uses pnl_pips so estimation bug doesn't mask losses
+- ~~JPY-group correlation guard~~ — blocks 2nd same-direction JPY-cross entry
+- ~~LB news filter~~ — tightened to window-based (00:00–13:00 UTC) vs whole-day
+- ~~News-cache refresh order~~ — moved to top of scanner loop (no more stale-cache false blocks)
+- ~~Scanner-loop fragility~~ — each section in its own try/except (one crash no longer skips the cycle)
+- ~~QL/LB Telegram parity~~ — alerts on capture, range-locked, session-skipped
+- ~~MT5 heartbeat 60s → 30s~~ — halves disconnect detection latency
+- ~~mt5_connector reconnect bug~~ — `_disconnect_since` cleared by `connect()` before elapsed calc; now captured locally
+- ~~circuit_breaker._load_state tzinfo crash~~ — DB datetimes normalized to UTC-aware; prevents startup TypeError once any level has tripped
+- ~~Daily execution review~~ — new `monitoring/daily_review.py`, automated report at 21:30 UTC + `/review` command
+- ~~Demo loss limits~~ — raised to 10/20/30% for data collection (was 5/8/15)
 
 ## Completed (2026-04-15 Assessment)
 
