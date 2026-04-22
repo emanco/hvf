@@ -1,6 +1,6 @@
 # HVF Auto-Trader — Backlog
 
-Last updated: 2026-04-22
+Last updated: 2026-04-22 (late afternoon session)
 
 ## Active Strategies
 
@@ -30,6 +30,7 @@ Last updated: 2026-04-22
 - [x] Daily-open reset bug fixed (2026-04-20) — dead-code reset branch, flag never reset
 - [x] Telegram alerts on daily-open capture + news-filter skip
 - [x] Captured 2026-04-20 (no trigger, 6-pip range), 2026-04-21 (news-filtered by GBP CPI)
+- [x] News filter windowed (00:00–05:00 UTC trading window) — 2026-04-22
 - [ ] Collect 50+ live trades to validate
 
 ### Asian Gravity — DISABLED
@@ -39,7 +40,7 @@ Last updated: 2026-04-22
 
 ### Local Backtesting
 - [x] CSV data exported from VPS: 9 pairs x H1 (8yr) + M5 (8mo) at backtests/data/
-- [ ] Fix KZ Hunt local backtest — needs full indicator pipeline matching fetch_and_prepare
+- [x] KZ Hunt local backtest fixed (2026-04-22) — was producing 0 trades on 5/8 pairs due to missing ADX + default enabled_patterns=HVF. Now: 5,386 trades / PF 1.50 over 8 years, matching walk-forward PF 1.53
 - [ ] Periodic re-export of newer data from VPS
 
 ### Strategy Research Pipeline
@@ -137,7 +138,13 @@ Last updated: 2026-04-22
 - Scale lot size down when multiple correlated pairs are open simultaneously
 - e.g., if 3 EUR pairs open, reduce next EUR pair's lot by 50%
 
-## Completed (2026-04-22 Session — commit 9aba719)
+## Completed (2026-04-22 Late-Afternoon Session — commit b43657d)
+
+- ~~QL news filter whole-day blocking~~ — now windowed (only events inside 00:00–05:00 UTC trading window block the session). Thursday's 07:30/08:30 UTC PMIs no longer kill the night
+- ~~KZ Hunt local backtest~~ — fixed indicator pipeline + `enabled_patterns=["KZ_HUNT"]` + integer-indexed df + per-pair chart output
+- ~~Full 8-year local backtest validation~~ — 5,386 trades, PF 1.50, matches walk-forward 1.53 (strategy edge intact)
+
+## Completed (2026-04-22 Morning Session — commit 9aba719)
 
 - ~~QL daily-open reset bug~~ — dead-code reset branch; flag never reset across days
 - ~~LB bar_time crash~~ — `df.index[-1]` (int) → `df["time"].iloc[-1]` (Timestamp)
