@@ -97,33 +97,41 @@ class AsianGravityScanner:
                         "[%s] Daily open captured: %.5f, date=%s",
                         pt, bar["open"], now.date())
 
+                    if self._alerter:
+                        self._alerter.send_message(
+                            f"<b>[{pt}] Daily open captured</b>\n"
+                            f"{sym}: {bar['open']:.5f}\n"
+                            f"Date: {now.date()}\n"
+                            f"Trading window: {trading_start:02d}:00-{forced_exit:02d}:00 UTC"
+                        )
+
                     # News filter
                     from hvf_trader.data.news_filter import has_high_impact_same_day
                     if has_high_impact_same_day(sym):
                         self._tracker.state = "DONE"
                         logger.info("[%s] Session skipped: high-impact event today", pt)
+                        if self._alerter:
+                            self._alerter.send_message(
+                                f"<b>[{pt}] Session skipped</b>\n"
+                                f"High-impact event scheduled today"
+                            )
                         return
                 return
 
             # Between daily open capture (22:00) and trading start (00:00): wait
             if hour > daily_open_hour or hour < trading_start:
-                if hour >= forced_exit and hour < daily_open_hour:
-                    # After exit, before next open: reset
-                    if self._tracker.state != "IDLE":
-                        self._force_exit_if_open()
-                        self._tracker.reset()
-                        self._daily_open_captured = False
+                return
+
+            # Daytime idle window (after force-exit, before next capture): reset for next session
+            if hour >= forced_exit and hour < daily_open_hour:
+                if self._tracker.state != "IDLE":
+                    self._force_exit_if_open()
+                    self._tracker.reset()
+                self._daily_open_captured = False
                 return
 
             # Day filter (check the trading day, not the open day)
             if weekday not in cfg["days"]:
-                return
-
-            # Force exit — only during the trading window (after midnight),
-            # not during the pre-midnight capture window (22:00-23:59)
-            if hour >= forced_exit and hour < daily_open_hour:
-                self._force_exit_if_open()
-                self._tracker.state = "DONE"
                 return
 
         else:

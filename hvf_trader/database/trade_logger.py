@@ -15,6 +15,7 @@ from hvf_trader.database.models import (
     CircuitBreakerState,
     EquitySnapshot,
     EventLog,
+    PatternCircuitBreakerState,
     PatternRecord,
     TradeRecord,
     get_session,
@@ -38,6 +39,14 @@ class TradeLogger:
                 from scoped_session on each access (thread-safe).
         """
         self._explicit_session = session
+        self._circuit_breaker = None
+
+    def set_circuit_breaker(self, circuit_breaker) -> None:
+        """Attach a CircuitBreaker for per-pattern loss-streak tracking.
+
+        Called after construction to avoid a circular dependency.
+        """
+        self._circuit_breaker = circuit_breaker
 
     @property
     def _session(self):
@@ -305,6 +314,19 @@ class TradeLogger:
                 "close_reason": close_reason,
             },
         )
+
+        # Update per-(pattern, symbol) consecutive-loss counter.
+        # pnl_pips is authoritative: pnl can be 0 when MT5 deal-search fails
+        # on IC Markets, which would mask real losses from the streak counter.
+        if (
+            self._circuit_breaker is not None
+            and record.pattern_type
+            and record.symbol
+            and pnl_pips != 0
+        ):
+            self._circuit_breaker.record_pattern_result(
+                record.pattern_type, record.symbol, is_win=pnl_pips > 0
+            )
 
     def log_partial_close(self, trade_id: int, close_price: float) -> None:
         """Record a partial close on a trade (e.g., 50% at target_1).
@@ -751,6 +773,34 @@ class TradeLogger:
             },
             severity="WARNING" if tripped else "INFO",
         )
+        return state
+
+    def get_all_pattern_cb_states(self) -> list:
+        """Return all persisted per-(pattern, symbol) circuit-breaker rows."""
+        return self._session.query(PatternCircuitBreakerState).all()
+
+    def upsert_pattern_cb_state(
+        self,
+        pattern_type: str,
+        symbol: str,
+        consecutive_losses: int,
+        paused_until: datetime | None,
+    ) -> PatternCircuitBreakerState:
+        """Insert or update the per-(pattern, symbol) circuit-breaker row."""
+        state = self._session.get(PatternCircuitBreakerState, (pattern_type, symbol))
+        if state is None:
+            state = PatternCircuitBreakerState(
+                pattern_type=pattern_type, symbol=symbol
+            )
+            self._session.add(state)
+        state.consecutive_losses = consecutive_losses
+        state.paused_until = paused_until
+        state.updated_at = datetime.now(timezone.utc)
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
         return state
 
 

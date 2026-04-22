@@ -113,6 +113,8 @@ class MT5Connector:
         """
         if self._disconnect_since is None:
             self._disconnect_since = datetime.now(timezone.utc)
+        # Capture locally because connect() clears self._disconnect_since on success.
+        disconnect_started = self._disconnect_since
 
         delay = config.RECONNECT_BASE_DELAY_SEC
 
@@ -133,7 +135,7 @@ class MT5Connector:
 
             if self.connect():
                 elapsed = (
-                    datetime.now(timezone.utc) - self._disconnect_since
+                    datetime.now(timezone.utc) - disconnect_started
                 ).total_seconds()
                 logger.info(
                     "MT5 reconnected after %d attempts (%.0fs total downtime)",

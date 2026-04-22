@@ -28,6 +28,20 @@ _CORRELATED_PAIRS: dict[str, str] = {
     "GBPUSD": "EURUSD",
 }
 
+# Currency-group exposure limits.
+# For each currency code listed, block a new trade if opening it would result
+# in N or more open trades in the same direction on pairs containing that
+# currency. JPY crosses are tightly correlated — a second same-direction JPY
+# trade effectively doubles directional JPY risk.
+_CURRENCY_GROUP_LIMITS: dict[str, int] = {
+    "JPY": 2,
+}
+
+
+def _symbol_contains_currency(symbol: str, currency: str) -> bool:
+    """Return True if a 6-char FX symbol's base or quote is `currency`."""
+    return len(symbol) == 6 and (symbol[:3] == currency or symbol[3:] == currency)
+
 
 @dataclass
 class RiskCheckResult:
@@ -231,22 +245,42 @@ class RiskManager:
         Returns:
             (is_ok, reason) -- True if no correlated conflict found.
         """
+        # 1:1 pair-level correlation (e.g. EURUSD <-> GBPUSD).
         correlated_symbol = _CORRELATED_PAIRS.get(symbol)
-        if correlated_symbol is None:
-            # No known correlation for this symbol -- pass.
-            return True, ""
+        if correlated_symbol is not None:
+            for trade in open_trades:
+                trade_symbol = trade.symbol if hasattr(trade, "symbol") else trade.get("symbol", "")
+                trade_direction = trade.direction if hasattr(trade, "direction") else trade.get("direction", "")
+                if (
+                    trade_symbol == correlated_symbol
+                    and trade_direction.upper() == direction.upper()
+                ):
+                    return (
+                        False,
+                        f"Correlated exposure: already {trade_direction} on {trade_symbol} "
+                        f"(correlated with {symbol})",
+                    )
 
-        for trade in open_trades:
-            trade_symbol = trade.symbol if hasattr(trade, "symbol") else trade.get("symbol", "")
-            trade_direction = trade.direction if hasattr(trade, "direction") else trade.get("direction", "")
-            if (
-                trade_symbol == correlated_symbol
-                and trade_direction.upper() == direction.upper()
-            ):
+        # Currency-group exposure: block Nth same-direction trade on pairs
+        # sharing a watched currency (e.g. any two JPY-cross SHORTs = 2× JPY bet).
+        for currency, limit in _CURRENCY_GROUP_LIMITS.items():
+            if not _symbol_contains_currency(symbol, currency):
+                continue
+            same_dir_symbols: list[str] = []
+            for trade in open_trades:
+                ts = trade.symbol if hasattr(trade, "symbol") else trade.get("symbol", "")
+                td = trade.direction if hasattr(trade, "direction") else trade.get("direction", "")
+                if not _symbol_contains_currency(ts, currency):
+                    continue
+                if td.upper() != direction.upper():
+                    continue
+                same_dir_symbols.append(ts)
+            if len(same_dir_symbols) + 1 >= limit:
                 return (
                     False,
-                    f"Correlated exposure: already {trade_direction} on {trade_symbol} "
-                    f"(correlated with {symbol})",
+                    f"{currency}-group exposure: already {len(same_dir_symbols)} "
+                    f"{direction} position(s) on {', '.join(same_dir_symbols)} "
+                    f"(limit: {limit} same-direction {currency} trades)",
                 )
 
         return True, ""

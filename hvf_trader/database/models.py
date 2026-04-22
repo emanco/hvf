@@ -217,6 +217,26 @@ class CircuitBreakerState(Base):
         )
 
 
+class PatternCircuitBreakerState(Base):
+    """Per-(pattern, symbol) consecutive-loss counter and pause state."""
+
+    __tablename__ = "pattern_circuit_breaker_states"
+
+    pattern_type = Column(String(32), primary_key=True)
+    symbol = Column(String(16), primary_key=True)
+    consecutive_losses = Column(Integer, default=0, nullable=False)
+    paused_until = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PatternCircuitBreakerState(pattern_type={self.pattern_type!r}, "
+            f"symbol={self.symbol!r}, "
+            f"consecutive_losses={self.consecutive_losses}, "
+            f"paused_until={self.paused_until})>"
+        )
+
+
 # ─── Composite Indexes ──────────────────────────────────────────────────────
 
 Index("ix_pattern_symbol_status", PatternRecord.symbol, PatternRecord.status)

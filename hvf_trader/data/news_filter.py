@@ -144,6 +144,62 @@ def has_high_impact_same_day(symbol: str) -> bool:
     return False
 
 
+def has_high_impact_in_window(
+    symbol: str, start_utc: datetime, end_utc: datetime
+) -> bool:
+    """Check if any high-impact news for the symbol falls within [start_utc, end_utc).
+
+    Windowed alternative to `has_high_impact_same_day` for strategies with a
+    narrow active period (e.g. London Breakout 00:00-13:00 UTC). Lets trades
+    through on days when the relevant news print lands outside the window.
+
+    Args:
+        symbol: instrument symbol (e.g. "GBPUSD").
+        start_utc: window start (inclusive), UTC.
+        end_utc: window end (exclusive), UTC.
+
+    Returns:
+        True if cache is stale (fail-closed) or a high-impact event for the
+        symbol's currencies falls inside the window. False otherwise.
+    """
+    if is_cache_stale():
+        return True  # fail-closed
+
+    currencies = SYMBOL_CURRENCIES.get(symbol, [])
+    if not currencies:
+        return False
+
+    events = load_cached_events()
+    if not events:
+        return False
+
+    if start_utc.tzinfo is None:
+        start_utc = start_utc.replace(tzinfo=timezone.utc)
+    if end_utc.tzinfo is None:
+        end_utc = end_utc.replace(tzinfo=timezone.utc)
+
+    for event in events:
+        if event.get("impact") != "High":
+            continue
+        if event.get("country") not in currencies:
+            continue
+
+        event_time = _parse_event_time(event.get("date", ""))
+        if event_time is None:
+            continue
+
+        if start_utc <= event_time < end_utc:
+            logger.info(
+                f"High-impact window event blocking {symbol}: "
+                f"{event.get('title', 'Unknown')} ({event['country']}) "
+                f"at {event_time:%H:%M UTC} "
+                f"(window {start_utc:%H:%M}-{end_utc:%H:%M UTC})"
+            )
+            return True
+
+    return False
+
+
 def get_upcoming_events(hours_ahead: int = 24) -> list[dict]:
     """Get upcoming medium+ impact events in the next N hours.
 

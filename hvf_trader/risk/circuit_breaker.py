@@ -49,9 +49,9 @@ class CircuitBreaker:
         # Period-start equity for accurate loss% calculation
         self._period_start_equity: dict[str, float] = {}
         self._period_start_date: dict[str, str] = {}
-        # Per-pattern consecutive loss tracking
-        self._pattern_consecutive_losses: dict[str, int] = {}
-        self._pattern_paused_until: dict[str, datetime | None] = {}
+        # Per-(pattern, symbol) consecutive loss tracking
+        self._pattern_consecutive_losses: dict[tuple[str, str], int] = {}
+        self._pattern_paused_until: dict[tuple[str, str], datetime | None] = {}
         self._load_state()
 
     # ------------------------------------------------------------------
@@ -67,13 +67,16 @@ class CircuitBreaker:
         for level in _LEVELS:
             state = self.trade_logger.get_circuit_breaker_state(level)
             if state and state.tripped:
-                if state.resumes_at and now < state.resumes_at:
+                resumes_at = state.resumes_at
+                if resumes_at is not None and resumes_at.tzinfo is None:
+                    resumes_at = resumes_at.replace(tzinfo=timezone.utc)
+                if resumes_at and now < resumes_at:
                     self._tripped[level] = True
-                    self._resumes_at[level] = state.resumes_at
+                    self._resumes_at[level] = resumes_at
                     logger.info(
                         "Loaded tripped %s circuit breaker, resumes at %s",
                         level,
-                        state.resumes_at.isoformat(),
+                        resumes_at.isoformat(),
                     )
                 else:
                     # Past resume time -- auto-reset
@@ -82,6 +85,48 @@ class CircuitBreaker:
                     self.trade_logger.update_circuit_breaker(level, tripped=False)
                     logger.info(
                         "Auto-reset expired %s circuit breaker on startup", level
+                    )
+
+        # Per-(pattern, symbol) consecutive-loss state.
+        # On first-ever startup (table empty) we backfill from recent trades so
+        # the counter reflects current reality rather than starting at 0.
+        existing_rows = self.trade_logger.get_all_pattern_cb_states()
+        if not existing_rows:
+            seeded = self._seed_from_trade_history()
+            if seeded:
+                existing_rows = self.trade_logger.get_all_pattern_cb_states()
+
+        for row in existing_rows:
+            key = (row.pattern_type, row.symbol)
+            self._pattern_consecutive_losses[key] = row.consecutive_losses
+            paused_until = row.paused_until
+            if paused_until is not None and paused_until.tzinfo is None:
+                paused_until = paused_until.replace(tzinfo=timezone.utc)
+            if paused_until is not None and now >= paused_until:
+                # Pause expired during downtime — reset
+                self._pattern_consecutive_losses[key] = 0
+                self._pattern_paused_until[key] = None
+                self.trade_logger.upsert_pattern_cb_state(
+                    row.pattern_type, row.symbol, 0, None
+                )
+                logger.info(
+                    "Auto-reset expired pattern circuit breaker for %s/%s on startup",
+                    row.pattern_type, row.symbol,
+                )
+            else:
+                self._pattern_paused_until[key] = paused_until
+                if paused_until is not None:
+                    logger.info(
+                        "Loaded paused %s/%s, resumes at %s (%d consecutive losses)",
+                        row.pattern_type, row.symbol,
+                        paused_until.isoformat(),
+                        row.consecutive_losses,
+                    )
+                elif row.consecutive_losses > 0:
+                    logger.info(
+                        "Loaded %s/%s with %d consecutive losses",
+                        row.pattern_type, row.symbol,
+                        row.consecutive_losses,
                     )
 
     # ------------------------------------------------------------------
@@ -223,64 +268,155 @@ class CircuitBreaker:
     # Per-pattern circuit breaker
     # ------------------------------------------------------------------
 
-    def check_pattern(self, pattern_type: str) -> tuple[bool, str]:
+    def check_pattern(self, pattern_type: str, symbol: str) -> tuple[bool, str]:
         """
-        Check if a specific pattern type is paused due to consecutive losses.
+        Check if a specific (pattern, symbol) is paused due to consecutive losses.
 
         Returns:
-            (is_clear, reason) -- True if pattern is allowed to trade.
+            (is_clear, reason) -- True if trading is allowed.
         """
         now = datetime.now(timezone.utc)
-        paused_until = self._pattern_paused_until.get(pattern_type)
+        key = (pattern_type, symbol)
+        paused_until = self._pattern_paused_until.get(key)
 
         if paused_until is not None:
             if now >= paused_until:
                 # Pause expired — reset
-                self._pattern_consecutive_losses[pattern_type] = 0
-                self._pattern_paused_until[pattern_type] = None
+                self._pattern_consecutive_losses[key] = 0
+                self._pattern_paused_until[key] = None
+                self._persist_pattern(pattern_type, symbol)
                 logger.info(
-                    "Pattern circuit breaker RESET for %s", pattern_type
+                    "Pattern circuit breaker RESET for %s/%s", pattern_type, symbol
                 )
                 return True, ""
             else:
                 return (
                     False,
-                    f"{pattern_type} paused until {paused_until.isoformat()} "
-                    f"({self._pattern_consecutive_losses.get(pattern_type, 0)} "
-                    f"consecutive losses)",
+                    f"{pattern_type}/{symbol} paused until {paused_until.isoformat()} "
+                    f"({self._pattern_consecutive_losses.get(key, 0)} consecutive losses)",
                 )
 
         return True, ""
 
-    def record_pattern_result(self, pattern_type: str, is_win: bool):
+    def record_pattern_result(self, pattern_type: str, symbol: str, is_win: bool):
         """
-        Record a trade result for per-pattern consecutive loss tracking.
+        Record a trade result for per-(pattern, symbol) consecutive loss tracking.
 
         Args:
-            pattern_type: "HVF", "VIPER", "KZ_HUNT", "LONDON_SWEEP"
+            pattern_type: e.g. "KZ_HUNT", "QUANTUM_LONDON", "LONDON_BO"
+            symbol: e.g. "EURGBP"
             is_win: True if trade was profitable
         """
+        key = (pattern_type, symbol)
         if is_win:
-            self._pattern_consecutive_losses[pattern_type] = 0
+            if self._pattern_consecutive_losses.get(key, 0) != 0:
+                self._pattern_consecutive_losses[key] = 0
+                self._persist_pattern(pattern_type, symbol)
             return
 
         # Loss
-        current = self._pattern_consecutive_losses.get(pattern_type, 0) + 1
-        self._pattern_consecutive_losses[pattern_type] = current
+        current = self._pattern_consecutive_losses.get(key, 0) + 1
+        self._pattern_consecutive_losses[key] = current
 
         if current >= _PATTERN_LOSS_PAUSE_THRESHOLD:
             pause_until = datetime.now(timezone.utc) + timedelta(
                 hours=_PATTERN_PAUSE_HOURS
             )
-            self._pattern_paused_until[pattern_type] = pause_until
+            self._pattern_paused_until[key] = pause_until
             logger.warning(
-                "PATTERN CIRCUIT BREAKER TRIPPED: %s -- %d consecutive losses. "
+                "PATTERN CIRCUIT BREAKER TRIPPED: %s/%s -- %d consecutive losses. "
                 "Paused for %dh until %s",
-                pattern_type,
+                pattern_type, symbol,
                 current,
                 _PATTERN_PAUSE_HOURS,
                 pause_until.isoformat(),
             )
+
+        self._persist_pattern(pattern_type, symbol)
+
+    def _persist_pattern(self, pattern_type: str, symbol: str) -> None:
+        """Write the in-memory per-(pattern, symbol) state to the DB."""
+        if not self.trade_logger:
+            return
+        key = (pattern_type, symbol)
+        try:
+            self.trade_logger.upsert_pattern_cb_state(
+                pattern_type,
+                symbol,
+                self._pattern_consecutive_losses.get(key, 0),
+                self._pattern_paused_until.get(key),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to persist pattern CB state for %s/%s: %s",
+                pattern_type, symbol, e,
+            )
+
+    def _seed_from_trade_history(self) -> bool:
+        """Backfill per-(pattern, symbol) consecutive-loss counters from recent trades.
+
+        Runs once on first startup after this feature is deployed (when the
+        pattern_circuit_breaker_states table is empty). For each (pattern, symbol),
+        counts the streak of losses since the most recent win on that pair.
+        Uses pnl_pips as the source of truth (pnl can be falsely 0 when MT5
+        deal-search fails).
+        """
+        try:
+            from hvf_trader.database.models import TradeRecord
+        except Exception as e:
+            logger.error("Seed pattern CB: import failed: %s", e)
+            return False
+
+        session = self.trade_logger._session
+        rows = (
+            session.query(TradeRecord)
+            .filter(TradeRecord.status == "CLOSED")
+            .filter(TradeRecord.pattern_type.isnot(None))
+            .filter(TradeRecord.symbol.isnot(None))
+            .order_by(TradeRecord.closed_at.desc())
+            .limit(500)
+            .all()
+        )
+
+        now = datetime.now(timezone.utc)
+        streaks: dict[tuple[str, str], int] = {}
+        ended: set[tuple[str, str]] = set()
+
+        for r in rows:
+            key = (r.pattern_type, r.symbol)
+            if key in ended:
+                continue
+            pips = r.pnl_pips or 0
+            if pips > 0:
+                ended.add(key)
+            elif pips < 0:
+                streaks[key] = streaks.get(key, 0) + 1
+
+        if not streaks:
+            return False
+
+        for (pt, sym), streak in streaks.items():
+            key = (pt, sym)
+            self._pattern_consecutive_losses[key] = streak
+            paused_until = None
+            if streak >= _PATTERN_LOSS_PAUSE_THRESHOLD:
+                paused_until = now + timedelta(hours=_PATTERN_PAUSE_HOURS)
+                self._pattern_paused_until[key] = paused_until
+                logger.warning(
+                    "Seeded %s/%s with %d consecutive losses → PAUSED until %s",
+                    pt, sym, streak, paused_until.isoformat(),
+                )
+            else:
+                logger.info(
+                    "Seeded %s/%s with %d consecutive losses (below threshold)",
+                    pt, sym, streak,
+                )
+            try:
+                self.trade_logger.upsert_pattern_cb_state(pt, sym, streak, paused_until)
+            except Exception as e:
+                logger.error("Seed: failed to persist %s/%s: %s", pt, sym, e)
+
+        return True
 
     @property
     def is_tripped(self) -> bool:

@@ -94,6 +94,7 @@ class HVFTrader:
 
         # ─── Risk ────────────────────────────────────────────────────────
         self.circuit_breaker = CircuitBreaker(trade_logger=self.trade_logger)
+        self.trade_logger.set_circuit_breaker(self.circuit_breaker)
         self.risk_manager = RiskManager(
             circuit_breaker=self.circuit_breaker,
             trade_logger=self.trade_logger,
@@ -189,6 +190,7 @@ class HVFTrader:
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
         self._last_reconcile = None
         self._last_daily_summary = None
+        self._last_daily_review = None
         self._last_cache_alert = None
 
     def start(self):
@@ -307,48 +309,13 @@ class HVFTrader:
         """
         cycle_count = 0
         while self._running:
+            now = datetime.now(timezone.utc)
+
+            # Each section is isolated so one failure doesn't skip the rest of the cycle.
+
+            # Refresh news calendar BEFORE scanning so a just-expired cache
+            # doesn't fail-closed on patterns armed this cycle.
             try:
-                now = datetime.now(timezone.utc)
-
-                # Scanner: check each instrument for new patterns
-                for symbol in config.INSTRUMENTS:
-                    self._scan_instrument(symbol)
-
-                # London Breakout: check for Asian range breakout
-                if self._london_bo_tracker:
-                    self._scan_london_breakout(now)
-
-                # Entry monitor: check armed patterns for confirmation
-                self._check_armed_patterns()
-
-                # Reconciliation (every 60s)
-                if (
-                    self._last_reconcile is None
-                    or (now - self._last_reconcile).total_seconds() >= 60
-                ):
-                    self.reconciliator.reconcile()
-                    self._last_reconcile = now
-
-                # Circuit breaker update (after any trade closes)
-                account = self.connector.get_account_info()
-                if account:
-                    self.circuit_breaker.update(account["balance"])
-                    # Log equity snapshot every cycle
-                    self.trade_logger.log_equity_snapshot(
-                        balance=account["balance"],
-                        equity=account["equity"],
-                        free_margin=account["free_margin"],
-                        margin_used=account.get("margin", 0),
-                        open_positions=len(self.trade_logger.get_open_trades()),
-                        daily_pnl=self.trade_logger.get_daily_pnl(),
-                        weekly_pnl=self.trade_logger.get_weekly_pnl(),
-                        monthly_pnl=self.trade_logger.get_monthly_pnl(),
-                    )
-
-                # Performance health check (hourly)
-                self.perf_monitor.check_health()
-
-                # Refresh economic calendar if stale (checked every cycle)
                 if is_cache_stale():
                     refreshed = ensure_fresh_cache(max_age_hours=config.NEWS_CACHE_MAX_AGE_HOURS)
                     if not refreshed:
@@ -363,8 +330,67 @@ class HVFTrader:
                             )
                             logger.warning(f"Calendar cache stale ({age_str}), trading blocked")
                             self._last_cache_alert = now
+            except Exception as e:
+                logger.error(f"Calendar refresh failed: {e}", exc_info=True)
 
-                # Daily summary at 21:00 UTC (after NY close), skip weekends
+            # Scanner: check each instrument for new patterns
+            for symbol in config.INSTRUMENTS:
+                try:
+                    self._scan_instrument(symbol)
+                except Exception as e:
+                    logger.error(f"Scan {symbol} failed: {e}", exc_info=True)
+
+            # London Breakout: check for Asian range breakout
+            if self._london_bo_tracker:
+                try:
+                    self._scan_london_breakout(now)
+                except Exception as e:
+                    logger.error(f"London Breakout scan failed: {e}", exc_info=True)
+
+            # Entry monitor: check armed patterns for confirmation
+            try:
+                self._check_armed_patterns()
+            except Exception as e:
+                logger.error(f"Armed-pattern check failed: {e}", exc_info=True)
+
+            # Reconciliation (every 60s)
+            try:
+                if (
+                    self._last_reconcile is None
+                    or (now - self._last_reconcile).total_seconds() >= 60
+                ):
+                    self.reconciliator.reconcile()
+                    self._last_reconcile = now
+            except Exception as e:
+                logger.error(f"Reconciliation failed: {e}", exc_info=True)
+
+            # Circuit breaker update (after any trade closes)
+            try:
+                account = self.connector.get_account_info()
+                if account:
+                    self.circuit_breaker.update(account["balance"])
+                    # Log equity snapshot every cycle
+                    self.trade_logger.log_equity_snapshot(
+                        balance=account["balance"],
+                        equity=account["equity"],
+                        free_margin=account["free_margin"],
+                        margin_used=account.get("margin", 0),
+                        open_positions=len(self.trade_logger.get_open_trades()),
+                        daily_pnl=self.trade_logger.get_daily_pnl(),
+                        weekly_pnl=self.trade_logger.get_weekly_pnl(),
+                        monthly_pnl=self.trade_logger.get_monthly_pnl(),
+                    )
+            except Exception as e:
+                logger.error(f"Circuit-breaker/equity-snapshot failed: {e}", exc_info=True)
+
+            # Performance health check (hourly)
+            try:
+                self.perf_monitor.check_health()
+            except Exception as e:
+                logger.error(f"Performance health check failed: {e}", exc_info=True)
+
+            # Daily summary at 21:00 UTC (after NY close), skip weekends
+            try:
                 if now.hour == 21 and (
                     self._last_daily_summary is None
                     or self._last_daily_summary.date() < now.date()
@@ -374,12 +400,26 @@ class HVFTrader:
                     if now.weekday() == 6:
                         self.alerter.send_performance_summary(self.trade_logger)
                     self._last_daily_summary = now
-
             except Exception as e:
-                logger.error(f"Scanner loop error: {e}", exc_info=True)
-                self.trade_logger.log_event(
-                    "ERROR", details=f"Scanner: {e}", severity="ERROR"
-                )
+                logger.error(f"Daily summary failed: {e}", exc_info=True)
+
+            # Daily execution review at 21:30 UTC, weekdays only
+            try:
+                if (
+                    now.hour == 21 and now.minute >= 30 and now.weekday() <= 4
+                    and (
+                        self._last_daily_review is None
+                        or self._last_daily_review.date() < now.date()
+                    )
+                ):
+                    from hvf_trader.monitoring.daily_review import build_execution_report
+                    report = build_execution_report(
+                        self.trade_logger, self.connector, since_hours=24
+                    )
+                    self.alerter.send_message(report)
+                    self._last_daily_review = now
+            except Exception as e:
+                logger.error(f"Daily review failed: {e}", exc_info=True)
 
             # Heartbeat log every 60 cycles (~1 hour)
             cycle_count += 1
@@ -474,7 +514,7 @@ class HVFTrader:
             return
 
         latest = df.iloc[-1]
-        bar_time = df.index[-1]
+        bar_time = df["time"].iloc[-1]
 
         # Formation phase (00:00-07:00)
         if hour < 7:
@@ -487,17 +527,43 @@ class HVFTrader:
         if self._london_bo_tracker.state == "FORMING":
             qualified = self._london_bo_tracker.finalize_range(cfg)
             if not qualified:
-                logger.info(
-                    "[LONDON_BO] Session skipped: {}".format(
-                        self._london_bo_tracker.skipped_reason))
+                reason = self._london_bo_tracker.skipped_reason
+                logger.info("[LONDON_BO] Session skipped: {}".format(reason))
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[LONDON_BO] Session skipped</b>\n"
+                        f"{sym}: {reason}"
+                    )
                 return
 
-            # Same-day news filter
-            from hvf_trader.data.news_filter import has_high_impact_same_day
-            if has_high_impact_same_day(sym):
+            # Windowed news filter: block only if a high-impact event for
+            # GBPUSD's currencies falls inside LB's active window (00:00-13:00 UTC).
+            # Same-day events landing outside that window (e.g. late-NY releases)
+            # don't affect the Asian-range breakout edge.
+            from hvf_trader.data.news_filter import has_high_impact_in_window
+            window_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            window_end = now.replace(
+                hour=cfg["exit_hour_utc"], minute=0, second=0, microsecond=0
+            )
+            if has_high_impact_in_window(sym, window_start, window_end):
                 self._london_bo_tracker.state = "DONE"
-                logger.info("[LONDON_BO] Session skipped: high-impact event today")
+                logger.info("[LONDON_BO] Session skipped: high-impact event in window")
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[LONDON_BO] Session skipped</b>\n"
+                        f"High-impact event scheduled today"
+                    )
                 return
+
+            # Range qualified — alert the user the setup is armed
+            if self.alerter:
+                tracker = self._london_bo_tracker
+                self.alerter.send_message(
+                    f"<b>[LONDON_BO] Range locked</b>\n"
+                    f"{sym}: high={tracker.asian_high:.5f} low={tracker.asian_low:.5f}\n"
+                    f"Range: {tracker.asian_range_pips:.0f}p\n"
+                    f"Breakout window: 08:00-{cfg['exit_hour_utc']:02d}:00 UTC"
+                )
 
         # Trading phase (08:00-13:00)
         if hour < 8:
@@ -739,10 +805,12 @@ class HVFTrader:
                 logger.debug(f"Skip {sig.pattern_type} {sig.symbol} {sig.direction}: recently triggered")
                 continue
 
-            # Check per-pattern circuit breaker
-            cb_ok, cb_reason = self.circuit_breaker.check_pattern(sig.pattern_type)
+            # Check per-(pattern, symbol) circuit breaker
+            cb_ok, cb_reason = self.circuit_breaker.check_pattern(
+                sig.pattern_type, sig.symbol
+            )
             if not cb_ok:
-                logger.info(f"Pattern CB blocked {sig.pattern_type}: {cb_reason}")
+                logger.info(f"Pattern CB blocked {sig.pattern_type}/{sig.symbol}: {cb_reason}")
                 continue
 
             self._arm_signal(sig, df_1h)

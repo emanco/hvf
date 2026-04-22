@@ -138,9 +138,9 @@ RISK_PCT_BY_PATTERN = {
     "LONDON_SWEEP": 0.5,
     "WEDGE": 0.5,          # Conservative — unproven pattern type
 }
-DAILY_LOSS_LIMIT_PCT = 5.0        # V2 aggressive — pause until midnight UTC
-WEEKLY_LOSS_LIMIT_PCT = 8.0       # V2 aggressive — pause until Monday 00:00 UTC
-MONTHLY_LOSS_LIMIT_PCT = 15.0     # V2 aggressive — pause until 1st 00:00 UTC
+DAILY_LOSS_LIMIT_PCT = 10.0       # Demo data collection — wider tolerance
+WEEKLY_LOSS_LIMIT_PCT = 20.0      # Demo data collection — wider tolerance
+MONTHLY_LOSS_LIMIT_PCT = 30.0     # Demo data collection — wider tolerance
 MAX_CONCURRENT_TRADES = 6         # V2 aggressive — 6 × 2% = 12% max simultaneous risk
 MAX_SPREAD_PCT_OF_STOP = 0.10     # 10% of stop distance max (5% blocked normal market spreads)
 MAX_SPREAD_ABSOLUTE = 0.00020     # 2 pips — normal spreads always pass regardless of stop size
@@ -184,7 +184,7 @@ NEWS_BLOCK_MINUTES = 30           # Block trading 30min before/after high-impact
 NEWS_CACHE_MAX_AGE_HOURS = 6.0    # Block trading if calendar cache older than this
 
 # ─── Health Check ────────────────────────────────────────────────────────────
-HEARTBEAT_INTERVAL_SEC = 60       # MT5 heartbeat check interval
+HEARTBEAT_INTERVAL_SEC = 30       # MT5 heartbeat check interval
 RECONNECT_BASE_DELAY_SEC = 5     # Exponential backoff starting delay
 RECONNECT_MAX_DELAY_SEC = 60     # Max backoff delay
 RECONNECT_MAX_ATTEMPTS = 10

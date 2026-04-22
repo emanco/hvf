@@ -74,6 +74,14 @@ Last updated: 2026-04-16
 
 ## Deferred Audit Findings
 
+### H1 — PnL silently zeroed when MT5 deal lookup fails
+- When `mt5.history_deals_get` returns empty for a stopped-out trade, the close handler logs PnL=0 with `pnl_estimated=False`
+- Real losses are hidden from DB reporting while balance changes correctly in MT5 (so /balance is right, but trade-level PnL and PF are wrong)
+- Observed last week (4/13): 4 KZ_HUNT stop-outs (trades 96, 98, 99, 101) reported PnL=0 in DB but actually lost ~$410 combined per equity_snapshots balance deltas
+- Impact: weekly PF 0.96 (reconciled) vs 1.50 (headline from DB sums) — materially misleading for strategy evaluation
+- **Fix**: in deal-lookup fallback path, estimate PnL as `pips × pip_value × lot_size`, set `pnl_estimated=True`. Files: `execution/trade_monitor.py`, `execution/deal_utils.py`
+- **Priority**: High — distorts every performance metric
+
 ### M8 — RRR Threshold Review
 - RRR minimum of 1.0 may be too tight given spread widening at execution time
 - Seeing frequent rejections — need data to determine if this is filtering bad setups or blocking good ones

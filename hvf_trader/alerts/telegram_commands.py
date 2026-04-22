@@ -124,6 +124,7 @@ class TelegramCommandHandler:
             "/trades": self._cmd_trades,
             "/equity": self._cmd_equity,
             "/balance": self._cmd_balance,
+            "/review": self._cmd_review,
             "/closeall": self._cmd_closeall,
             "/help": self._cmd_help,
         }
@@ -144,10 +145,16 @@ class TelegramCommandHandler:
             "/trades - Open trades\n"
             "/equity - Equity chart since go-live\n"
             "/balance - Current balance + PnL\n"
+            "/review - Daily execution review (ops + perf)\n"
             "/closeall - Close all trades + expire armed patterns\n"
             "/help - This message"
         )
         self.alerter.send_message(text)
+
+    def _cmd_review(self):
+        from hvf_trader.monitoring.daily_review import build_execution_report
+        report = build_execution_report(self.trade_logger, self.connector, since_hours=24)
+        self.alerter.send_message(report)
 
     def _cmd_status(self):
         now = datetime.now(timezone.utc)
