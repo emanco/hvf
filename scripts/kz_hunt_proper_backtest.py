@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hvf_trader.backtesting.backtest_engine import BacktestEngine
 from hvf_trader import config
+from hvf_trader.data.data_fetcher import add_indicators
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backtests", "data")
 CHART_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backtests", "charts")
@@ -21,21 +22,21 @@ def load_h1(symbol):
         return None
     df = pd.read_csv(path)
     df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-    # Keep time as column (backtest engine expects it) AND as index
-    df.index = df["time"]
-    # Add indicators that fetch_and_prepare normally adds
-    df["tr"] = np.maximum(df["high"] - df["low"],
-                          np.maximum(abs(df["high"] - df["close"].shift(1)),
-                                     abs(df["low"] - df["close"].shift(1))))
-    df["atr"] = df["tr"].ewm(span=14, adjust=False).mean()
-    df["ema_200"] = df["close"].ewm(span=200, adjust=False).mean()
-    # Volume
+    # Engine expects integer-indexed df with 'time' as a column.
+    df = add_indicators(df)
     if "tick_volume" in df.columns:
         df["volume"] = df["tick_volume"]
+    df = df.dropna(subset=["atr", "ema_200", "adx"]).reset_index(drop=True)
     return df
 
-engine = BacktestEngine()
+engine = BacktestEngine(
+    starting_equity=10000.0,
+    enabled_patterns=["KZ_HUNT"],
+    simulate_news_blocks=True,
+    simulate_circuit_breaker=True,
+)
 all_trades = []
+per_pair_trades = {}  # sym -> [(date, pnl_pips, exit_reason)]
 
 print("KZ Hunt Proper Backtest (Real Engine)")
 print("=" * 70)
@@ -47,7 +48,7 @@ for symbol in INSTRUMENTS:
         print("    No data")
         continue
 
-    print("    {} bars, {} to {}".format(len(df), df.index[0].date(), df.index[-1].date()))
+    print("    {} bars, {} to {}".format(len(df), df["time"].iloc[0].date(), df["time"].iloc[-1].date()))
 
     try:
         result = engine.run(df, symbol)
@@ -58,14 +59,48 @@ for symbol in INSTRUMENTS:
 
         print("    {} trades, WR={:.0f}%, PnL={:+.0f}p".format(len(trades), wr, total_pips))
 
+        pair_list = []
         for t in trades:
-            entry_date = t.entry_time.date() if t.entry_time else df.index[0].date()
-            all_trades.append({
-                "d": entry_date,
-                "pnl": t.pnl_pips,
-                "x": t.exit_reason,
-                "sym": symbol,
-            })
+            entry_date = t.entry_time.date() if t.entry_time else df["time"].iloc[0].date()
+            rec = {"d": entry_date, "pnl": t.pnl_pips, "x": t.exit_reason, "sym": symbol}
+            all_trades.append(rec)
+            pair_list.append(rec)
+        per_pair_trades[symbol] = pair_list
+
+        # Per-pair equity curve chart (saved as soon as pair completes)
+        if pair_list:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            pair_list_sorted = sorted(pair_list, key=lambda x: x["d"])
+            dates = [r["d"] for r in pair_list_sorted]
+            eq_curve = np.cumsum([r["pnl"] for r in pair_list_sorted])
+            wins = sum(1 for r in pair_list if r["pnl"] > 0)
+            gp = sum(r["pnl"] for r in pair_list if r["pnl"] > 0)
+            gl = abs(sum(r["pnl"] for r in pair_list if r["pnl"] <= 0)) or 0.001
+            pair_wr = wins / len(pair_list) * 100
+            pair_pf = gp / gl
+            dd = max(np.maximum.accumulate(eq_curve) - eq_curve) if len(eq_curve) > 1 else 0
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(dates, eq_curve, color="tab:blue", linewidth=1.4)
+            ax.fill_between(dates, eq_curve, 0, where=eq_curve >= 0, color="tab:green", alpha=0.15)
+            ax.fill_between(dates, eq_curve, 0, where=eq_curve < 0, color="tab:red", alpha=0.15)
+            ax.axhline(0, color="k", linewidth=0.5)
+            ax.set_title(
+                "KZ Hunt — {} ({}-{} H1)  |  n={}  WR={:.0f}%  PF={:.2f}  Tot={:+.0f}p  DD={:.0f}p".format(
+                    symbol,
+                    df["time"].iloc[0].year, df["time"].iloc[-1].year,
+                    len(pair_list), pair_wr, pair_pf, sum(r["pnl"] for r in pair_list), dd,
+                ),
+                fontsize=11,
+            )
+            ax.set_ylabel("Cumulative pips")
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            chart_path = os.path.join(CHART_DIR, "kz_hunt_bt_{}.png".format(symbol))
+            fig.savefig(chart_path, dpi=110)
+            plt.close(fig)
+            print("    Chart: {}".format(chart_path))
     except Exception as e:
         import traceback
         print("    Error: {}".format(e))

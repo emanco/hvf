@@ -105,15 +105,29 @@ class AsianGravityScanner:
                             f"Trading window: {trading_start:02d}:00-{forced_exit:02d}:00 UTC"
                         )
 
-                    # News filter
-                    from hvf_trader.data.news_filter import has_high_impact_same_day
-                    if has_high_impact_same_day(sym):
+                    # Windowed news filter: only block if a high-impact event
+                    # for the symbol's currencies lands during the actual
+                    # trading window (next day 00:00-05:00 UTC). Events outside
+                    # that window (e.g. 07:30+ UTC morning PMIs) don't affect
+                    # the overnight mean-reversion setup.
+                    from datetime import timedelta as _td
+                    from hvf_trader.data.news_filter import has_high_impact_in_window
+                    next_day = (now + _td(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    window_start = next_day.replace(hour=trading_start)
+                    window_end = next_day.replace(hour=forced_exit)
+                    if has_high_impact_in_window(sym, window_start, window_end):
                         self._tracker.state = "DONE"
-                        logger.info("[%s] Session skipped: high-impact event today", pt)
+                        logger.info(
+                            "[%s] Session skipped: high-impact event in trading window",
+                            pt,
+                        )
                         if self._alerter:
                             self._alerter.send_message(
                                 f"<b>[{pt}] Session skipped</b>\n"
-                                f"High-impact event scheduled today"
+                                f"High-impact event in trading window "
+                                f"({trading_start:02d}:00-{forced_exit:02d}:00 UTC)"
                             )
                         return
                 return
