@@ -309,7 +309,7 @@ QUANTUM_LONDON = {
     "target_pips": 5,
     "stop_pips": 18,
     "max_range_pips": 999,              # No range filter — use daily open deviation only
-    "max_spread_pips": 1.2,
+    "max_spread_pips": 2.5,             # Asian-hours EURGBP spread is 3-5p live; 1.2p filtered out virtually all triggers
     "max_trades_per_session": 1,
     "direction": "BOTH",
     "risk_pct": 5.0,
