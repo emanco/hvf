@@ -191,7 +191,7 @@ RECONNECT_MAX_ATTEMPTS = 10
 DISCONNECT_CLOSE_THRESHOLD_SEC = 900  # 15 min = close all positions on reconnect
 
 # ─── Trade Monitor ───────────────────────────────────────────────────────────
-TRADE_MONITOR_INTERVAL_SEC = 30   # Check open positions every 30 seconds
+TRADE_MONITOR_INTERVAL_SEC = 10   # Check open positions every 10s — catches short T1 spikes / SL moves
 
 # ─── Performance Monitor ───────────────────────────────────────────────────
 PERF_MONITOR_INTERVAL_SEC = 3600      # Check every hour

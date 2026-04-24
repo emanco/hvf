@@ -20,6 +20,7 @@ from hvf_trader import config
 from hvf_trader.execution.deal_utils import (
     search_deal_history,
     find_close_deal,
+    combine_split_pnl,
     estimate_fallback_pnl,
 )
 
@@ -149,7 +150,7 @@ class TradeMonitor:
         current_price = position["price_current"]
         direction = trade_record.direction
 
-        # ─── Split-order T1 detection ────────────────────────────────────
+        # ─── Split-order T1 detection + failsafe ─────────────────────────
         # If this trade has a split partial position (60% with TP=T1),
         # check if MT5 closed it (T1 hit at tick level).
         if not trade_record.partial_closed and getattr(trade_record, 'mt5_ticket_partial', None):
@@ -164,6 +165,80 @@ class TradeMonitor:
                 )
                 self._handle_split_t1_hit(trade_record, ticket, position)
                 # Continue to trailing check below (don't return)
+            elif trade_record.target_1 and MT5_AVAILABLE:
+                # Failsafe: partial still open but price may have moved past T1.
+                # On IC Markets we've seen broker-side TPs fail to trigger even
+                # when bid/ask crosses the level. Force-close manually to lock
+                # in the profit the strategy expected.
+                import MetaTrader5 as _mt5
+                tick = _mt5.symbol_info_tick(trade_record.symbol)
+                if tick is not None:
+                    pip = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+                    buffer = 0.5 * pip  # avoid thrashing on wicks right at T1
+                    trigger_breached = False
+                    if direction == "LONG" and tick.bid >= trade_record.target_1 + buffer:
+                        # For LONG: close fill is BID ≥ T1 → matches target, guaranteed profit.
+                        trigger_breached = True
+                    elif direction == "SHORT" and tick.bid <= trade_record.target_1 - buffer:
+                        # For SHORT: use BID (chart price) crossing T1, not ASK.
+                        # When spread widens during Asian hours, ASK may never reach T1
+                        # even though visible chart price does. Fill is at ASK, so the
+                        # realized profit will be less than target_pips by the spread —
+                        # but only force-close if the fill would still be profitable
+                        # relative to entry. Otherwise let SL protect us.
+                        if tick.ask < trade_record.entry_price:
+                            trigger_breached = True
+                    if trigger_breached:
+                        logger.warning(
+                            f"[T1_FAILSAFE] Trade {trade_record.id}: price past T1 "
+                            f"but partial ticket {trade_record.mt5_ticket_partial} "
+                            f"still open — forcing manual close "
+                            f"(bid={tick.bid} ask={tick.ask} T1={trade_record.target_1})"
+                        )
+                        close_result = self.order_manager.close_position(
+                            trade_record.mt5_ticket_partial,
+                            trade_record.symbol, direction,
+                            f"{trade_record.pattern_type or 'AUTO'} TP_failsafe"
+                        )
+                        if close_result:
+                            fill_price = (
+                                close_result.get("fill_price")
+                                if isinstance(close_result, dict)
+                                else trade_record.target_1
+                            )
+                            self.trade_logger.log_partial_close(
+                                trade_record.id, fill_price
+                            )
+                            # Reload so downstream sees partial_closed=True
+                            from hvf_trader.database.models import TradeRecord as _TR
+                            refreshed = self.trade_logger._session.get(_TR, trade_record.id)
+                            if refreshed is not None:
+                                trade_record = refreshed
+                            # Move main SL to breakeven
+                            be_sl = trade_record.entry_price
+                            self.order_manager.modify_stop_loss(
+                                ticket, trade_record.symbol, be_sl
+                            )
+                            self.trade_logger.log_trade_update(
+                                trade_record.id, trailing_sl=be_sl
+                            )
+                            # Init trailing trackers
+                            if direction == "LONG":
+                                self._highest_since_partial[ticket] = tick.bid
+                            else:
+                                self._lowest_since_partial[ticket] = tick.ask
+                            logger.info(
+                                f"[T1_FAILSAFE] Trade {trade_record.id}: partial "
+                                f"force-closed @ {fill_price}, main SL → breakeven {be_sl}"
+                            )
+                            if self.alerter:
+                                self.alerter.send_message(
+                                    f"<b>[T1_FAILSAFE] Broker TP not honored</b>\n"
+                                    f"{trade_record.symbol} {direction}: partial ticket "
+                                    f"{trade_record.mt5_ticket_partial} force-closed @ "
+                                    f"{fill_price:.5f}\n"
+                                    f"Main SL moved to breakeven {be_sl:.5f}"
+                                )
 
         # Get associated pattern for invalidation check
         pattern = None
@@ -556,7 +631,7 @@ class TradeMonitor:
         if not MT5_AVAILABLE:
             return
 
-        # If split order, close the partial position too (if still open)
+        # If split order, handle the partial position.
         partial_ticket = getattr(trade_record, 'mt5_ticket_partial', None)
         if partial_ticket:
             partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
@@ -569,6 +644,41 @@ class TradeMonitor:
                     partial_ticket, trade_record.symbol, trade_record.direction,
                     f"{trade_record.pattern_type or 'AUTO'} server_close partial"
                 )
+            elif not trade_record.partial_closed:
+                # Bug-fix: partial position already gone but DB never recorded T1 hit.
+                # Happens when both the partial (at T1) and the main (at SL) close
+                # between monitor polls, so _handle_split_t1_hit was never called.
+                # The broker's TP on the partial ticket is tick-level, so if the
+                # position is gone it almost certainly closed at T1.
+                partial_close_price = trade_record.target_1
+                try:
+                    partial_deals = search_deal_history(
+                        partial_ticket, trade_record.symbol
+                    )
+                    if partial_deals:
+                        cd = find_close_deal(
+                            partial_deals, partial_ticket, trade_record.symbol,
+                            trade_record.direction, trade_record.opened_at,
+                        )
+                        if cd:
+                            partial_close_price = cd.price
+                except Exception as e:
+                    logger.warning(
+                        f"Deal lookup for partial ticket {partial_ticket} failed: {e}"
+                    )
+                logger.warning(
+                    f"Detected late partial close for trade {trade_record.id}: "
+                    f"partial ticket {partial_ticket} gone, recording close @ "
+                    f"{partial_close_price:.5f} (assumed T1)"
+                )
+                self.trade_logger.log_partial_close(
+                    trade_record.id, partial_close_price
+                )
+                # Reload so downstream PnL estimation sees partial_closed=True
+                from hvf_trader.database.models import TradeRecord as _TR
+                refreshed = self.trade_logger._session.get(_TR, trade_record.id)
+                if refreshed is not None:
+                    trade_record = refreshed
 
         ticket = trade_record.mt5_ticket
 
@@ -663,14 +773,10 @@ class TradeMonitor:
 
         if close_deal:
             close_price = close_deal.price
-            pnl = close_deal.profit
-            pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
-            direction = trade_record.direction
-
-            if direction == "LONG":
-                pnl_pips = (close_price - trade_record.entry_price) / pip_value
-            else:
-                pnl_pips = (trade_record.entry_price - close_price) / pip_value
+            # For split orders with a prior partial close, combine both legs.
+            pnl, pnl_pips = combine_split_pnl(
+                trade_record, close_price, close_deal.profit
+            )
 
             reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
             self.trade_logger.log_trade_close(

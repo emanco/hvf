@@ -151,3 +151,67 @@ def estimate_fallback_pnl(trade_record, close_price: float) -> tuple[float, floa
     else:
         pnl = remainder_pips * dollar_per_pip * original_lots
         return pnl, remainder_pips
+
+
+def combine_split_pnl(trade_record, main_close_price: float, main_close_profit: float):
+    """Combine main (40%) close PnL with the known partial (60%) close for a split order.
+
+    Used when deal history DID resolve for the main ticket but the trade is a
+    split order with an earlier partial close. MT5's deal.profit only covers
+    the 40% remainder — the 60% partial's profit needs to be added.
+
+    Returns:
+        (total_pnl_dollars, total_pips) averaged across the full lot.
+        If the trade is not a split order or partial_closed is False, returns
+        (main_close_profit, main_pips) unchanged.
+    """
+    pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+    direction = trade_record.direction
+
+    if direction == "LONG":
+        main_pips = (main_close_price - trade_record.entry_price) / pip_value
+    else:
+        main_pips = (trade_record.entry_price - main_close_price) / pip_value
+
+    if not (
+        trade_record.partial_closed
+        and trade_record.partial_close_price
+        and getattr(trade_record, 'mt5_ticket_partial', None)
+    ):
+        # Not a split, or partial not closed — main PnL is the whole story
+        return main_close_profit, main_pips
+
+    # Try to find the partial's actual close deal for exact profit
+    partial_profit = None
+    try:
+        partial_deals = search_deal_history(
+            trade_record.mt5_ticket_partial, trade_record.symbol
+        )
+        if partial_deals:
+            cd = find_close_deal(
+                partial_deals, trade_record.mt5_ticket_partial,
+                trade_record.symbol, direction, trade_record.opened_at,
+            )
+            if cd:
+                partial_profit = cd.profit
+    except Exception as e:
+        logger.warning("Partial deal lookup failed: %s", e)
+
+    if direction == "LONG":
+        partial_pips = (trade_record.partial_close_price - trade_record.entry_price) / pip_value
+    else:
+        partial_pips = (trade_record.entry_price - trade_record.partial_close_price) / pip_value
+
+    if partial_profit is None:
+        # Estimate partial profit from pips × 60% of lot_size × $10/pip
+        dollar_per_pip = 10.0
+        original_lots = trade_record.lot_size or 0.01
+        partial_pct = config.PARTIAL_CLOSE_PCT
+        partial_profit = partial_pips * dollar_per_pip * original_lots * partial_pct
+
+    total_pnl = main_close_profit + partial_profit
+    # Weighted pip outcome (partial 60% + remainder 40%)
+    partial_pct = config.PARTIAL_CLOSE_PCT
+    remainder_pct = 1.0 - partial_pct
+    total_pips = partial_pips * partial_pct + main_pips * remainder_pct
+    return total_pnl, total_pips

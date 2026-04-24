@@ -45,6 +45,8 @@ class AsianGravityScanner:
         self._cfg = cfg or config.ASIAN_GRAVITY
         self._pattern_type = self._cfg.get("pattern_type", "ASIAN_GRAVITY")
         self._daily_open_captured = False
+        self._session_stats: dict | None = None
+        self._last_telemetry_log_hour: int | None = None
 
     def start(self):
         """Main loop. Runs until stop() is called."""
@@ -93,6 +95,21 @@ class AsianGravityScanner:
                     # Skip formation — go straight to trading
                     self._tracker.finalize_formation(pip, cfg["max_range_pips"])
                     self._daily_open_captured = True
+                    self._session_stats = {
+                        "session_open": bar["open"],
+                        "date": str(now.date()),
+                        "polls": 0,
+                        "tick_none": 0,
+                        "max_below_pips": 0.0,   # max dist below open (LONG-side depth)
+                        "max_above_pips": 0.0,   # max dist above open (SHORT-side height)
+                        "tightest_spread_pips": float("inf"),
+                        "widest_spread_pips": 0.0,
+                        "spread_sum_pips": 0.0,
+                        "trigger_crosses_long": 0,   # polls with bid <= LONG trigger
+                        "trigger_crosses_short": 0,  # polls with ask >= SHORT trigger
+                        "crossed_but_wide_spread": 0,  # would have fired except spread
+                    }
+                    self._last_telemetry_log_hour = None
                     logger.info(
                         "[%s] Daily open captured: %.5f, date=%s",
                         pt, bar["open"], now.date())
@@ -139,6 +156,38 @@ class AsianGravityScanner:
             # Daytime idle window (after force-exit, before next capture): reset for next session
             if hour >= forced_exit and hour < daily_open_hour:
                 if self._tracker.state != "IDLE":
+                    # Emit session summary once, before resetting tracker state
+                    if self._session_stats is not None:
+                        s = self._session_stats
+                        active_polls = max(1, s["polls"] - s["tick_none"])
+                        avg_spread = s["spread_sum_pips"] / active_polls
+                        tight = s["tightest_spread_pips"] if s["tightest_spread_pips"] != float("inf") else 0
+                        trig = cfg["trigger_pips"]
+                        would_have_fired = (
+                            (s["trigger_crosses_long"] + s["trigger_crosses_short"])
+                            - s["crossed_but_wide_spread"]
+                        )
+                        logger.info(
+                            "[%s] SESSION SUMMARY date=%s open=%.5f polls=%d tick_none=%d "
+                            "range_reached=(below %.1fp / above %.1fp) trigger=%.0fp "
+                            "spread(tight/avg/wide)=%.1f/%.1f/%.1fp "
+                            "crosses(L/S)=%d/%d wide_rejects=%d should_have_fired=%d",
+                            pt, s["date"], s["session_open"], s["polls"], s["tick_none"],
+                            s["max_below_pips"], s["max_above_pips"], trig,
+                            tight, avg_spread, s["widest_spread_pips"],
+                            s["trigger_crosses_long"], s["trigger_crosses_short"],
+                            s["crossed_but_wide_spread"], would_have_fired,
+                        )
+                        if self._alerter and would_have_fired > 0:
+                            self._alerter.send_message(
+                                f"<b>[{pt}] Session ended — missed triggers</b>\n"
+                                f"Open: {s['session_open']:.5f}  trigger: {trig:.0f}p\n"
+                                f"Range reached: -{s['max_below_pips']:.1f}p / +{s['max_above_pips']:.1f}p\n"
+                                f"Trigger crosses (L/S): {s['trigger_crosses_long']}/{s['trigger_crosses_short']}\n"
+                                f"Rejected by spread: {s['crossed_but_wide_spread']}  "
+                                f"Should have fired: {would_have_fired}"
+                            )
+                        self._session_stats = None
                     self._force_exit_if_open()
                     self._tracker.reset()
                 self._daily_open_captured = False
@@ -229,6 +278,62 @@ class AsianGravityScanner:
             return
 
         tick = mt5.symbol_info_tick(sym)
+
+        # Telemetry: record every poll in the trading window so missed triggers are diagnosable.
+        stats = self._session_stats
+        if stats is not None:
+            stats["polls"] += 1
+            if tick is None:
+                stats["tick_none"] += 1
+            else:
+                spread_pips = (tick.ask - tick.bid) / pip
+                stats["spread_sum_pips"] += spread_pips
+                if spread_pips < stats["tightest_spread_pips"]:
+                    stats["tightest_spread_pips"] = spread_pips
+                if spread_pips > stats["widest_spread_pips"]:
+                    stats["widest_spread_pips"] = spread_pips
+                session_open = self._tracker.session_open
+                dist_below = (session_open - tick.bid) / pip
+                dist_above = (tick.ask - session_open) / pip
+                if dist_below > stats["max_below_pips"]:
+                    stats["max_below_pips"] = dist_below
+                if dist_above > stats["max_above_pips"]:
+                    stats["max_above_pips"] = dist_above
+                trig = cfg["trigger_pips"]
+                cross_long = tick.bid <= (session_open - trig * pip)
+                cross_short = tick.ask >= (session_open + trig * pip)
+                if cross_long:
+                    stats["trigger_crosses_long"] += 1
+                if cross_short:
+                    stats["trigger_crosses_short"] += 1
+                if (cross_long or cross_short) and spread_pips > cfg["max_spread_pips"]:
+                    stats["crossed_but_wide_spread"] += 1
+                    # Log each cross-but-wide event so we can confirm it in real time.
+                    logger.info(
+                        "[%s] TRIGGER CROSSED but spread=%.1fp > max %.1fp — no entry "
+                        "(bid=%.5f ask=%.5f open=%.5f)",
+                        pt, spread_pips, cfg["max_spread_pips"],
+                        tick.bid, tick.ask, session_open,
+                    )
+
+            # Hourly telemetry heartbeat during trading window
+            if hour != self._last_telemetry_log_hour:
+                self._last_telemetry_log_hour = hour
+                if stats["polls"] > 0:
+                    avg = stats["spread_sum_pips"] / max(1, stats["polls"] - stats["tick_none"])
+                    logger.info(
+                        "[%s] Session telemetry @%02d:00 UTC — polls=%d tick_none=%d "
+                        "max_below=%.1fp max_above=%.1fp spread(tight/avg/wide)=%.1f/%.1f/%.1fp "
+                        "crosses(L/S)=%d/%d wide_rejects=%d",
+                        pt, hour, stats["polls"], stats["tick_none"],
+                        stats["max_below_pips"], stats["max_above_pips"],
+                        stats["tightest_spread_pips"] if stats["tightest_spread_pips"] != float("inf") else 0,
+                        avg,
+                        stats["widest_spread_pips"],
+                        stats["trigger_crosses_long"], stats["trigger_crosses_short"],
+                        stats["crossed_but_wide_spread"],
+                    )
+
         if tick is None:
             return
 

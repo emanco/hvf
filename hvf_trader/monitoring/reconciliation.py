@@ -12,6 +12,7 @@ from hvf_trader.execution.deal_utils import (
     search_deal_history,
     find_close_deal,
     estimate_fallback_pnl,
+    combine_split_pnl,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,10 @@ class Reconciliator:
             self._close_fallback(trade, ticket)
             return
 
+        # Detect missed partial-close: if split order, partial gone, and DB
+        # didn't record T1 hit, back-fill it so PnL estimation includes partial profit.
+        self._detect_missed_partial(trade)
+
         deals = search_deal_history(ticket, trade.symbol)
         if not deals:
             self._close_fallback(trade, ticket)
@@ -235,12 +240,7 @@ class Reconciliator:
 
         if close_deal:
             close_price = close_deal.price
-            pnl = close_deal.profit
-            pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-            if trade.direction == "LONG":
-                pnl_pips = (close_price - trade.entry_price) / pip_value
-            else:
-                pnl_pips = (trade.entry_price - close_price) / pip_value
+            pnl, pnl_pips = combine_split_pnl(trade, close_price, close_deal.profit)
 
             reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
             self.trade_logger.log_trade_close(
@@ -262,6 +262,38 @@ class Reconciliator:
             )
         else:
             self._close_fallback(trade, ticket)
+
+    def _detect_missed_partial(self, trade):
+        """If split order + partial position gone but partial_closed=False, back-fill."""
+        partial_ticket = getattr(trade, 'mt5_ticket_partial', None)
+        if not partial_ticket or trade.partial_closed:
+            return
+        partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
+        if partial_pos is not None:
+            return  # still open; nothing to back-fill
+        partial_close_price = trade.target_1
+        try:
+            partial_deals = search_deal_history(partial_ticket, trade.symbol)
+            if partial_deals:
+                cd = find_close_deal(
+                    partial_deals, partial_ticket, trade.symbol,
+                    trade.direction, trade.opened_at,
+                )
+                if cd:
+                    partial_close_price = cd.price
+        except Exception as e:
+            logger.warning(
+                f"[RECONCILIATION] Deal lookup for partial ticket {partial_ticket} failed: {e}"
+            )
+        logger.warning(
+            f"[RECONCILIATION] Detected late partial close for trade {trade.id}: "
+            f"partial ticket {partial_ticket} gone, recording close @ "
+            f"{partial_close_price:.5f} (assumed T1)"
+        )
+        self.trade_logger.log_partial_close(trade.id, partial_close_price)
+        # Refresh the attribute so the in-memory trade object reflects the change
+        trade.partial_closed = True
+        trade.partial_close_price = partial_close_price
 
     def _close_fallback(self, trade, ticket):
         """Fallback close when no deal history is available."""
