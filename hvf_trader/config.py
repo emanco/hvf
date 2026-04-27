@@ -298,7 +298,7 @@ QUANTUM_LONDON = {
     "enabled": True,
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
-    "poll_interval_sec": 30,
+    "poll_interval_sec": 5,            # Match trade_monitor cadence for tick-level reaction
     "days": [0, 1, 2, 3, 4],           # Sun-Thu nights (trading happens Mon-Fri 00:00-05:00 UTC)
     "formation_start_utc": 22,          # Daily open at 22:00 UTC (00:00 GMT+2)
     "formation_end_utc": 0,             # No formation needed — just grab the 22:00 open

@@ -265,11 +265,15 @@ class AsianGravityScanner:
             self._tracker.state = "DONE"
             return
 
-        # If we already have an open trade, just monitor for time exit
+        # If we already have an open trade, monitor it
         if self._open_trade_id:
-            # TP and SL are broker-side — nothing to do until 06:00
-            # But check if position was closed by broker (TP/SL hit)
+            # First: did broker close it (TP/SL/SO)?
             self._check_if_closed()
+            if self._open_trade_id is None:
+                return  # closed cleanly
+            # Position still alive — apply TP failsafe in case broker silently
+            # ignores its TP order (observed bug pattern on IC Markets demo).
+            self._tp_failsafe_check()
             return
 
         # ─── Entry detection via live tick ────────────────────────────
@@ -475,6 +479,88 @@ class AsianGravityScanner:
             )
 
     # ─── Trade Monitoring ─────────────────────────────────────────────
+
+    def _tp_failsafe_check(self):
+        """Force-close the position if price has crossed TP but broker hasn't honored it.
+
+        Mirrors the trade_monitor T1 failsafe used for KZ Hunt split partials.
+        For LONG: trigger when bid >= TP (chart-visible target hit).
+        For SHORT: trigger when bid <= TP, but only if current ASK fill would
+        still be profitable vs entry (spread guard).
+        """
+        pt = self._pattern_type
+        if not self._open_trade_id or not MT5_AVAILABLE:
+            return
+
+        trade = self._trade_logger._session.get(
+            __import__("hvf_trader.database.models", fromlist=["TradeRecord"]).TradeRecord,
+            self._open_trade_id,
+        )
+        if not trade or trade.status == "CLOSED":
+            self._open_trade_id = None
+            return
+
+        tp = trade.target_1
+        if not tp:
+            return
+
+        tick = mt5.symbol_info_tick(trade.symbol)
+        if tick is None:
+            return
+
+        pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
+        buffer = 0.5 * pip  # avoid thrashing on wicks
+        trigger_breached = False
+        if trade.direction == "LONG" and tick.bid >= tp + buffer:
+            trigger_breached = True
+        elif trade.direction == "SHORT" and tick.bid <= tp - buffer:
+            # Spread guard: only force-close if the fill (at ASK) is still profitable
+            if tick.ask < trade.entry_price:
+                trigger_breached = True
+
+        if not trigger_breached:
+            return
+
+        logger.warning(
+            "[%s] TP_FAILSAFE: price past TP but position still open — "
+            "force-closing (bid=%.5f ask=%.5f tp=%.5f)",
+            pt, tick.bid, tick.ask, tp,
+        )
+        result = self._order_manager.close_position(
+            trade.mt5_ticket, trade.symbol, trade.direction,
+            "{} TP_failsafe".format(pt),
+        )
+        if not result:
+            logger.error("[%s] TP failsafe close failed for ticket=%s", pt, trade.mt5_ticket)
+            return
+
+        fill_price = result.get("fill_price") if isinstance(result, dict) else tp
+        pnl_from_pips = 0.0
+        if trade.direction == "LONG":
+            pnl_pips = (fill_price - trade.entry_price) / pip
+        else:
+            pnl_pips = (trade.entry_price - fill_price) / pip
+        # Use position profit if available, otherwise estimate
+        pnl = result.get("profit") if isinstance(result, dict) else pnl_pips * 10.0 * trade.lot_size
+
+        self._trade_logger.log_trade_close(
+            trade.id, fill_price, pnl, pnl_pips, "TP_FAILSAFE",
+        )
+        logger.info(
+            "[%s] TP_FAILSAFE close: ticket=%s @ %.5f, %.1f pips, ~$%.2f",
+            pt, trade.mt5_ticket, fill_price, pnl_pips, pnl,
+        )
+        if self._alerter:
+            emoji = "\u2705" if pnl_pips > 0 else "\u26a0\ufe0f"
+            self._alerter.send_message(
+                "<b>{} [{}] TP_FAILSAFE</b>\n"
+                "Broker did not honor TP — closed manually\n"
+                "Fill: {:.5f}  PnL: {:+.1f} pips (~${:+.2f})".format(
+                    emoji, pt, fill_price, pnl_pips, pnl,
+                )
+            )
+        self._open_trade_id = None
+        self._tracker.mark_traded()
 
     def _check_if_closed(self):
         """Check if broker closed the trade (TP or SL hit)."""
