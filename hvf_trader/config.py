@@ -305,7 +305,7 @@ QUANTUM_LONDON = {
     "trading_start_utc": 0,             # Trading window: 00:00-05:00 UTC
     "trading_end_utc": 5,
     "forced_exit_utc": 5,              # Exit before Frankfurt pre-market
-    "trigger_pips": 8,
+    "trigger_pips": 7,                  # 8 → 7: EURGBP Asian volatility has been low (5-7p ranges). Still above FF community's 5p noise zone.
     "target_pips": 5,
     "stop_pips": 18,
     "max_range_pips": 999,              # No range filter — use daily open deviation only
