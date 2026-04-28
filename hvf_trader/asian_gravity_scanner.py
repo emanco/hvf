@@ -51,14 +51,28 @@ class AsianGravityScanner:
     def start(self):
         """Main loop. Runs until stop() is called."""
         self._running = True
-        logger.info("[%s] Scanner thread started", self._pattern_type)
+        poll = self._cfg["poll_interval_sec"]
+        # Heartbeat fires every ~60s regardless of poll cadence
+        hb_every = max(1, int(60 / poll))
+        logger.info(
+            "[%s] Scanner thread started (poll=%ds, heartbeat every %d iters)",
+            self._pattern_type, poll, hb_every,
+        )
 
+        iter_count = 0
         while self._running:
             try:
                 self._tick()
             except Exception as e:
                 logger.error("[%s] Scanner error: %s", self._pattern_type, e, exc_info=True)
-            time.sleep(self._cfg["poll_interval_sec"])
+            iter_count += 1
+            if iter_count % hb_every == 0:
+                logger.info(
+                    "[%s] heartbeat: iter=%d state=%s captured=%s open_trade=%s",
+                    self._pattern_type, iter_count, self._tracker.state,
+                    self._daily_open_captured, self._open_trade_id,
+                )
+            time.sleep(poll)
 
         logger.info("[%s] Scanner thread stopped", self._pattern_type)
 
@@ -88,9 +102,13 @@ class AsianGravityScanner:
                 df = fetch_and_prepare(sym, cfg["formation_timeframe"], bars=5)
                 if df is not None and not df.empty:
                     bar = df.iloc[-1]
+                    # Pad hi/lo by 2 pips so finalize_formation always sees a usable
+                    # range (a tiny doji M15 bar would otherwise trip the range<1 skip).
                     self._tracker.start_session(
-                        bar_open=bar["open"], bar_high=bar["high"],
-                        bar_low=bar["low"], date=str(now.date()),
+                        bar_open=bar["open"],
+                        bar_high=bar["open"] + 2 * pip,
+                        bar_low=bar["open"] - 2 * pip,
+                        date=str(now.date()),
                     )
                     # Skip formation — go straight to trading
                     self._tracker.finalize_formation(pip, cfg["max_range_pips"])
@@ -254,26 +272,31 @@ class AsianGravityScanner:
                             "High-impact event scheduled today".format(pt))
                     return
 
-        # ─── Trading phase (02:00 - 06:00) ───────────────────────────
+        # ─── Open trade monitoring ────────────────────────────────────
+        # Runs regardless of tracker state. After entry, mark_traded() sets
+        # state to DONE — but the position is still open and must be tracked
+        # until the broker closes it (TP/SL) or we force-close at session end.
+        if self._open_trade_id:
+            self._check_if_closed()
+            if self._open_trade_id is None:
+                return  # closed cleanly
+            self._tp_failsafe_check()
+            if self._open_trade_id is None:
+                return
+            # Force exit at session end even if tracker has moved past TRADING
+            if hour >= cfg["forced_exit_utc"]:
+                self._force_exit_if_open()
+                self._tracker.state = "DONE"
+            return
+
+        # ─── Trading phase (entry detection) ──────────────────────────
 
         if self._tracker.state != "TRADING":
             return
 
-        # Force exit check (06:00)
+        # Force exit check (no open trade, just clean up tracker)
         if hour >= cfg["forced_exit_utc"]:
-            self._force_exit_if_open()
             self._tracker.state = "DONE"
-            return
-
-        # If we already have an open trade, monitor it
-        if self._open_trade_id:
-            # First: did broker close it (TP/SL/SO)?
-            self._check_if_closed()
-            if self._open_trade_id is None:
-                return  # closed cleanly
-            # Position still alive — apply TP failsafe in case broker silently
-            # ignores its TP order (observed bug pattern on IC Markets demo).
-            self._tp_failsafe_check()
             return
 
         # ─── Entry detection via live tick ────────────────────────────

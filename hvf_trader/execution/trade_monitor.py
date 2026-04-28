@@ -68,7 +68,13 @@ class TradeMonitor:
     def start(self):
         """Start the trade monitoring loop."""
         self._running = True
-        logger.info("Trade monitor started")
+        poll = config.TRADE_MONITOR_INTERVAL_SEC
+        hb_every = max(1, int(60 / poll))
+        logger.info(
+            "Trade monitor started (poll=%ds, heartbeat every %d iters)",
+            poll, hb_every,
+        )
+        iter_count = 0
         while self._running:
             try:
                 self._monitor_cycle()
@@ -82,7 +88,17 @@ class TradeMonitor:
                 self.trade_logger.log_event(
                     "ERROR", details=f"Trade monitor: {e}", severity="ERROR"
                 )
-            time.sleep(config.TRADE_MONITOR_INTERVAL_SEC)
+            iter_count += 1
+            if iter_count % hb_every == 0:
+                try:
+                    open_count = len(self.trade_logger.get_open_trades())
+                except Exception:
+                    open_count = -1
+                logger.info(
+                    "Trade monitor heartbeat: iter=%d open_trades=%d",
+                    iter_count, open_count,
+                )
+            time.sleep(poll)
 
     def stop(self):
         """Stop the monitoring loop."""
@@ -115,9 +131,11 @@ class TradeMonitor:
         own scanner thread (TP/SL broker-side, time exit at 06:00), so we
         skip them here to avoid interference.
         """
-        # Asian Gravity and London Breakout trades have broker-side TP/SL
-        # and time-based exit managed by their own scanners
-        if trade_record.pattern_type in ("ASIAN_GRAVITY", "LONDON_BO", "QUANTUM_LONDON"):
+        # Asian Gravity, London Breakout, Quantum London, and Night Tide trades
+        # have broker-side TP/SL and time-based exit managed by their own scanners
+        if trade_record.pattern_type in (
+            "ASIAN_GRAVITY", "LONDON_BO", "QUANTUM_LONDON", "NIGHT_TIDE",
+        ):
             return
         ticket = trade_record.mt5_ticket
         if ticket is None:
@@ -240,6 +258,123 @@ class TradeMonitor:
                                     f"Main SL moved to breakeven {be_sl:.5f}"
                                 )
 
+        # ─── Time stop ───────────────────────────────────────────────────
+        # Force-close trades that have aged past the configured threshold.
+        # KZ_HUNT: 4 H1 bars. Backstop for slow drifters that haven't hit TP
+        # or SL — backtest recovers +85p from the SL bucket on this pattern.
+        time_stop_hours = config.TIME_STOP_HOURS_BY_PATTERN.get(
+            trade_record.pattern_type, 0,
+        )
+        if time_stop_hours > 0 and trade_record.opened_at:
+            opened = trade_record.opened_at
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            held_hours = (datetime.now(timezone.utc) - opened).total_seconds() / 3600
+            if held_hours >= time_stop_hours:
+                logger.info(
+                    f"[TIME_STOP] Trade {trade_record.id} held {held_hours:.1f}h "
+                    f">= {time_stop_hours}h limit — force-closing"
+                )
+                self._close_trade(
+                    trade_record, ticket, position, "TIME_STOP",
+                )
+                return
+
+        # ─── Move SL to breakeven at N% progress toward T1 ───────────────
+        # Catches trades that get close to T1 but reverse before triggering
+        # the partial-close. Live data: 18/19 SL'd trades with MFE>5p had
+        # reached 50% of T1 distance. Recovers ~+113p / $1,100 across 109
+        # KZ_HUNT trades. Independent of the partial-close path; once partial
+        # fires, the existing logic moves SL to BE there.
+        be_progress = config.BE_AT_T1_PROGRESS_BY_PATTERN.get(
+            trade_record.pattern_type, 0.0,
+        )
+        if (be_progress > 0 and not trade_record.partial_closed
+                and trade_record.target_1 is not None
+                and (trade_record.trailing_sl is None
+                     or abs(trade_record.trailing_sl - trade_record.entry_price)
+                        > config.PIP_VALUES.get(trade_record.symbol, 0.0001) * 0.5)):
+            entry = trade_record.entry_price
+            t1 = trade_record.target_1
+            be_trigger = entry + be_progress * (t1 - entry)
+            triggered = (
+                (direction == "LONG" and current_price >= be_trigger)
+                or (direction == "SHORT" and current_price <= be_trigger)
+            )
+            if triggered:
+                self.order_manager.modify_stop_loss(
+                    ticket, trade_record.symbol, entry,
+                )
+                self.trade_logger.log_trade_update(
+                    trade_record.id, trailing_sl=entry,
+                )
+                logger.info(
+                    f"[BE_PROGRESS] Trade {trade_record.id}: "
+                    f"price reached {be_progress*100:.0f}% of T1 — SL → breakeven {entry:.5f}"
+                )
+                trade_record.trailing_sl = entry
+
+        # ─── Pre-partial ATR trail ───────────────────────────────────────
+        # Once MFE crosses N×ATR_H1, start trailing SL at N×ATR from the
+        # peak favorable price — independent of partial-close. Combined with
+        # BE@50%T1 above, recovers +94p net / +160p SL-bucket across 109
+        # KZ_HUNT trades. Pattern-gated; 0.0 disables.
+        pre_partial_trail_atr = config.PRE_PARTIAL_TRAIL_ATR_BY_PATTERN.get(
+            trade_record.pattern_type, 0.0,
+        )
+        if (pre_partial_trail_atr > 0 and not trade_record.partial_closed):
+            cached = self._atr_cache.get(trade_record.symbol)
+            current_atr = None
+            if cached and (time.time() - cached[0]) < 120:
+                current_atr = cached[1]
+            else:
+                from hvf_trader.data.data_fetcher import fetch_and_prepare
+                df_atr = fetch_and_prepare(
+                    trade_record.symbol, config.PRIMARY_TIMEFRAME, bars=20,
+                )
+                if df_atr is not None and not df_atr.empty:
+                    current_atr = df_atr["atr"].iloc[-1]
+                    self._atr_cache[trade_record.symbol] = (time.time(), current_atr)
+
+            if current_atr is not None and current_atr > 0:
+                entry = trade_record.entry_price
+                if direction == "LONG":
+                    mfe = current_price - entry
+                    if mfe >= pre_partial_trail_atr * current_atr:
+                        new_sl = current_price - pre_partial_trail_atr * current_atr
+                        current_sl = trade_record.trailing_sl or trade_record.stop_loss
+                        if new_sl > current_sl:
+                            self.order_manager.modify_stop_loss(
+                                ticket, trade_record.symbol, new_sl,
+                            )
+                            self.trade_logger.log_trade_update(
+                                trade_record.id, trailing_sl=new_sl,
+                            )
+                            logger.info(
+                                f"[PRE_PARTIAL_TRAIL] Trade {trade_record.id}: "
+                                f"MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
+                                f"SL → {new_sl:.5f}"
+                            )
+                            trade_record.trailing_sl = new_sl
+                else:  # SHORT
+                    mfe = entry - current_price
+                    if mfe >= pre_partial_trail_atr * current_atr:
+                        new_sl = current_price + pre_partial_trail_atr * current_atr
+                        current_sl = trade_record.trailing_sl or trade_record.stop_loss
+                        if new_sl < current_sl:
+                            self.order_manager.modify_stop_loss(
+                                ticket, trade_record.symbol, new_sl,
+                            )
+                            self.trade_logger.log_trade_update(
+                                trade_record.id, trailing_sl=new_sl,
+                            )
+                            logger.info(
+                                f"[PRE_PARTIAL_TRAIL] Trade {trade_record.id}: "
+                                f"MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
+                                f"SL → {new_sl:.5f}"
+                            )
+                            trade_record.trailing_sl = new_sl
+
         # Get associated pattern for invalidation check
         pattern = None
         if trade_record.pattern_id:
@@ -250,7 +385,11 @@ class TradeMonitor:
         # Uses completed H1 bar close (not current tick) to match backtest
         # behavior.  Only re-evaluates when a new bar completes.
         # Grace period: skip for first 2 H1 bars (2 hours).
-        if pattern and not trade_record.partial_closed:
+        # Per-pattern toggle: KZ_HUNT disabled 2026-04-28 (backtest-overfit).
+        invalidation_enabled = config.INVALIDATION_ENABLED_BY_PATTERN.get(
+            trade_record.pattern_type, True,
+        )
+        if invalidation_enabled and pattern and not trade_record.partial_closed:
             hours_since_open = 0
             if trade_record.opened_at:
                 opened = trade_record.opened_at

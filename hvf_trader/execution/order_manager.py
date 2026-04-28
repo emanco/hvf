@@ -36,6 +36,7 @@ class OrderManager:
         take_profit: float = 0.0,
         comment: str = "AUTO",
         magic: int = 20250305,
+        limit_price: float = 0.0,
     ) -> Optional[dict]:
         """
         Place a market order with stop loss.
@@ -48,6 +49,11 @@ class OrderManager:
             take_profit: TP price (0 = no TP, managed by trade monitor)
             comment: order comment
             magic: magic number for identification
+            limit_price: optional limit price. If > 0, uses TRADE_ACTION_DEAL
+                with this price + zero deviation — MT5 fills at this price or
+                better, otherwise rejects (TRADE_RETCODE_REQUOTE). For LONG
+                this should be max acceptable ask; for SHORT, min acceptable
+                bid. Caps adverse slippage at the limit boundary.
 
         Returns:
             Dict with 'ticket' and 'fill_price' on success, None on failure.
@@ -68,8 +74,24 @@ class OrderManager:
 
         order_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
         tick = mt5.symbol_info_tick(symbol)
-        price = tick.ask if direction == "LONG" else tick.bid
         digits = symbol_info.digits
+
+        # Symbol-specific deviation tolerance. Previously hardcoded to 20 points,
+        # which is ~2p on 5-digit pairs but only 0.2p on JPY (3-digit). Now we
+        # convert a target pip tolerance into points for each symbol so the
+        # broker rejects fills > MAX_DEVIATION_PIPS away.
+        pip_size = symbol_info.point * (10 if digits in (3, 5) else 1)
+
+        # Limit-style entry: if limit_price provided, use it as the request
+        # price with zero deviation. MT5 only fills at limit-or-better; any
+        # adverse drift larger than 0 returns TRADE_RETCODE_REQUOTE.
+        if limit_price and limit_price > 0:
+            price = limit_price
+            deviation_points = 0
+        else:
+            price = tick.ask if direction == "LONG" else tick.bid
+            max_dev_pips = config.MAX_DEVIATION_PIPS
+            deviation_points = max(1, int(max_dev_pips * pip_size / symbol_info.point))
 
         # Round prices to symbol precision — unrounded SLs can cause "Invalid stops"
         price = round(price, digits)
@@ -84,7 +106,7 @@ class OrderManager:
             "price": price,
             "sl": stop_loss,
             "tp": take_profit,
-            "deviation": 20,
+            "deviation": deviation_points,
             "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
@@ -98,9 +120,20 @@ class OrderManager:
             return None
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.error(
-                f"Order failed: retcode={result.retcode}, comment={result.comment}"
-            )
+            # Limit-style fills surface as REQUOTE/REJECT when price drifted
+            # past the cap — that's the intended behavior, not an error.
+            if limit_price and result.retcode in (
+                mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_REJECT,
+                mt5.TRADE_RETCODE_PRICE_OFF,
+            ):
+                logger.info(
+                    f"Limit-style entry skipped: price drifted past cap "
+                    f"{limit_price} (retcode={result.retcode})"
+                )
+            else:
+                logger.error(
+                    f"Order failed: retcode={result.retcode}, comment={result.comment}"
+                )
             return None
 
         logger.info(

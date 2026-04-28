@@ -185,6 +185,10 @@ class HVFTrader:
             from hvf_trader.detector.london_breakout import LondonBreakoutTracker
             self._london_bo_tracker = LondonBreakoutTracker()
 
+        # ─── Night Tide (BB+RSI on cross pairs) ────────────────────────
+        self._night_tide_enabled = config.NIGHT_TIDE.get("enabled", False)
+        self._night_tide_last_bar: dict[str, pd.Timestamp] = {}
+
         # ─── State ───────────────────────────────────────────────────────
         self._running = False
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
@@ -347,6 +351,13 @@ class HVFTrader:
                 except Exception as e:
                     logger.error(f"London Breakout scan failed: {e}", exc_info=True)
 
+            # Night Tide: BB+RSI mean reversion on quiet-hours cross pairs
+            if self._night_tide_enabled:
+                try:
+                    self._scan_night_tide(now)
+                except Exception as e:
+                    logger.error(f"Night Tide scan failed: {e}", exc_info=True)
+
             # Entry monitor: check armed patterns for confirmation
             try:
                 self._check_armed_patterns()
@@ -421,13 +432,11 @@ class HVFTrader:
             except Exception as e:
                 logger.error(f"Daily review failed: {e}", exc_info=True)
 
-            # Heartbeat log every 60 cycles (~1 hour)
+            # Heartbeat log every cycle (~1 minute) — confirms scanner thread is alive
             cycle_count += 1
-            if cycle_count % 60 == 0:
-                logger.info(
-                    f"Heartbeat: {cycle_count} cycles, "
-                    f"armed={len(self._armed_patterns)}"
-                )
+            logger.info(
+                f"Scanner heartbeat: cycle={cycle_count} armed={len(self._armed_patterns)}"
+            )
 
             # Watchdog: restart trade monitor if it died
             if not self._monitor_thread.is_alive():
@@ -508,8 +517,9 @@ class HVFTrader:
                 self._london_bo_tracker.reset()
             return
 
-        # Fetch latest H1 bar
-        df = fetch_and_prepare(sym, config.PRIMARY_TIMEFRAME, bars=10)
+        # Fetch latest H1 bar (London Breakout is hardcoded to H1 — its
+        # Asian-range tracking expects 7 bars from 00:00-07:00 UTC).
+        df = fetch_and_prepare(sym, "H1", bars=10)
         if df is None or df.empty:
             return
 
@@ -715,6 +725,341 @@ class HVFTrader:
                     self.alerter.send_message(
                         "<b>{} [LONDON_BO] TIME EXIT</b>\n"
                         "PnL: {:+.1f} pips".format(emoji, pnl_pips))
+
+    # ─── Night Tide ──────────────────────────────────────────────────────
+
+    def _scan_night_tide(self, now):
+        """Scan all NIGHT_TIDE instruments for BB+RSI mean-reversion entries.
+
+        Runs within the main scanner loop (60s cadence). For each pair:
+        1. Force-close any held position whose 4-hour clock has run out
+        2. If outside the trading window, force-close any open trade
+        3. Inside the window: fetch new M15 bar, compute indicators, check
+           for entry — but only if no NIGHT_TIDE position is already open
+           on this symbol.
+        """
+        from hvf_trader.detector.night_tide import (
+            in_trading_window, in_force_close_window,
+            compute_indicators, detect_signal,
+        )
+
+        cfg = config.NIGHT_TIDE
+
+        # First: detect any broker-driven closes (TP/SL hit) so we record
+        # them with correct PnL on this cycle instead of waiting 3min for
+        # reconciliation. Mirrors QL's _check_if_closed pattern.
+        self._detect_night_tide_closes()
+
+        # Then handle force-close (max-hold + outside-window) so we don't
+        # leave stale positions running.
+        self._enforce_night_tide_exits(now)
+
+        if not in_trading_window(now):
+            return
+
+        for symbol in cfg["instruments"]:
+            try:
+                self._scan_night_tide_instrument(now, symbol, cfg,
+                                                 in_window_fn=in_trading_window,
+                                                 compute_fn=compute_indicators,
+                                                 detect_fn=detect_signal)
+            except Exception as e:
+                logger.error(f"[NIGHT_TIDE] {symbol} scan failed: {e}", exc_info=True)
+
+    def _scan_night_tide_instrument(self, now, symbol, cfg,
+                                    in_window_fn, compute_fn, detect_fn):
+        """Per-symbol scan. Skips if position already open or no fresh M15 bar."""
+        for trade in self.trade_logger.get_open_trades():
+            if trade.pattern_type == "NIGHT_TIDE" and trade.symbol == symbol:
+                logger.debug("[NIGHT_TIDE] %s skip: position already open", symbol)
+                return
+
+        open_nt = sum(1 for t in self.trade_logger.get_open_trades()
+                      if t.pattern_type == "NIGHT_TIDE")
+        if open_nt >= cfg.get("max_concurrent", 4):
+            logger.info("[NIGHT_TIDE] %s skip: max_concurrent (%d) reached",
+                        symbol, open_nt)
+            return
+
+        df = fetch_and_prepare(symbol, cfg["timeframe"], bars=50)
+        if df is None or df.empty:
+            logger.warning("[NIGHT_TIDE] %s skip: no M15 data fetched", symbol)
+            return
+
+        latest_time = df["time"].iloc[-1]
+        last_seen = self._night_tide_last_bar.get(symbol)
+        if last_seen is not None and latest_time <= last_seen:
+            return  # No new closed bar since last scan
+        self._night_tide_last_bar[symbol] = latest_time
+
+        df = compute_fn(df)
+        last = df.iloc[-1]
+        logger.info(
+            "[NIGHT_TIDE] %s scan: bar=%s close=%.5f bb=(%.5f/%.5f/%.5f) rsi=%.1f",
+            symbol, latest_time, last["close"],
+            last.get("bb_lower", float("nan")),
+            last.get("bb_mid", float("nan")),
+            last.get("bb_upper", float("nan")),
+            last.get("nt_rsi", float("nan")),
+        )
+        signal = detect_fn(df, symbol, cfg)
+        if signal is None:
+            logger.info("[NIGHT_TIDE] %s no signal", symbol)
+            return
+
+        # Runtime spread filter (rollover protection)
+        try:
+            import MetaTrader5 as mt5
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is not None:
+                pip = config.PIP_VALUES.get(symbol, 0.0001)
+                spread_pips = (tick.ask - tick.bid) / pip
+                if spread_pips > cfg["max_spread_pips"]:
+                    logger.info(
+                        "[NIGHT_TIDE] %s skip: spread %.1fp > max %.1fp",
+                        symbol, spread_pips, cfg["max_spread_pips"],
+                    )
+                    return
+        except ImportError:
+            pass
+
+        self._execute_night_tide(signal, latest_time)
+
+    def _execute_night_tide(self, signal, bar_time):
+        """Place a NIGHT_TIDE order with broker-side TP/SL."""
+        from hvf_trader.detector.night_tide import signal_metadata
+        from hvf_trader.risk.position_sizer import calculate_lot_size
+
+        cfg = config.NIGHT_TIDE
+        sym = signal.symbol
+
+        if self.circuit_breaker.is_tripped:
+            logger.info("[NIGHT_TIDE] Circuit breaker tripped, skipping")
+            return
+
+        account = self.connector.get_account_info()
+        if not account:
+            return
+        equity = account["equity"]
+        stop_distance = abs(signal.entry_price - signal.stop_loss)
+
+        lot_size = calculate_lot_size(
+            equity=equity, risk_pct=cfg["risk_pct"],
+            stop_distance_price=stop_distance, symbol=sym,
+            account_currency=account.get("currency", "USD"),
+        )
+        if lot_size <= 0:
+            logger.warning("[NIGHT_TIDE] Lot size zero for %s", sym)
+            return
+
+        result = self.order_manager.place_market_order(
+            symbol=sym, direction=signal.direction, lot_size=lot_size,
+            stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+            comment="NIGHT_TIDE",
+        )
+        if not result:
+            logger.error("[NIGHT_TIDE] Order placement failed for %s", sym)
+            return
+
+        ticket = result["ticket"]
+        fill_price = result["fill_price"]
+        meta = signal_metadata(signal)
+
+        pip = config.PIP_VALUES.get(sym, 0.0001)
+        rrr = (
+            abs(signal.take_profit - fill_price) / abs(fill_price - signal.stop_loss)
+            if abs(fill_price - signal.stop_loss) > 0 else 0
+        )
+
+        pattern_data = {
+            "symbol": sym,
+            "timeframe": cfg["timeframe"],
+            "direction": signal.direction,
+            "detected_at": datetime.now(timezone.utc),
+            "score": 100,
+            "status": "TRIGGERED",
+            "entry_price": fill_price,
+            "stop_loss": signal.stop_loss,
+            "target_1": signal.take_profit,
+            "target_2": signal.take_profit,
+            "rrr": rrr,
+            "pattern_type": "NIGHT_TIDE",
+            "pattern_metadata": meta,
+            "h1_price": signal.bb_upper, "l1_price": signal.bb_lower,
+            "h2_price": signal.bb_mid, "l2_price": signal.rsi,
+            "h3_price": 0, "l3_price": 0,
+            "h1_index": 0, "l1_index": 0,
+            "h2_index": 0, "l2_index": 0,
+            "h3_index": 0, "l3_index": 0,
+        }
+        pattern_record = self.trade_logger.log_pattern(pattern_data)
+
+        slippage = (fill_price - signal.entry_price) if signal.direction == "LONG" \
+            else (signal.entry_price - fill_price)
+        trade_data = {
+            "pattern_id": pattern_record.id,
+            "symbol": sym,
+            "direction": signal.direction,
+            "pattern_type": "NIGHT_TIDE",
+            "mt5_ticket": ticket,
+            "entry_price": fill_price,
+            "stop_loss": signal.stop_loss,
+            "target_1": signal.take_profit,
+            "target_2": signal.take_profit,
+            "lot_size": lot_size,
+            "opened_at": datetime.now(timezone.utc),
+            "status": "OPEN",
+            "intended_entry": signal.entry_price,
+            "intended_sl": signal.stop_loss,
+            "slippage": slippage,
+            "pattern_metadata": meta,
+        }
+        self.trade_logger.log_trade_open(trade_data)
+
+        tp_pips = abs(signal.take_profit - fill_price) / pip
+        sl_pips = abs(signal.stop_loss - fill_price) / pip
+        logger.info(
+            "[NIGHT_TIDE] %s %s: fill=%.5f TP=%.5f (%.1fp) SL=%.5f (%.1fp) "
+            "lots=%s rsi=%.1f",
+            signal.direction, sym, fill_price, signal.take_profit, tp_pips,
+            signal.stop_loss, sl_pips, lot_size, signal.rsi,
+        )
+        if self.alerter:
+            self.alerter.send_message(
+                f"<b>[NIGHT_TIDE] {signal.direction} {sym}</b>\n"
+                f"Entry: {fill_price:.5f}\n"
+                f"TP: {signal.take_profit:.5f} (+{tp_pips:.1f}p)\n"
+                f"SL: {signal.stop_loss:.5f} (-{sl_pips:.1f}p)\n"
+                f"BB({signal.bb_lower:.5f}/{signal.bb_mid:.5f}/{signal.bb_upper:.5f})\n"
+                f"RSI: {signal.rsi:.1f}  Lots: {lot_size}"
+            )
+
+    def _detect_night_tide_closes(self):
+        """Scan open NIGHT_TIDE trades and record closes from broker TP/SL fills.
+
+        Runs every scanner cycle (60s). If an MT5 position is gone, look up
+        the deal and log close with correct PnL — without waiting 3min for
+        reconciliation. Mirrors QL's _check_if_closed.
+        """
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        from hvf_trader.execution.deal_utils import (
+            search_deal_history, find_close_deal,
+        )
+
+        for trade in self.trade_logger.get_open_trades():
+            if trade.pattern_type != "NIGHT_TIDE":
+                continue
+            ticket = trade.mt5_ticket
+            if ticket is None:
+                continue
+            positions = mt5.positions_get(ticket=ticket)
+            if positions and len(positions) > 0:
+                continue  # Still open
+
+            # Position gone — find the close deal
+            deals = search_deal_history(ticket, trade.symbol)
+            close_deal = find_close_deal(
+                deals, ticket, trade.symbol, trade.direction, trade.opened_at,
+            )
+            pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
+            if close_deal:
+                close_price = close_deal.price
+                pnl = close_deal.profit
+                if trade.direction == "LONG":
+                    pnl_pips = (close_price - trade.entry_price) / pip
+                else:
+                    pnl_pips = (trade.entry_price - close_price) / pip
+                reason = "TAKE_PROFIT" if pnl > 0 else "STOP_LOSS"
+                pnl_estimated = False
+            else:
+                # Fall back to TP target as best guess (broker hits are
+                # almost always TP for mean-reversion strategies — losing
+                # trades typically max-hold-out)
+                close_price = trade.target_1 or trade.entry_price
+                if trade.direction == "LONG":
+                    pnl_pips = (close_price - trade.entry_price) / pip
+                else:
+                    pnl_pips = (trade.entry_price - close_price) / pip
+                pnl = pnl_pips * 10.0 * (trade.lot_size or 0.01)
+                reason = "TAKE_PROFIT" if pnl_pips > 0 else "STOP_LOSS"
+                pnl_estimated = True
+
+            self.trade_logger.log_trade_close(
+                trade.id, close_price, pnl, pnl_pips, reason,
+                pnl_estimated=pnl_estimated,
+            )
+            logger.info(
+                "[NIGHT_TIDE] %s %s: close=%.5f, %.1f pips, $%+.2f%s",
+                trade.symbol, reason, close_price, pnl_pips, pnl,
+                " (estimated)" if pnl_estimated else "",
+            )
+            if self.alerter:
+                emoji = "\u2705" if pnl > 0 else "\u274C"
+                self.alerter.send_message(
+                    f"<b>{emoji} [NIGHT_TIDE] {reason} {trade.symbol}</b>\n"
+                    f"Close: {close_price:.5f}  PnL: {pnl_pips:+.1f}p (~${pnl:+.2f})"
+                    f"{' (est)' if pnl_estimated else ''}"
+                )
+
+    def _enforce_night_tide_exits(self, now):
+        """Force-close NIGHT_TIDE trades that have hit their 4-hour cap or
+        whose trading window has ended.
+        """
+        from hvf_trader.detector.night_tide import in_force_close_window
+        cfg = config.NIGHT_TIDE
+        max_hold = cfg["max_hold_hours"]
+        outside_window = in_force_close_window(now)
+
+        for trade in self.trade_logger.get_open_trades():
+            if trade.pattern_type != "NIGHT_TIDE":
+                continue
+            opened_at = trade.opened_at
+            if opened_at is None:
+                continue
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            held_hours = (now - opened_at).total_seconds() / 3600
+            reason = None
+            if held_hours >= max_hold:
+                reason = "MAX_HOLD"
+            elif outside_window:
+                reason = "WINDOW_END"
+            if reason is None:
+                continue
+
+            ticket = trade.mt5_ticket
+            result = self.order_manager.close_position(
+                ticket, trade.symbol, trade.direction,
+                f"NIGHT_TIDE {reason}",
+            )
+            if not result:
+                logger.error("[NIGHT_TIDE] Force-close failed for %s ticket=%s",
+                             trade.symbol, ticket)
+                continue
+            close_price = result.get("fill_price") if isinstance(result, dict) else 0
+            pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
+            if trade.direction == "LONG":
+                pnl_pips = (close_price - trade.entry_price) / pip
+            else:
+                pnl_pips = (trade.entry_price - close_price) / pip
+            pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) \
+                if isinstance(result, dict) else 0
+            self.trade_logger.log_trade_close(
+                trade.id, close_price, pnl, pnl_pips, reason,
+            )
+            logger.info(
+                "[NIGHT_TIDE] %s force-close (%s): %+.1f pips $%+.2f",
+                trade.symbol, reason, pnl_pips, pnl,
+            )
+            if self.alerter:
+                emoji = "\u2705" if pnl > 0 else "\u274C"
+                self.alerter.send_message(
+                    f"<b>{emoji} [NIGHT_TIDE] {reason} {trade.symbol}</b>\n"
+                    f"Held: {held_hours:.1f}h  PnL: {pnl_pips:+.1f}p (~${pnl:+.2f})"
+                )
 
     def _scan_instrument(self, symbol: str):
         """Scan a single instrument for patterns across all detectors."""
@@ -1061,6 +1406,40 @@ class HVFTrader:
         else:
             live_entry = symbol_info["bid"]
 
+        # Entry-drift gate: refuse to chase fills. If the live ask/bid has
+        # drifted more than X pips from the pattern's intended entry price,
+        # skip the trade. JPY crosses get a wider tolerance because their
+        # session-open spread spikes are larger.
+        pip_size = config.PIP_VALUES.get(symbol, 0.0001)
+        intended = getattr(pattern, "entry_price", None) or live_entry
+        is_jpy = symbol.endswith("JPY")
+        max_drift = config.MAX_ENTRY_DRIFT_PIPS_JPY if is_jpy \
+            else config.MAX_ENTRY_DRIFT_PIPS
+        drift_pips = abs(live_entry - intended) / pip_size
+        if drift_pips > max_drift:
+            logger.info(
+                f"[{pattern_type}] Skipping {symbol} {direction}: "
+                f"entry drift {drift_pips:.1f}p > max {max_drift}p "
+                f"(intended={intended:.5f}, live={live_entry:.5f})"
+            )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
+            return
+
+        # Limit-style entry cap: max acceptable fill price = intended ± tolerance.
+        # MT5 fills at this price or better, otherwise rejects (REQUOTE). Keeps
+        # adverse slippage bounded regardless of intended-vs-live drift.
+        limit_tolerance_pips = (
+            config.LIMIT_TOLERANCE_PIPS_JPY if is_jpy
+            else config.LIMIT_TOLERANCE_PIPS
+        )
+        if config.LIMIT_ORDERS_ENABLED_BY_PATTERN.get(pattern_type, False):
+            if direction == "LONG":
+                entry_limit_price = intended + limit_tolerance_pips * pip_size
+            else:
+                entry_limit_price = intended - limit_tolerance_pips * pip_size
+        else:
+            entry_limit_price = 0.0  # 0 disables limit-style fill in order_manager
+
         # Widen SL by the spread to match backtest conditions (no spread).
         # LONG: move SL down by spread; SHORT: move SL up by spread.
         if direction == "LONG":
@@ -1070,7 +1449,6 @@ class HVFTrader:
 
         # Guard: SL must be on the correct side of live price with enough room.
         # Minimum stop distance = max(5x spread, pattern minimum pips) to avoid noise stops.
-        pip_size = config.PIP_VALUES.get(symbol, 0.0001)
         min_stop_pips = config.MIN_STOP_PIPS_BY_PATTERN.get(pattern_type, 5)
         min_stop_dist = max(spread_price * 5, pip_size * min_stop_pips)
         if direction == "LONG" and (live_entry - adjusted_sl) < min_stop_dist:
@@ -1151,6 +1529,7 @@ class HVFTrader:
                 stop_loss=adjusted_sl,
                 take_profit=pattern.target_1,
                 comment=f"{pattern_type} T1",
+                limit_price=entry_limit_price,
             )
             if order_partial is None:
                 logger.error(f"Partial order (60%) failed for {symbol}, falling back to single order")
@@ -1166,6 +1545,7 @@ class HVFTrader:
                     lot_size=remaining_lots,
                     stop_loss=adjusted_sl,
                     comment=f"{pattern_type} T2",
+                    limit_price=entry_limit_price,
                 )
                 if order_remaining is None:
                     logger.error(
@@ -1197,6 +1577,7 @@ class HVFTrader:
                 lot_size=result.lot_size,
                 stop_loss=adjusted_sl,
                 comment=pattern_type,
+                limit_price=entry_limit_price,
             )
 
         if order_result is None:

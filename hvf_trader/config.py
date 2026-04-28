@@ -39,12 +39,12 @@ from zoneinfo import ZoneInfo
 DISPLAY_TZ = ZoneInfo("Europe/London")  # GMT/BST — used for Telegram display + scheduling
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY", "EURJPY", "CHFJPY"]
+INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "EURJPY"]   # Dropped GBPJPY+CHFJPY 2026-04-28 (low signal on M30; +166p over 3yrs combined).
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
 ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest. WEDGE available for backtesting only.
-PRIMARY_TIMEFRAME = "H1"
+PRIMARY_TIMEFRAME = "M30"   # KZ_HUNT switched 2026-04-28 — backtest +57% pips vs H1 over 3yrs
 CONFIRMATION_TIMEFRAME = "H4"
 
 # ─── HVF Detection ──────────────────────────────────────────────────────────
@@ -161,11 +161,84 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN = {
     "WEDGE": 1.5,        # D1 patterns need more room
 }
 
+# Limit-style entry: per-pattern toggle. When enabled, the order request goes
+# out with the intended_entry ± LIMIT_TOLERANCE_PIPS as the price and zero
+# deviation. MT5 fills at limit-or-better; if drift moves price past the cap,
+# the request returns REQUOTE and we skip the trade. Caps adverse slippage
+# regardless of how far live drifted from intended (drift gate already filters
+# the worst cases; this caps the residual).
+LIMIT_ORDERS_ENABLED_BY_PATTERN = {
+    "KZ_HUNT": True,
+    "HVF": False,
+    "VIPER": False,
+    "LONDON_SWEEP": False,
+    "WEDGE": False,
+}
+LIMIT_TOLERANCE_PIPS = 2.0          # Non-JPY pairs
+LIMIT_TOLERANCE_PIPS_JPY = 5.0      # JPY crosses
+
+# Max deviation pips for market-order fills. Previously hardcoded to 20 points
+# in order_manager (=2p on 5-digit, 0.2p on JPY 3-digit — silently slack on
+# majors, too tight on JPY). Now converted to points per symbol at runtime.
+MAX_DEVIATION_PIPS = 2.0
+
+# Entry-drift gate: refuse to fill when the live price has moved away from
+# the pattern's intended entry by more than this many pips. Live KZ_HUNT had
+# 6.06p mean adverse drift; this gate skips fills > N pips to recover ~$2,800
+# of $3,479 adverse cost. JPY crosses need wider tolerance because their
+# session-open spread spikes hit 14p+ on average.
+MAX_ENTRY_DRIFT_PIPS = 3.0          # Non-JPY pairs
+MAX_ENTRY_DRIFT_PIPS_JPY = 8.0      # JPY crosses
+
+# Time-stop: force-close trades that have aged past N hours without hitting
+# TP or SL. KZ_HUNT: 4 H1 bars (backstop for slow drifters). 0 disables.
+TIME_STOP_HOURS_BY_PATTERN = {
+    "KZ_HUNT": 4,
+    "HVF": 0,
+    "VIPER": 0,
+    "LONDON_SWEEP": 0,
+    "WEDGE": 0,
+}
+
+# Pre-partial ATR trail: once MFE >= N×ATR_H1, trail SL at N×ATR from peak.
+# Combined with BE@50%T1 yields +94p net across 109 live KZ_HUNT trades.
+# 0.0 disables for that pattern.
+PRE_PARTIAL_TRAIL_ATR_BY_PATTERN = {
+    "KZ_HUNT": 1.0,
+    "HVF": 0.0,
+    "VIPER": 0.0,
+    "LONDON_SWEEP": 0.0,
+    "WEDGE": 0.0,
+}
+
+# Move SL to breakeven when price reaches N% of the T1 distance from entry.
+# 0.0 disables the feature for that pattern. Backtest: BE@50% T1 recovers
+# +113p from the SL bucket across 109 live KZ_HUNT trades.
+BE_AT_T1_PROGRESS_BY_PATTERN = {
+    "KZ_HUNT": 0.50,
+    "HVF": 0.0,
+    "VIPER": 0.0,
+    "LONDON_SWEEP": 0.0,
+    "WEDGE": 0.0,
+}
+
+# Per-pattern invalidation toggle. Disabled for KZ_HUNT 2026-04-28 after live
+# data showed it net-negative: 25 invalidations, 10 cut would-be winners (TP1
+# or TP2), only 13 cut real losers. Net cost -$651 over 25 trades. Backtest
+# claimed 79% accuracy; live measured 52%. Backtest-overfit bolt-on.
+INVALIDATION_ENABLED_BY_PATTERN = {
+    "KZ_HUNT": False,
+    "HVF": True,
+    "VIPER": True,
+    "LONDON_SWEEP": True,
+    "WEDGE": True,
+}
+
 # Per-pattern freshness (max bars from detection to arming)
 PATTERN_FRESHNESS_BARS = {
     "HVF": 100,           # Breakouts can take time
     "VIPER": 10,          # Momentum continuation must be recent
-    "KZ_HUNT": 24,
+    "KZ_HUNT": 2,         # On M30 (was H1): 2 M30 bars = 60min wall clock — same as H1's 1-bar window. Backtest +57% pips on this combo.
     "LONDON_SWEEP": 12,
     "WEDGE": 72,          # D1 breakouts can take several days to confirm
 }
@@ -191,7 +264,7 @@ RECONNECT_MAX_ATTEMPTS = 10
 DISCONNECT_CLOSE_THRESHOLD_SEC = 900  # 15 min = close all positions on reconnect
 
 # ─── Trade Monitor ───────────────────────────────────────────────────────────
-TRADE_MONITOR_INTERVAL_SEC = 5    # Check open positions every 5s — catches single-tick wicks at T1
+TRADE_MONITOR_INTERVAL_SEC = 1    # 1s polling — CPU verified comfortable; per-minute heartbeat log confirms thread is alive
 
 # ─── Performance Monitor ───────────────────────────────────────────────────
 PERF_MONITOR_INTERVAL_SEC = 3600      # Check every hour
@@ -298,7 +371,7 @@ QUANTUM_LONDON = {
     "enabled": True,
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
-    "poll_interval_sec": 5,            # Match trade_monitor cadence for tick-level reaction
+    "poll_interval_sec": 1,            # 1s polling — CPU verified comfortable; per-minute heartbeat log confirms thread is alive
     "days": [0, 1, 2, 3, 4],           # Sun-Thu nights (trading happens Mon-Fri 00:00-05:00 UTC)
     "formation_start_utc": 22,          # Daily open at 22:00 UTC (00:00 GMT+2)
     "formation_end_utc": 0,             # No formation needed — just grab the 22:00 open
@@ -344,6 +417,28 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["LONDON_BO"] = 0
 MIN_STOP_PIPS_BY_PATTERN["LONDON_BO"] = 10
 PATTERN_FRESHNESS_BARS["LONDON_BO"] = 1
 
+# ─── Night Tide Strategy ────────────────────────────────────────────────────
+# Quiet-Hours BB+RSI mean reversion on cross pairs.
+# Window: 22-01 UTC summer (DST), 23-01 UTC winter (skip NY-rollover spike).
+# Backtest 2022-04 → 2026-04: PF 3.17, 76% WR, +7782p, DD 79p (1253 trades).
+NIGHT_TIDE = {
+    "enabled": True,
+    "instruments": ["AUDNZD", "NZDCAD", "AUDCAD", "EURCHF"],
+    "timeframe": "M15",
+    "stop_pips": 12,
+    "max_hold_hours": 4,            # 16 M15 bars
+    "spread_buffer_pips": 2.0,       # min TP-distance overhead vs spread
+    "max_spread_pips": 5.0,          # runtime: skip entry if spread > this (rollover protection)
+    "risk_pct": 1.0,                 # 1% per trade — 4 pairs can fire concurrently
+    "max_concurrent": 4,
+}
+
+RISK_PCT_BY_PATTERN["NIGHT_TIDE"] = NIGHT_TIDE["risk_pct"]
+MIN_RRR_BY_PATTERN["NIGHT_TIDE"] = 0.25   # TP = BB-mid, can be tight
+TRAILING_STOP_ATR_MULT_BY_PATTERN["NIGHT_TIDE"] = 0
+MIN_STOP_PIPS_BY_PATTERN["NIGHT_TIDE"] = 8
+PATTERN_FRESHNESS_BARS["NIGHT_TIDE"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,
@@ -354,6 +449,10 @@ PIP_VALUES = {
     "USDCHF": 0.0001,
     "EURGBP": 0.0001,
     "EURAUD": 0.0001,
+    "AUDNZD": 0.0001,
+    "NZDCAD": 0.0001,
+    "AUDCAD": 0.0001,
+    "EURCHF": 0.0001,
     "USDJPY": 0.01,
     "GBPJPY": 0.01,
     "EURJPY": 0.01,
