@@ -37,12 +37,25 @@ class MT5Connector:
             logger.error("MetaTrader5 package not available")
             return False
 
-        if not mt5.initialize(path=config.MT5_PATH):
+        # Pass credentials directly so initialize() spawns the terminal AND
+        # logs it in atomically. Without login here, a service-session
+        # spawned terminal will hang waiting for a logged-in account and
+        # IPC times out (-10005). The redundant mt5.login() below is kept
+        # as a fallback for cases where initialize succeeded but auth state
+        # got cleared.
+        if not mt5.initialize(
+            path=config.MT5_PATH,
+            login=config.MT5_LOGIN,
+            password=config.MT5_PASSWORD,
+            server=config.MT5_SERVER,
+            timeout=60000,
+        ):
             error = mt5.last_error()
             logger.error("MT5 initialize failed: %s", error)
             mt5.shutdown()
             return False
 
+        # Re-affirm login (idempotent if already authenticated).
         authorized = mt5.login(
             config.MT5_LOGIN,
             password=config.MT5_PASSWORD,
