@@ -177,6 +177,12 @@ LIMIT_ORDERS_ENABLED_BY_PATTERN = {
 LIMIT_TOLERANCE_PIPS = 2.0          # Non-JPY pairs
 LIMIT_TOLERANCE_PIPS_JPY = 5.0      # JPY crosses
 
+# Memory monitor: alert via Telegram when free physical memory drops below
+# this threshold (MB). VPS has 3 GB total; ~900 MB free is normal steady-
+# state, so 500 MB is the warning floor (gives ~400 MB cushion before OOM).
+# Throttled to one alert per 6 hours.
+MEMORY_ALERT_THRESHOLD_MB = 500
+
 # Max deviation pips for market-order fills. Previously hardcoded to 20 points
 # in order_manager (=2p on 5-digit, 0.2p on JPY 3-digit — silently slack on
 # majors, too tight on JPY). Now converted to points per symbol at runtime.

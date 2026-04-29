@@ -167,8 +167,14 @@ class AsianGravityScanner:
                         return
                 return
 
-            # Between daily open capture (22:00) and trading start (00:00): wait
-            if hour > daily_open_hour or hour < trading_start:
+            # Between daily open capture (22:00) and trading start (00:00): wait.
+            # Must use >= on daily_open_hour: after the capture-tick fires once,
+            # subsequent ticks within the same hour (captured=True) need to be
+            # caught here, otherwise they fall through to the trading-phase
+            # force-exit check (`hour >= forced_exit_utc`) which is True for
+            # any hour >= 5 — and immediately flips state to DONE before the
+            # trading window even begins.
+            if hour >= daily_open_hour or hour < trading_start:
                 return
 
             # Daytime idle window (after force-exit, before next capture): reset for next session

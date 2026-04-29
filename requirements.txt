@@ -1,0 +1,16 @@
+# Core runtime — required to run the bot
+MetaTrader5>=5.0.45
+python-telegram-bot>=20.0
+pandas>=2.0
+numpy>=1.24
+sqlalchemy>=2.0
+python-dotenv>=1.0
+matplotlib>=3.7
+scipy>=1.10
+
+# Backtest / analysis only (not required at runtime)
+yfinance>=0.2
+dukascopy-python>=4.0
+
+# Dev / test
+pytest>=7.0

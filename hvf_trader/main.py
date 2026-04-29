@@ -196,6 +196,7 @@ class HVFTrader:
         self._last_daily_summary = None
         self._last_daily_review = None
         self._last_cache_alert = None
+        self._last_memory_alert = None
 
     def start(self):
         """Start the trading bot."""
@@ -434,8 +435,37 @@ class HVFTrader:
 
             # Heartbeat log every cycle (~1 minute) — confirms scanner thread is alive
             cycle_count += 1
+            mem_str = ""
+            try:
+                from hvf_trader.monitoring.memory_monitor import read_memory_mb
+                mem = read_memory_mb()
+                if mem is not None:
+                    mem_str = (
+                        f" mem={mem['avail_mb']:.0f}/{mem['total_mb']:.0f}MB "
+                        f"({mem['percent_used']}%used)"
+                    )
+                    # Telegram alert when free memory drops below threshold,
+                    # throttled to one alert per 6 hours.
+                    if (mem["avail_mb"] < config.MEMORY_ALERT_THRESHOLD_MB
+                            and self.alerter is not None):
+                        if (self._last_memory_alert is None
+                                or (now - self._last_memory_alert).total_seconds() >= 6 * 3600):
+                            self._last_memory_alert = now
+                            self.alerter.send_message(
+                                f"\u26a0\ufe0f <b>VPS memory low</b>\n"
+                                f"Free: {mem['avail_mb']:.0f} MB of {mem['total_mb']:.0f} MB "
+                                f"({mem['percent_used']}% used)\n"
+                                f"Threshold: {config.MEMORY_ALERT_THRESHOLD_MB} MB\n"
+                                f"Action: restart MT5 terminal, or reboot VPS if it persists."
+                            )
+                            logger.warning(
+                                "VPS memory low: %.0f MB free (threshold %d MB) — alert sent",
+                                mem["avail_mb"], config.MEMORY_ALERT_THRESHOLD_MB,
+                            )
+            except Exception as e:
+                logger.debug("Memory read failed: %s", e)
             logger.info(
-                f"Scanner heartbeat: cycle={cycle_count} armed={len(self._armed_patterns)}"
+                f"Scanner heartbeat: cycle={cycle_count} armed={len(self._armed_patterns)}{mem_str}"
             )
 
             # Watchdog: restart trade monitor if it died
