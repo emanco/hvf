@@ -229,6 +229,22 @@ class HVFTrader:
 
         self.trade_logger.log_event("STARTUP", details=f"Environment={config.ENVIRONMENT}")
 
+        # Telegram heads-up that the bot is back online — important after
+        # the scheduled monthly reboot so the user knows it self-recovered.
+        if self.alerter is not None:
+            try:
+                bal_str = f"${account['balance']:.2f}" if account else "(unavailable)"
+                eq_str = f"${account['equity']:.2f}" if account else "(unavailable)"
+                self.alerter.send_message(
+                    f"\u2705 <b>Bot online</b>\n"
+                    f"Env: {config.ENVIRONMENT}\n"
+                    f"Balance: {bal_str}  Equity: {eq_str}\n"
+                    f"Strategies: {', '.join(config.ENABLED_PATTERNS)} + QL/LB/NIGHT_TIDE\n"
+                    f"Instruments: {len(config.INSTRUMENTS)} pairs"
+                )
+            except Exception as e:
+                logger.warning(f"Startup Telegram alert failed: {e}")
+
         # ─── Startup reconciliation: DB vs MT5 ─────────────────────────
         self._reconcile_on_startup()
 
