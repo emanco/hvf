@@ -126,6 +126,9 @@ class AsianGravityScanner:
                         "trigger_crosses_long": 0,   # polls with bid <= LONG trigger
                         "trigger_crosses_short": 0,  # polls with ask >= SHORT trigger
                         "crossed_but_wide_spread": 0,  # would have fired except spread
+                        "executions_attempted": 0,   # _execute() called
+                        "executions_filled": 0,      # order filled successfully
+                        "executions_failed": 0,      # broker rejected or other failure
                     }
                     self._last_telemetry_log_hour = None
                     logger.info(
@@ -187,29 +190,54 @@ class AsianGravityScanner:
                         avg_spread = s["spread_sum_pips"] / active_polls
                         tight = s["tightest_spread_pips"] if s["tightest_spread_pips"] != float("inf") else 0
                         trig = cfg["trigger_pips"]
+                        # Triggers that crossed and weren't blocked by spread.
+                        # Of those, some may have been attempted but failed at
+                        # the broker (executions_failed) — counted separately.
                         would_have_fired = (
                             (s["trigger_crosses_long"] + s["trigger_crosses_short"])
                             - s["crossed_but_wide_spread"]
                         )
+                        ex_attempted = s.get("executions_attempted", 0)
+                        ex_filled = s.get("executions_filled", 0)
+                        ex_failed = s.get("executions_failed", 0)
                         logger.info(
                             "[%s] SESSION SUMMARY date=%s open=%.5f polls=%d tick_none=%d "
                             "range_reached=(below %.1fp / above %.1fp) trigger=%.0fp "
                             "spread(tight/avg/wide)=%.1f/%.1f/%.1fp "
-                            "crosses(L/S)=%d/%d wide_rejects=%d should_have_fired=%d",
+                            "crosses(L/S)=%d/%d wide_rejects=%d "
+                            "execution(attempted/filled/failed)=%d/%d/%d",
                             pt, s["date"], s["session_open"], s["polls"], s["tick_none"],
                             s["max_below_pips"], s["max_above_pips"], trig,
                             tight, avg_spread, s["widest_spread_pips"],
                             s["trigger_crosses_long"], s["trigger_crosses_short"],
-                            s["crossed_but_wide_spread"], would_have_fired,
+                            s["crossed_but_wide_spread"],
+                            ex_attempted, ex_filled, ex_failed,
                         )
-                        if self._alerter and would_have_fired > 0:
+                        # Telegram only when something interesting happened —
+                        # i.e. a setup formed (cross or spread reject or any
+                        # execution attempt). Skip silent nights.
+                        if self._alerter and (
+                            would_have_fired > 0 or ex_attempted > 0
+                            or s["crossed_but_wide_spread"] > 0
+                        ):
+                            if ex_filled > 0:
+                                headline = "Session ended — order filled"
+                            elif ex_failed > 0:
+                                headline = "Session ended — execution failed"
+                            elif s["crossed_but_wide_spread"] > 0:
+                                headline = "Session ended — blocked by spread"
+                            else:
+                                headline = "Session ended — setup not actioned"
                             self._alerter.send_message(
-                                f"<b>[{pt}] Session ended — missed triggers</b>\n"
+                                f"<b>[{pt}] {headline}</b>\n"
                                 f"Open: {s['session_open']:.5f}  trigger: {trig:.0f}p\n"
-                                f"Range reached: -{s['max_below_pips']:.1f}p / +{s['max_above_pips']:.1f}p\n"
-                                f"Trigger crosses (L/S): {s['trigger_crosses_long']}/{s['trigger_crosses_short']}\n"
-                                f"Rejected by spread: {s['crossed_but_wide_spread']}  "
-                                f"Should have fired: {would_have_fired}"
+                                f"Range reached: -{s['max_below_pips']:.1f}p / "
+                                f"+{s['max_above_pips']:.1f}p\n"
+                                f"Trigger crosses (L/S): "
+                                f"{s['trigger_crosses_long']}/{s['trigger_crosses_short']}\n"
+                                f"Rejected by spread: {s['crossed_but_wide_spread']}\n"
+                                f"Execution: attempted={ex_attempted}  "
+                                f"filled={ex_filled}  failed={ex_failed}"
                             )
                         self._session_stats = None
                     self._force_exit_if_open()
@@ -391,9 +419,17 @@ class AsianGravityScanner:
         sym = signal.symbol
         pt = self._pattern_type
 
+        # Telemetry: this is a true execution attempt — trigger crossed,
+        # spread was acceptable, signal made it through tracker.check_trigger.
+        # We may still bail (circuit breaker, lot size, broker rejection).
+        if self._session_stats is not None:
+            self._session_stats["executions_attempted"] += 1
+
         # Circuit breaker check
         if self._circuit_breaker.is_tripped:
             logger.info("[%s] Circuit breaker tripped, skipping entry", pt)
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
             return
 
@@ -416,6 +452,8 @@ class AsianGravityScanner:
 
         if lot_size <= 0:
             logger.warning("[%s] Lot size zero, skipping", pt)
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
             return
 
@@ -428,8 +466,14 @@ class AsianGravityScanner:
 
         if not result:
             logger.error("[%s] Order placement failed", pt)
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
             return
+
+        # Order filled successfully — count as a real fill.
+        if self._session_stats is not None:
+            self._session_stats["executions_filled"] += 1
 
         ticket = result["ticket"]
         fill_price = result["fill_price"]
