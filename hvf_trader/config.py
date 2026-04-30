@@ -193,8 +193,8 @@ MAX_DEVIATION_PIPS = 2.0
 # 6.06p mean adverse drift; this gate skips fills > N pips to recover ~$2,800
 # of $3,479 adverse cost. JPY crosses need wider tolerance because their
 # session-open spread spikes hit 14p+ on average.
-MAX_ENTRY_DRIFT_PIPS = 3.0          # Non-JPY pairs
-MAX_ENTRY_DRIFT_PIPS_JPY = 8.0      # JPY crosses
+MAX_ENTRY_DRIFT_PIPS = 6.0          # Non-JPY pairs (3p→6p 2026-04-30: M30 confirmation gap is wider than H1; 3p was rejecting 100% of overnight signals).
+MAX_ENTRY_DRIFT_PIPS_JPY = 12.0     # JPY crosses (8p→12p, same reasoning + JPY's wider native range).
 
 # Time-stop: force-close trades that have aged past N hours without hitting
 # TP or SL. KZ_HUNT: 4 H1 bars (backstop for slow drifters). 0 disables.
