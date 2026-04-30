@@ -83,57 +83,94 @@ Backtests run locally with no MT5 connection — they read CSVs from `backtests/
 
 One-time bootstrap. Detailed steps:
 
-1. **Python 3.11+** — install from python.org (NOT the Microsoft Store version; ctypes/MT5 ABI compatibility).
-2. **MetaTrader 5 terminal** — install, log in once manually, accept any auth/2FA. Note the install path (default `C:\Program Files\MetaTrader 5\terminal64.exe`).
-3. **NSSM** — download from nssm.cc, drop `nssm.exe` at `C:\nssm\nssm.exe`.
-4. **Clone repo** to `C:\hvf_trader\`:
+1. **Verify VPS time zone is UTC** — most providers default to it, but check:
+   ```powershell
+   Get-TimeZone
+   ```
+   If not UTC, set it: `Set-TimeZone -Id "UTC"`. The bot uses UTC internally; mismatched system time can confuse log timestamps and Windows Task Scheduler triggers (e.g. the monthly auto-reboot).
+2. **Python 3.11+** — install from python.org (NOT the Microsoft Store version; ctypes/MT5 ABI compatibility). Tick "Add Python to PATH" during install.
+3. **Install Git** — download from git-scm.com. Default options are fine.
+4. **MetaTrader 5 terminal** — install, log in once manually, accept any auth/2FA. Note the install path (default `C:\Program Files\MetaTrader 5\terminal64.exe`). **Do NOT close the terminal yet** — you'll need it open in step 12.
+5. **NSSM** — download from nssm.cc, drop `nssm.exe` at `C:\nssm\nssm.exe`.
+6. **GitHub auth on VPS** (only if your repo is private). Two options:
+   - **Personal Access Token (simplest)**: GitHub → Settings → Developer settings → Tokens → Generate (classic, with `repo` scope). Then `git clone https://<TOKEN>@github.com/<user>/<repo>.git`.
+   - **SSH key**: `ssh-keygen -t ed25519` on the VPS, paste the public key into GitHub → Settings → SSH keys, then clone with the SSH URL.
+7. **Clone repo** to `C:\hvf_trader\`:
    ```powershell
    git clone <repo-url> C:\hvf_trader
    cd C:\hvf_trader
    ```
-5. **Python venv + deps**:
+8. **Create the logs directory** (NSSM won't create it automatically and will fail to start without it):
+   ```powershell
+   New-Item -ItemType Directory -Force -Path C:\hvf_trader\logs
+   ```
+9. **Python venv + deps**:
    ```powershell
    python -m venv venv
    .\venv\Scripts\pip install -r requirements.txt
    ```
-6. **Environment file**: copy `.env.example` to `C:\hvf_trader\.env` and fill in MT5 credentials, Telegram tokens, etc. The bot loads from `C:\hvf_trader\.env` directly.
-7. **Database init**: tables auto-create on first run via `init_db()`. No manual schema setup needed.
-8. **Register the NSSM service** (one time):
-   ```powershell
-   C:\nssm\nssm.exe install HVF_Bot C:\hvf_trader\venv\Scripts\python.exe C:\hvf_trader\main.py
-   C:\nssm\nssm.exe set HVF_Bot AppDirectory C:\hvf_trader
-   C:\nssm\nssm.exe set HVF_Bot AppStdout C:\hvf_trader\logs\service_stdout.log
-   C:\nssm\nssm.exe set HVF_Bot AppStderr C:\hvf_trader\logs\service_stderr.log
-   C:\nssm\nssm.exe set HVF_Bot AppExit Default Restart
-   C:\nssm\nssm.exe set HVF_Bot AppRestartDelay 5000
-   C:\nssm\nssm.exe set HVF_Bot Start SERVICE_AUTO_START
-   ```
-9. **Critical: set service to run as user account, NOT LocalSystem**.
-   When NSSM runs as `LocalSystem` (the default), the MT5 terminal it
-   spawns uses a system profile where AutoTrading is OFF by default —
-   every order will fail with `retcode 10027 "AutoTrading disabled"`.
-   Run as your user instead so MT5 inherits the user's saved settings:
-   ```powershell
-   C:\nssm\nssm.exe set HVF_Bot ObjectName ".\Administrator" "<password>"
-   ```
-10. **One-time: enable AutoTrading on the user's MT5**.
-    RDP into the VPS, open MT5 manually, click the "Algo Trading" toggle
-    in the toolbar (or Tools → Options → Expert Advisors → "Allow
-    algorithmic trading"). This setting saves to the user's MT5 profile
-    and is inherited by every future bot-spawned terminal.
-11. **Start the service**:
+10. **Environment file**: copy `.env.example` to `C:\hvf_trader\.env` and fill in MT5 credentials, Telegram tokens, etc. The bot loads from `C:\hvf_trader\.env` directly.
+11. **Smoke-test MT5 connection from venv** before installing the service. This catches credential typos and broker connectivity issues before they manifest as service crash loops:
+    ```powershell
+    C:\hvf_trader\venv\Scripts\python.exe -c "import os; from dotenv import load_dotenv; load_dotenv(r'C:/hvf_trader/.env'); import MetaTrader5 as mt5; ok = mt5.initialize(path=os.getenv('MT5_PATH'), login=int(os.getenv('MT5_LOGIN')), password=os.getenv('MT5_PASSWORD'), server=os.getenv('MT5_SERVER')); print('initialize:', ok); print('account:', mt5.account_info()); mt5.shutdown()"
+    ```
+    Should print `initialize: True` and a populated AccountInfo struct (balance, login, currency). If it fails, fix `.env` before continuing.
+12. **Verify all 6 KZ_HUNT instruments are available** (some demo brokers limit symbol lists):
+    ```powershell
+    C:\hvf_trader\venv\Scripts\python.exe -c "import os; from dotenv import load_dotenv; load_dotenv(r'C:/hvf_trader/.env'); import MetaTrader5 as mt5; mt5.initialize(path=os.getenv('MT5_PATH'), login=int(os.getenv('MT5_LOGIN')), password=os.getenv('MT5_PASSWORD'), server=os.getenv('MT5_SERVER')); [print(s, mt5.symbol_info(s) is not None) for s in ['EURUSD','NZDUSD','EURGBP','USDCHF','EURAUD','EURJPY','AUDNZD','NZDCAD','AUDCAD','EURCHF','GBPUSD']]; mt5.shutdown()"
+    ```
+    Each line should print `True`. Any `False` means that symbol isn't enabled on your account — contact your broker or remove that symbol from `INSTRUMENTS` in `config.py`.
+13. **Database init**: tables auto-create on first run via `init_db()`. No manual schema setup needed.
+14. **Register the NSSM service**:
+    ```powershell
+    C:\nssm\nssm.exe install HVF_Bot C:\hvf_trader\venv\Scripts\python.exe C:\hvf_trader\main.py
+    C:\nssm\nssm.exe set HVF_Bot AppDirectory C:\hvf_trader
+    C:\nssm\nssm.exe set HVF_Bot AppStdout C:\hvf_trader\logs\service_stdout.log
+    C:\nssm\nssm.exe set HVF_Bot AppStderr C:\hvf_trader\logs\service_stderr.log
+    C:\nssm\nssm.exe set HVF_Bot AppExit Default Restart
+    C:\nssm\nssm.exe set HVF_Bot AppRestartDelay 5000
+    C:\nssm\nssm.exe set HVF_Bot Start SERVICE_AUTO_START
+    ```
+15. **Critical: set service to run as user account, NOT LocalSystem**.
+    When NSSM runs as `LocalSystem` (the default), the MT5 terminal it
+    spawns uses a system profile where AutoTrading is OFF by default —
+    every order will fail with `retcode 10027 "AutoTrading disabled"`.
+    Run as your user instead so MT5 inherits the user's saved settings:
+    ```powershell
+    C:\nssm\nssm.exe set HVF_Bot ObjectName ".\Administrator" "<password>"
+    ```
+16. **Enable AutoTrading on the user's MT5** (one time, via the open MT5 from step 4):
+    Click the "Algo Trading" toggle in the MT5 toolbar (or Tools → Options → Expert Advisors → "Allow algorithmic trading"). This setting saves to the user's MT5 profile and is inherited by every future bot-spawned terminal.
+17. **Start the service**:
     ```powershell
     C:\nssm\nssm.exe start HVF_Bot
     ```
-12. **Verify AutoTrading is on** (sanity check after first start):
+18. **Verify AutoTrading is on** (sanity check via a fresh terminal init):
     ```powershell
     C:\hvf_trader\venv\Scripts\python.exe -c "import os; from dotenv import load_dotenv; load_dotenv(r'C:/hvf_trader/.env'); import MetaTrader5 as mt5; mt5.initialize(path=os.getenv('MT5_PATH'), login=int(os.getenv('MT5_LOGIN')), password=os.getenv('MT5_PASSWORD'), server=os.getenv('MT5_SERVER')); ti = mt5.terminal_info(); print(f'trade_allowed={ti.trade_allowed}'); mt5.shutdown()"
     ```
-    Expect `trade_allowed=True`. If False, repeat step 10 in the SAME
-    user session that's running the service, then restart.
-13. **Telegram check**: send `/status` to your bot — should reply with
-    account state. You should also see a `✅ Bot online` message
-    automatically on startup.
+    Expect `trade_allowed=True`. If False, repeat step 16 then restart the service.
+19. **First-run validation** (watch the bot for ~3 minutes):
+    ```powershell
+    Get-Content C:\hvf_trader\logs\main.log -Wait -Tail 30
+    ```
+    What you should see, in order:
+    - `MT5 connected: login=... server=... balance=... USD` (within 30s of start)
+    - `Loaded N armed patterns from DB` (probably 0 on first run)
+    - `Trade monitor started (poll=1s, ...)`
+    - `[QUANTUM_LONDON] Scanner thread started`
+    - `Starting scanner loop...`
+    - One full scan cycle across all instruments (`Scan EURUSD: ... candidates`)
+    - `Scanner heartbeat: cycle=1 armed=N mem=XXX/3071MB (XX%used)` — the first per-minute heartbeat
+    - A `✅ Bot online` Telegram alert on your phone
+
+    Press Ctrl-C to exit `-Wait` mode once you've seen the heartbeat.
+20. **Verify nothing in errors.log** during the first 5 minutes:
+    ```powershell
+    Get-Content C:\hvf_trader\logs\errors.log -Tail 20
+    ```
+    Some `Risk check FAILED [rrr_check]` warnings are normal — those are armed patterns that didn't pass risk gates. Other ERROR lines should be investigated.
+21. **Telegram sanity**: send `/status` to your bot — should reply with account state.
 
 Going forward, all code changes go through `./deploy.sh` from the dev machine.
 
