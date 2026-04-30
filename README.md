@@ -64,9 +64,33 @@ One-time bootstrap. Detailed steps:
    C:\nssm\nssm.exe set HVF_Bot AppExit Default Restart
    C:\nssm\nssm.exe set HVF_Bot AppRestartDelay 5000
    C:\nssm\nssm.exe set HVF_Bot Start SERVICE_AUTO_START
-   C:\nssm\nssm.exe start HVF_Bot
    ```
-9. **Telegram check**: send `/status` to your bot — should reply with account state.
+9. **Critical: set service to run as user account, NOT LocalSystem**.
+   When NSSM runs as `LocalSystem` (the default), the MT5 terminal it
+   spawns uses a system profile where AutoTrading is OFF by default —
+   every order will fail with `retcode 10027 "AutoTrading disabled"`.
+   Run as your user instead so MT5 inherits the user's saved settings:
+   ```powershell
+   C:\nssm\nssm.exe set HVF_Bot ObjectName ".\Administrator" "<password>"
+   ```
+10. **One-time: enable AutoTrading on the user's MT5**.
+    RDP into the VPS, open MT5 manually, click the "Algo Trading" toggle
+    in the toolbar (or Tools → Options → Expert Advisors → "Allow
+    algorithmic trading"). This setting saves to the user's MT5 profile
+    and is inherited by every future bot-spawned terminal.
+11. **Start the service**:
+    ```powershell
+    C:\nssm\nssm.exe start HVF_Bot
+    ```
+12. **Verify AutoTrading is on** (sanity check after first start):
+    ```powershell
+    C:\hvf_trader\venv\Scripts\python.exe -c "import os; from dotenv import load_dotenv; load_dotenv(r'C:/hvf_trader/.env'); import MetaTrader5 as mt5; mt5.initialize(path=os.getenv('MT5_PATH'), login=int(os.getenv('MT5_LOGIN')), password=os.getenv('MT5_PASSWORD'), server=os.getenv('MT5_SERVER')); ti = mt5.terminal_info(); print(f'trade_allowed={ti.trade_allowed}'); mt5.shutdown()"
+    ```
+    Expect `trade_allowed=True`. If False, repeat step 10 in the SAME
+    user session that's running the service, then restart.
+13. **Telegram check**: send `/status` to your bot — should reply with
+    account state. You should also see a `✅ Bot online` message
+    automatically on startup.
 
 Going forward, all code changes go through `./deploy.sh` from the dev machine.
 
@@ -137,6 +161,42 @@ The bot exposes these Telegram commands directly in chat:
 | Bot service stuck in `PAUSED` state (rare) | `ssh hvf-vps "sc.exe stop HVF_Bot; sc.exe start HVF_Bot"` — NSSM occasionally gets wedged after crash loops. |
 | Need to deploy new code | `./deploy.sh` from this repo — stops bot, uploads, clears `__pycache__`, restarts. |
 | Anything destructive (closing positions, modifying DB) | Pause and check first. |
+
+### Troubleshooting
+
+**Symptom: orders fail with `retcode=10027 "AutoTrading disabled by client"`**
+The MT5 terminal the bot is talking to has AutoTrading off. Two possible
+causes:
+1. NSSM service is running as `LocalSystem` instead of a user account →
+   bot spawned its own MT5 with system profile (fresh, AutoTrading off
+   by default). Fix: `nssm set HVF_Bot ObjectName ".\Administrator" "<pw>"`
+   then restart bot.
+2. The user's MT5 profile doesn't have AutoTrading enabled → enable it
+   manually once via RDP (toolbar toggle or Tools → Options).
+
+**Symptom: bot crash-loops with `MT5 initialize failed: (-10005, IPC timeout)`**
+Stale MT5 terminals from a different user session are blocking the
+bot's spawn. Find them:
+```bash
+ssh hvf-vps "Get-Process terminal64 | Format-Table Id,SessionId"
+```
+Kill any in `Session 0` from a previous LocalSystem run, then restart
+the bot — it'll spawn a fresh one in the user account's session.
+
+**Symptom: every KZ_HUNT pattern rejected with `entry drift Xp > max 3p`**
+Drift gate is too tight for the timeframe. Default values in
+`config.py`:
+- `MAX_ENTRY_DRIFT_PIPS = 6.0` (non-JPY)
+- `MAX_ENTRY_DRIFT_PIPS_JPY = 12.0` (JPY crosses)
+On M30 these are right; on a slower timeframe you might widen further,
+on a faster one tighten. Watch the `Skipping ... entry drift Xp` logs to
+calibrate.
+
+**Symptom: QL Telegram says "Session ended — execution failed"**
+The trigger crossed and the bot tried to fire, but the order was
+rejected. Almost always AutoTrading off (see first symptom above), or
+broker margin / lot-size limits. Check `logs/main.log` for the exact
+`Order failed: retcode=...` line.
 
 ### Memory monitoring
 
