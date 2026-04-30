@@ -159,6 +159,29 @@ class TradeMonitor:
                     f"(attempt {count}/2), will recheck next cycle"
                 )
                 return
+            # Split-order safety: if the partial ticket is still alive on MT5,
+            # defer server-close. Otherwise we'd record the trade as CLOSED
+            # while the partial keeps running — orphaned, untracked, and the
+            # actual loss appears only in account balance not the DB.
+            partial_ticket = getattr(trade_record, "mt5_ticket_partial", None)
+            if partial_ticket:
+                partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
+                if partial_pos is not None:
+                    if count < 32:  # 30-min defer cap (1s polling)
+                        logger.info(
+                            f"Trade {trade_record.id} main ticket {ticket} gone "
+                            f"but partial {partial_ticket} still alive — "
+                            f"deferring server-close ({count}/30)"
+                        )
+                        return
+                    logger.warning(
+                        f"Trade {trade_record.id} partial {partial_ticket} "
+                        f"orphaned for 30+ min — force-closing"
+                    )
+                    self.order_manager.close_position(
+                        partial_ticket, trade_record.symbol, trade_record.direction,
+                        f"{trade_record.pattern_type or 'AUTO'} partial_orphan_force_close",
+                    )
             self._missing_position_counts.pop(ticket, None)
             self._handle_server_close(trade_record)
             return

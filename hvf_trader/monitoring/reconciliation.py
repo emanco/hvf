@@ -78,6 +78,36 @@ class Reconciliator:
                     )
                     continue
 
+                # Split-order safety: if this trade has a partial ticket still
+                # alive on MT5, defer the close. Otherwise we'd mark the trade
+                # CLOSED with $0 PnL (because find_close_deal can't see across
+                # tickets cleanly on IC Markets), then later have an orphaned
+                # partial position the bot doesn't track. The actual loss
+                # appears in the account balance but never in the trade record.
+                partial_ticket = getattr(trade, "mt5_ticket_partial", None)
+                if partial_ticket and partial_ticket in mt5_positions:
+                    # Cap the defer at 30 cycles (~30 min) so we don't wait
+                    # forever if the partial somehow stays open.
+                    defer_count = self._missing_counts.get(ticket, 3)
+                    if defer_count < 33:  # 3 (initial) + 30 defer
+                        logger.info(
+                            f"[RECONCILIATION] Trade {trade.id} main ticket "
+                            f"{ticket} gone but partial {partial_ticket} still "
+                            f"alive — deferring close (cycle {defer_count - 2}/30)"
+                        )
+                        continue
+                    # Defer cap reached → force-close the partial so we can
+                    # finalize the trade with correct combined PnL.
+                    logger.warning(
+                        f"[RECONCILIATION] Trade {trade.id} partial {partial_ticket} "
+                        f"orphaned for 30+ min — force-closing to finalize trade"
+                    )
+                    if self.order_manager:
+                        self.order_manager.close_position(
+                            partial_ticket, trade.symbol, trade.direction,
+                            f"{trade.pattern_type} partial_orphan_force_close",
+                        )
+
                 self._missing_counts.pop(ticket, None)
                 discrepancy = {
                     "type": "MISSING_IN_MT5",
