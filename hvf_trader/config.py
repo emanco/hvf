@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 DISPLAY_TZ = ZoneInfo("Europe/London")  # GMT/BST — used for Telegram display + scheduling
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "EURJPY"]   # Dropped GBPJPY+CHFJPY 2026-04-28 (low signal on M30; +166p over 3yrs combined).
+INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY"]   # 2026-05-05: trimmed to 3 from 6 after pair-filter analysis on 117 live trades. Dropped EURAUD (PF 0.96), EURUSD (PF 0.93), USDCHF (PF 0.87). Previous: GBPJPY+CHFJPY dropped 2026-04-28 (low M30 signal). Analysis flagged CHFJPY (PF 1.27) as potential add-back if low-signal concern is resolved.
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
@@ -85,7 +85,7 @@ SCORE_THRESHOLD = 40              # Minimum score to arm pattern (relaxed from 7
 SCORE_THRESHOLD_BY_PATTERN = {
     "HVF": 40,
     "VIPER": 60,
-    "KZ_HUNT": 50,
+    "KZ_HUNT": 60,    # 2026-05-05: 50→60. Pair+score sweep showed score>=60 + pair subset (NZDUSD/EURGBP/EURJPY) gives PF 1.45 vs 1.03 baseline on 117-trade sample.
     "LONDON_SWEEP": 50,
     "WEDGE": 40,
 }
@@ -169,7 +169,7 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN = {
 # (see memory project_kz_hunt_exit_optimum.md). +12p was the local optimum
 # but +20p chosen for durability (R:R 1.18 vs 0.7).
 FLAT_TP_PIPS_BY_PATTERN = {
-    "KZ_HUNT": 20.0,
+    "KZ_HUNT": 12.0,    # 2026-05-05: 20→12. Backtest +12p PF 1.03 (best WR 59%, smallest DD); 20p was -13p PF 0.99. User chose +12p after side-by-side comparison.
 }
 
 # Per-pattern split-order toggle. False = single order with broker-side TP
