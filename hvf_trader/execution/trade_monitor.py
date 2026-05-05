@@ -478,16 +478,50 @@ class TradeMonitor:
             self._update_trailing_stop(trade_record, ticket, position, current_price)
 
     def _handle_split_t1_hit(self, trade_record, ticket, position):
-        """Handle T1 hit detected via MT5 TP on the split partial position.
+        """Handle a partial position that disappeared from MT5.
 
-        The 60% partial position was closed by MT5 at T1 (tick-level precision).
-        Now move the remaining 40% position's SL to breakeven and start trailing.
+        The partial COULD have hit T1 (broker TP) — in which case partial_close_price
+        should be T1. But it could also have closed for any of:
+          - Broker SL hit (rare: partial's SL is wide unless we trailed it)
+          - Our own force-close (TIME_STOP, server_close partial, orphan force-close)
+          - Manual user close
+        Recording T1 in those cases overstates the wins by 30-50p.
+
+        Resolution: query MT5 deal history for the partial ticket and use the
+        ACTUAL fill price. Default to T1 only if deal lookup fails (true at-T1
+        is the most likely scenario when MT5 broker TP fires cleanly).
         """
         direction = trade_record.direction
         t1_price = trade_record.target_1
+        actual_close_price = t1_price
 
-        # Mark partial close in DB
-        self.trade_logger.log_partial_close(trade_record.id, t1_price)
+        partial_ticket = getattr(trade_record, "mt5_ticket_partial", None)
+        if partial_ticket:
+            try:
+                partial_deals = search_deal_history(partial_ticket, trade_record.symbol)
+                if partial_deals:
+                    cd = find_close_deal(
+                        partial_deals, partial_ticket, trade_record.symbol,
+                        direction, trade_record.opened_at,
+                    )
+                    if cd:
+                        actual_close_price = cd.price
+                        if abs(actual_close_price - t1_price) > 0.0005:
+                            # Closed substantially off T1 — log it loudly. This is
+                            # the case where the partial was force-closed by us or
+                            # hit a SL, not a clean T1 fill.
+                            logger.warning(
+                                f"Trade {trade_record.id} partial {partial_ticket} "
+                                f"closed at {actual_close_price:.5f} (T1 was {t1_price:.5f}) — "
+                                f"NOT a clean T1 fill. Recording actual price."
+                            )
+            except Exception as e:
+                logger.warning(
+                    f"Deal lookup for partial ticket {partial_ticket} failed: {e}"
+                )
+
+        # Mark partial close in DB at the actual broker fill price.
+        self.trade_logger.log_partial_close(trade_record.id, actual_close_price)
 
         # Move remaining position SL to breakeven (entry price)
         breakeven_sl = trade_record.entry_price
@@ -733,19 +767,37 @@ class TradeMonitor:
         """Close a trade fully and update records."""
         direction = trade_record.direction
 
-        # If split order, also close the partial position if still open
+        # If split order, also close the partial position if still open.
+        # CRITICAL: capture the actual fill price and call log_partial_close with
+        # it. Without this, downstream PnL estimation defaults to T1 — which
+        # massively overstates wins when we're force-closing a non-T1 partial
+        # (e.g. TIME_STOP, server_close).
         partial_ticket = getattr(trade_record, 'mt5_ticket_partial', None)
-        if partial_ticket:
+        if partial_ticket and not trade_record.partial_closed:
             partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
             if partial_pos:
                 logger.info(
                     f"Closing partial position {partial_ticket} "
                     f"(trade {trade_record.id} closing: {reason})"
                 )
-                self.order_manager.close_position(
+                partial_result = self.order_manager.close_position(
                     partial_ticket, trade_record.symbol, direction,
                     f"{trade_record.pattern_type or 'AUTO'} {reason} partial"
                 )
+                if partial_result:
+                    partial_fill = (
+                        partial_result.get("fill_price")
+                        if isinstance(partial_result, dict)
+                        else partial_pos.get("price_current")
+                    )
+                    if partial_fill:
+                        self.trade_logger.log_partial_close(
+                            trade_record.id, partial_fill
+                        )
+                        logger.info(
+                            f"Trade {trade_record.id}: partial closed @ "
+                            f"{partial_fill:.5f} (reason: {reason}, NOT T1)"
+                        )
 
         ptype = trade_record.pattern_type or "AUTO"
         result = self.order_manager.close_position(
@@ -794,6 +846,7 @@ class TradeMonitor:
             return
 
         # If split order, handle the partial position.
+        # Same critical fix as in _close_trade: capture actual fill and log it.
         partial_ticket = getattr(trade_record, 'mt5_ticket_partial', None)
         if partial_ticket:
             partial_pos = self.order_manager.get_position_by_ticket(partial_ticket)
@@ -802,10 +855,24 @@ class TradeMonitor:
                     f"Closing partial position {partial_ticket} "
                     f"(remaining position {trade_record.mt5_ticket} server-closed)"
                 )
-                self.order_manager.close_position(
+                partial_result = self.order_manager.close_position(
                     partial_ticket, trade_record.symbol, trade_record.direction,
                     f"{trade_record.pattern_type or 'AUTO'} server_close partial"
                 )
+                if partial_result and not trade_record.partial_closed:
+                    partial_fill = (
+                        partial_result.get("fill_price")
+                        if isinstance(partial_result, dict)
+                        else partial_pos.get("price_current")
+                    )
+                    if partial_fill:
+                        self.trade_logger.log_partial_close(
+                            trade_record.id, partial_fill
+                        )
+                        logger.info(
+                            f"Trade {trade_record.id}: partial server-close "
+                            f"recorded @ {partial_fill:.5f} (NOT T1)"
+                        )
             elif not trade_record.partial_closed:
                 # Bug-fix: partial position already gone but DB never recorded T1 hit.
                 # Happens when both the partial (at T1) and the main (at SL) close
