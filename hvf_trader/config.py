@@ -414,7 +414,7 @@ SIMPLE_MEAN_REVERSION = {
     "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
     "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (≈22hr hold, matches FF daily cycle)
     "trigger_pips": 40,                 # Wide trigger validated on IC Markets — 30p canonical was marginal
-    "target_pips": 10,                  # Small reversion target — typical FF range
+    "target_pips": 12.5,                # Sweep showed 12.5p > 10p (PF 2.52 vs 1.99, +107p vs +69p)
     "stop_pips": 40,                    # Wide SL, asymmetric R:R as per FF design
     "risk_pct": 1.0,                    # Conservative until live-validated
     "pattern_type": "SIMPLE_MEAN_REVERSION",
