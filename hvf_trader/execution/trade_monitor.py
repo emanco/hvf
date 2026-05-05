@@ -364,15 +364,33 @@ class TradeMonitor:
             # Update the running extreme every cycle, regardless of whether
             # the trail itself fires this cycle.
             entry = trade_record.entry_price
+
+            # Pull the last 2 M1 bars (current + previous) and merge their
+            # high/low into the running extreme. Captures wicks that flashed
+            # between our 1s polls — without this, sub-second extremes are
+            # invisible (root cause of trade 166's exit underperformance).
+            m1_high = current_price
+            m1_low = current_price
+            if MT5_AVAILABLE:
+                try:
+                    bars = mt5.copy_rates_from_pos(
+                        trade_record.symbol, mt5.TIMEFRAME_M1, 0, 2,
+                    )
+                    if bars is not None and len(bars) > 0:
+                        m1_high = max(float(b["high"]) for b in bars)
+                        m1_low = min(float(b["low"]) for b in bars)
+                except Exception as e:
+                    logger.debug(f"M1 bar query failed: {e}")
+
             if direction == "LONG":
                 prev_high = self._highest_since_entry.get(ticket, entry)
-                running_high = max(prev_high, current_price)
+                running_high = max(prev_high, current_price, m1_high)
                 self._highest_since_entry[ticket] = running_high
                 peak = running_high
                 mfe = peak - entry
             else:
                 prev_low = self._lowest_since_entry.get(ticket, entry)
-                running_low = min(prev_low, current_price)
+                running_low = min(prev_low, current_price, m1_low)
                 self._lowest_since_entry[ticket] = running_low
                 peak = running_low
                 mfe = entry - peak
