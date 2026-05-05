@@ -15,3 +15,5 @@ run_bt_*.py
 setup_task.ps1
 bt_*.txt
 data/calendar_cache.json
+.claude/
+.playwright-mcp/
