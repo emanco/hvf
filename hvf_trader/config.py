@@ -399,6 +399,33 @@ QUANTUM_LONDON = {
 }
 
 RISK_PCT_BY_PATTERN["QUANTUM_LONDON"] = QUANTUM_LONDON["risk_pct"]
+
+# ─── Simple Mean Reversion (faithful FF #743125 rebuild) ────────────────────
+# Replaces the disabled QUANTUM_LONDON. Different params (40/10/40, 22hr hold)
+# validated on IC Markets EURGBP M5 over 8 months: PF 1.93, 25 trades, 0 SLs
+# hit, +66p, 24p DD. Modest expected return (~30-50p/yr at 1% risk) but
+# positive expectancy is a real improvement over QL's PF 0.47.
+SIMPLE_MEAN_REVERSION = {
+    "enabled": True,
+    "instrument": "EURGBP",
+    "capture_timeframe": "M5",
+    "poll_interval_sec": 1,
+    "days": [0, 1, 2, 3, 4],            # Mon-Fri capture nights → Tue-Sat trading. Sat session has no market so it just no-ops.
+    "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
+    "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (≈22hr hold, matches FF daily cycle)
+    "trigger_pips": 40,                 # Wide trigger validated on IC Markets — 30p canonical was marginal
+    "target_pips": 10,                  # Small reversion target — typical FF range
+    "stop_pips": 40,                    # Wide SL, asymmetric R:R as per FF design
+    "risk_pct": 1.0,                    # Conservative until live-validated
+    "pattern_type": "SIMPLE_MEAN_REVERSION",
+}
+
+RISK_PCT_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = SIMPLE_MEAN_REVERSION["risk_pct"]
+MIN_RRR_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 0.2  # 10/40 = 0.25; allow some slack
+TRAILING_STOP_ATR_MULT_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 0  # No trailing — fixed TP/SL
+MIN_STOP_PIPS_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 30
+PATTERN_FRESHNESS_BARS["SIMPLE_MEAN_REVERSION"] = 1
+INVALIDATION_ENABLED_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = False
 MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.25
 TRAILING_STOP_ATR_MULT_BY_PATTERN["QUANTUM_LONDON"] = 0
 MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 3

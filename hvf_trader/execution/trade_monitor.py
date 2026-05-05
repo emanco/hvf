@@ -137,10 +137,12 @@ class TradeMonitor:
         own scanner thread (TP/SL broker-side, time exit at 06:00), so we
         skip them here to avoid interference.
         """
-        # Asian Gravity, London Breakout, Quantum London, and Night Tide trades
-        # have broker-side TP/SL and time-based exit managed by their own scanners
+        # Asian Gravity, London Breakout, Quantum London, Night Tide, and SMR
+        # trades have broker-side TP/SL and time-based exit managed by their
+        # own scanners
         if trade_record.pattern_type in (
             "ASIAN_GRAVITY", "LONDON_BO", "QUANTUM_LONDON", "NIGHT_TIDE",
+            "SIMPLE_MEAN_REVERSION",
         ):
             return
         ticket = trade_record.mt5_ticket
