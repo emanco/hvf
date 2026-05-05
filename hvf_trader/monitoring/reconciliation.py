@@ -134,11 +134,21 @@ class Reconciliator:
         for t in stale_tickets:
             self._missing_counts.pop(t, None)
 
-        # Collect partial position tickets so reconciliation ignores them
+        # Collect partial position tickets so reconciliation ignores them.
+        # Include ALL trades (not just currently-OPEN), because when the
+        # parent closes early (e.g. main ticket BE-stops post-T1) the
+        # partial may still be alive in MT5. Without this, every cycle
+        # would log a spurious "MISSING_IN_DB" warning until the partial
+        # naturally TP/SL'd. Bounded to last 200 trades — plenty given
+        # partials only stay open for hours, not days.
         partial_tickets = {
             t.mt5_ticket_partial
-            for t in internal_trades
-            if getattr(t, 'mt5_ticket_partial', None)
+            for t in self.trade_logger._session.query(TradeRecord)
+                .filter(TradeRecord.mt5_ticket_partial.isnot(None))
+                .order_by(TradeRecord.id.desc())
+                .limit(200)
+                .all()
+            if t.mt5_ticket_partial
         }
 
         # Check 2: MT5 positions not in internal records — try to re-adopt
