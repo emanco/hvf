@@ -41,6 +41,12 @@ class TradeMonitor:
         self._running = False
         self._highest_since_partial = {}  # ticket -> highest price since partial close
         self._lowest_since_partial = {}   # ticket -> lowest price since partial (for shorts)
+        # Pre-partial extremes: tracks running max-favorable price per ticket so
+        # the pre-partial ATR trail can ratchet off the tracked peak instead of
+        # the current poll snapshot. Without this, sub-second wicks the polls
+        # miss can leave us with a frozen trail even when MFE peaks were big.
+        self._highest_since_entry = {}    # for SHORT: irrelevant; LONG: peak favorable
+        self._lowest_since_entry = {}     # for SHORT: peak favorable; LONG: irrelevant
         self._missing_position_counts = {}  # ticket -> consecutive miss count
         self._atr_cache = {}  # symbol -> (timestamp, atr_value)
         self._bar_cache = {}  # symbol -> (wall_ts, bar_time, bar_close) — completed H1 bar
@@ -342,10 +348,35 @@ class TradeMonitor:
         # peak favorable price — independent of partial-close. Combined with
         # BE@50%T1 above, recovers +94p net / +160p SL-bucket across 109
         # KZ_HUNT trades. Pattern-gated; 0.0 disables.
+        #
+        # CRITICAL: trail off the running EXTREME (highest/lowest_since_entry),
+        # not current_price. With current_price, brief wicks between polls
+        # never enter the trail — observed live on trade 166 where peak MFE
+        # was 35p but the trail captured only 1.96p because the deep wicks
+        # were sub-second. Tracking the extreme makes polling cadence
+        # irrelevant: each MT5 tick that gets sampled extends the peak, the
+        # trail then ratchets off the peak even if subsequent polls are
+        # higher.
         pre_partial_trail_atr = config.PRE_PARTIAL_TRAIL_ATR_BY_PATTERN.get(
             trade_record.pattern_type, 0.0,
         )
         if (pre_partial_trail_atr > 0 and not trade_record.partial_closed):
+            # Update the running extreme every cycle, regardless of whether
+            # the trail itself fires this cycle.
+            entry = trade_record.entry_price
+            if direction == "LONG":
+                prev_high = self._highest_since_entry.get(ticket, entry)
+                running_high = max(prev_high, current_price)
+                self._highest_since_entry[ticket] = running_high
+                peak = running_high
+                mfe = peak - entry
+            else:
+                prev_low = self._lowest_since_entry.get(ticket, entry)
+                running_low = min(prev_low, current_price)
+                self._lowest_since_entry[ticket] = running_low
+                peak = running_low
+                mfe = entry - peak
+
             cached = self._atr_cache.get(trade_record.symbol)
             current_atr = None
             if cached and (time.time() - cached[0]) < 120:
@@ -360,11 +391,9 @@ class TradeMonitor:
                     self._atr_cache[trade_record.symbol] = (time.time(), current_atr)
 
             if current_atr is not None and current_atr > 0:
-                entry = trade_record.entry_price
-                if direction == "LONG":
-                    mfe = current_price - entry
-                    if mfe >= pre_partial_trail_atr * current_atr:
-                        new_sl = current_price - pre_partial_trail_atr * current_atr
+                if mfe >= pre_partial_trail_atr * current_atr:
+                    if direction == "LONG":
+                        new_sl = peak - pre_partial_trail_atr * current_atr
                         current_sl = trade_record.trailing_sl or trade_record.stop_loss
                         if new_sl > current_sl:
                             self.order_manager.modify_stop_loss(
@@ -375,14 +404,12 @@ class TradeMonitor:
                             )
                             logger.info(
                                 f"[PRE_PARTIAL_TRAIL] Trade {trade_record.id}: "
-                                f"MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
-                                f"SL → {new_sl:.5f}"
+                                f"peak MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
+                                f"SL → {new_sl:.5f} (from peak {peak:.5f})"
                             )
                             trade_record.trailing_sl = new_sl
-                else:  # SHORT
-                    mfe = entry - current_price
-                    if mfe >= pre_partial_trail_atr * current_atr:
-                        new_sl = current_price + pre_partial_trail_atr * current_atr
+                    else:  # SHORT
+                        new_sl = peak + pre_partial_trail_atr * current_atr
                         current_sl = trade_record.trailing_sl or trade_record.stop_loss
                         if new_sl < current_sl:
                             self.order_manager.modify_stop_loss(
@@ -393,8 +420,8 @@ class TradeMonitor:
                             )
                             logger.info(
                                 f"[PRE_PARTIAL_TRAIL] Trade {trade_record.id}: "
-                                f"MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
-                                f"SL → {new_sl:.5f}"
+                                f"peak MFE {mfe:.5f} >= {pre_partial_trail_atr}×ATR; "
+                                f"SL → {new_sl:.5f} (from peak {peak:.5f})"
                             )
                             trade_record.trailing_sl = new_sl
 
@@ -831,6 +858,8 @@ class TradeMonitor:
             # Clean up tracking dicts
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._highest_since_entry.pop(ticket, None)
+            self._lowest_since_entry.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
 
     def _estimate_fallback_pnl(self, trade_record, close_price):
@@ -976,6 +1005,8 @@ class TradeMonitor:
                 )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._highest_since_entry.pop(ticket, None)
+            self._lowest_since_entry.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
             return
 
@@ -1025,6 +1056,8 @@ class TradeMonitor:
 
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._highest_since_entry.pop(ticket, None)
+            self._lowest_since_entry.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
         else:
             # No matching close deal — estimate from best available price.
@@ -1064,4 +1097,6 @@ class TradeMonitor:
                 )
             self._highest_since_partial.pop(ticket, None)
             self._lowest_since_partial.pop(ticket, None)
+            self._highest_since_entry.pop(ticket, None)
+            self._lowest_since_entry.pop(ticket, None)
             self._last_invalidation_bar.pop(trade_record.id, None)
