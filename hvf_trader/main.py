@@ -160,9 +160,11 @@ class HVFTrader:
             self.asian_gravity_scanner = None
 
         # ─── Quantum London Scanner ───────────────────────────────────
+        # Faithful FF mean-reversion rebuild (thread #743125). Replaces the
+        # prior asian_gravity_scanner-aliased version.
         if config.QUANTUM_LONDON.get("enabled"):
-            from hvf_trader.asian_gravity_scanner import AsianGravityScanner as QLScanner
-            self.quantum_london_scanner = QLScanner(
+            from hvf_trader.quantum_london_scanner import QuantumLondonScanner
+            self.quantum_london_scanner = QuantumLondonScanner(
                 order_manager=self.order_manager,
                 trade_logger=self.trade_logger,
                 risk_manager=self.risk_manager,
@@ -173,21 +175,6 @@ class HVFTrader:
             )
         else:
             self.quantum_london_scanner = None
-
-        # ─── Simple Mean Reversion Scanner ────────────────────────────
-        if config.SIMPLE_MEAN_REVERSION.get("enabled"):
-            from hvf_trader.simple_mean_reversion_scanner import SimpleMeanReversionScanner
-            self.simple_mean_reversion_scanner = SimpleMeanReversionScanner(
-                order_manager=self.order_manager,
-                trade_logger=self.trade_logger,
-                risk_manager=self.risk_manager,
-                circuit_breaker=self.circuit_breaker,
-                connector=self.connector,
-                alerter=self.alerter,
-                cfg=config.SIMPLE_MEAN_REVERSION,
-            )
-        else:
-            self.simple_mean_reversion_scanner = None
 
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
@@ -327,15 +314,6 @@ class HVFTrader:
             )
             self._quantum_london_thread.start()
             logger.info("Quantum London scanner started")
-
-        # Start Simple Mean Reversion scanner (daemon thread)
-        if self.simple_mean_reversion_scanner:
-            self._smr_thread = threading.Thread(
-                target=self.simple_mean_reversion_scanner.start,
-                daemon=True, name="SimpleMeanReversion",
-            )
-            self._smr_thread.start()
-            logger.info("Simple Mean Reversion scanner started")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -540,23 +518,6 @@ class HVFTrader:
                     daemon=True, name="QuantumLondon",
                 )
                 self._quantum_london_thread.start()
-
-            # Watchdog: restart Simple Mean Reversion scanner if it died
-            if self.simple_mean_reversion_scanner and not self._smr_thread.is_alive():
-                logger.error("Simple Mean Reversion thread died — restarting")
-                self.trade_logger.log_event(
-                    "ERROR", details="Simple Mean Reversion thread died, restarting",
-                    severity="ERROR",
-                )
-                if self.alerter:
-                    self.alerter.send_message(
-                        "\U0001f6a8 <b>Simple Mean Reversion thread died</b>\nRestarting automatically."
-                    )
-                self._smr_thread = threading.Thread(
-                    target=self.simple_mean_reversion_scanner.start,
-                    daemon=True, name="SimpleMeanReversion",
-                )
-                self._smr_thread.start()
 
             # Watchdog: restart Asian Gravity scanner if it died
             if self.asian_gravity_scanner and not self._asian_gravity_thread.is_alive():

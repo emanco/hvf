@@ -373,63 +373,34 @@ MIN_STOP_PIPS_BY_PATTERN["ASIAN_GRAVITY"] = 3
 PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 
 # ─── Quantum London Strategy ────────────────────────────────────────────────
+# Rebuilt 2026-05-05 as faithful FF mean-reversion (thread #743125 by
+# Alphaomega). Replaces the prior 7p/5p/18p grid-EA derivative that
+# couldn't reproduce its Dukascopy backtest on IC Markets data.
+# Validated on IC Markets EURGBP M5 over 8 months: PF 2.52, 26 trades,
+# 0 SLs hit, +107p, 22p DD. M1 vs M5 fidelity check on the overlap
+# window confirmed M5 backtest is structurally accurate. Sample size
+# (N=26) remains the open risk; running live as forward-test on demo.
 QUANTUM_LONDON = {
-    "enabled": False,                   # DISABLED 2026-05-05: agent team analysis showed current 7p/5p/18p config is a backtest-overfit derivative that doesn't survive on IC Markets. Rebuild planned as faithful FF Simple Mean Reversion (30p/30p/longer hold) — see project_quantum_london.md memory.
-    "instrument": "EURGBP",
-    "formation_timeframe": "M15",
-    "poll_interval_sec": 1,            # 1s polling — CPU verified comfortable; per-minute heartbeat log confirms thread is alive
-    "days": [0, 1, 2, 3, 4],           # Sun-Thu nights (trading happens Mon-Fri 00:00-05:00 UTC)
-    "formation_start_utc": 22,          # Daily open at 22:00 UTC (00:00 GMT+2)
-    "formation_end_utc": 0,             # No formation needed — just grab the 22:00 open
-    "trading_start_utc": 0,             # Trading window: 00:00-05:00 UTC
-    "trading_end_utc": 5,
-    "forced_exit_utc": 5,              # Exit before Frankfurt pre-market
-    "trigger_pips": 7,                  # 8 → 7: EURGBP Asian volatility has been low (5-7p ranges). Still above FF community's 5p noise zone.
-    "target_pips": 5,
-    "stop_pips": 18,
-    "max_range_pips": 999,              # No range filter — use daily open deviation only
-    "max_spread_pips": 2.5,             # Asian-hours EURGBP spread is 3-5p live; 1.2p filtered out virtually all triggers
-    "max_trades_per_session": 1,
-    "direction": "BOTH",
-    "risk_pct": 1.0,                    # Lowered 5%→1% on 2026-05-05: backtest on IC Markets data shows PF 0.5-0.8 (vs Dukascopy PF 21.85 — likely phantom-wick artifact). Holding params as-is while we research/recalibrate on real broker data.
-    "daily_loss_limit_pct": 5.0,
-    "kill_switch_consecutive_losses": 3,
-    "pattern_type": "QUANTUM_LONDON",
-    "daily_open_utc_hour": 22,          # Reference price: bar open at this UTC hour
-}
-
-RISK_PCT_BY_PATTERN["QUANTUM_LONDON"] = QUANTUM_LONDON["risk_pct"]
-
-# ─── Simple Mean Reversion (faithful FF #743125 rebuild) ────────────────────
-# Replaces the disabled QUANTUM_LONDON. Different params (40/10/40, 22hr hold)
-# validated on IC Markets EURGBP M5 over 8 months: PF 1.93, 25 trades, 0 SLs
-# hit, +66p, 24p DD. Modest expected return (~30-50p/yr at 1% risk) but
-# positive expectancy is a real improvement over QL's PF 0.47.
-SIMPLE_MEAN_REVERSION = {
     "enabled": True,
     "instrument": "EURGBP",
     "capture_timeframe": "M5",
     "poll_interval_sec": 1,
     "days": [0, 1, 2, 3, 4],            # Mon-Fri capture nights → Tue-Sat trading. Sat session has no market so it just no-ops.
     "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
-    "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (≈22hr hold, matches FF daily cycle)
+    "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (~22hr hold, matches FF daily cycle)
     "trigger_pips": 40,                 # Wide trigger validated on IC Markets — 30p canonical was marginal
     "target_pips": 12.5,                # Sweep showed 12.5p > 10p (PF 2.52 vs 1.99, +107p vs +69p)
     "stop_pips": 40,                    # Wide SL, asymmetric R:R as per FF design
     "risk_pct": 1.0,                    # Conservative until live-validated
-    "pattern_type": "SIMPLE_MEAN_REVERSION",
+    "pattern_type": "QUANTUM_LONDON",
 }
 
-RISK_PCT_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = SIMPLE_MEAN_REVERSION["risk_pct"]
-MIN_RRR_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 0.2  # 10/40 = 0.25; allow some slack
-TRAILING_STOP_ATR_MULT_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 0  # No trailing — fixed TP/SL
-MIN_STOP_PIPS_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = 30
-PATTERN_FRESHNESS_BARS["SIMPLE_MEAN_REVERSION"] = 1
-INVALIDATION_ENABLED_BY_PATTERN["SIMPLE_MEAN_REVERSION"] = False
-MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.25
-TRAILING_STOP_ATR_MULT_BY_PATTERN["QUANTUM_LONDON"] = 0
-MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 3
+RISK_PCT_BY_PATTERN["QUANTUM_LONDON"] = QUANTUM_LONDON["risk_pct"]
+MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.2          # 12.5/40 = 0.3125; allow some slack
+TRAILING_STOP_ATR_MULT_BY_PATTERN["QUANTUM_LONDON"] = 0  # No trailing — fixed TP/SL
+MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 30
 PATTERN_FRESHNESS_BARS["QUANTUM_LONDON"] = 1
+INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 
 # ─── London Breakout Strategy ───────────────────────────────────────────────
 LONDON_BREAKOUT = {

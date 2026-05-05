@@ -1,13 +1,14 @@
-"""Simple Mean Reversion scanner thread.
+"""Quantum London scanner thread (FF mean-reversion, thread #743125).
 
-Faithful FF thread #743125 implementation. Captures daily open at 22:00 UTC,
-trades 22:00 UTC capture-day → 21:00 UTC next-day (≈22h cycle), wide trigger,
-narrow TP, no filters. One trade per session.
+Captures daily open at 22:00 UTC, trades 22:00 UTC capture-day →
+21:00 UTC next-day (~22h cycle), wide trigger, narrow TP, no filters.
+One trade per session.
 
 Notes:
 - Entry uses LIMIT order at the exact trigger price (not market at ask/bid).
-  This was the killer bug in the old QL implementation: entering at broker
-  ask shifted TP further away by the spread, halving the win probability.
+  This was the killer bug in the prior grid-EA "Quantum London" attempt:
+  entering at broker ask shifted TP further away by the spread, halving
+  the win probability.
 - No news filter, no spread filter, no range filter — per FF community
   consensus that filters degrade results on this strategy.
 - Force-exit at 21:00 UTC fires for any still-open trade.
@@ -18,7 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from hvf_trader import config
-from hvf_trader.detector.simple_mean_reversion import SMRTracker
+from hvf_trader.detector.quantum_london import QLTracker
 from hvf_trader.data.data_fetcher import fetch_and_prepare
 
 logger = logging.getLogger("hvf_trader")
@@ -31,14 +32,14 @@ except ImportError:
     mt5 = None
 
 
-class SimpleMeanReversionScanner:
-    """Dedicated scanner thread for the SMR strategy."""
+class QuantumLondonScanner:
+    """Dedicated scanner thread for the Quantum London strategy."""
 
-    PATTERN_TYPE = "SIMPLE_MEAN_REVERSION"
+    PATTERN_TYPE = "QUANTUM_LONDON"
 
     def __init__(self, order_manager, trade_logger, risk_manager,
                  circuit_breaker, connector, alerter, cfg=None):
-        self._tracker = SMRTracker()
+        self._tracker = QLTracker()
         self._order_manager = order_manager
         self._trade_logger = trade_logger
         self._risk_manager = risk_manager
@@ -47,7 +48,7 @@ class SimpleMeanReversionScanner:
         self._alerter = alerter
         self._running = False
         self._open_trade_id = None
-        self._cfg = cfg or config.SIMPLE_MEAN_REVERSION
+        self._cfg = cfg or config.QUANTUM_LONDON
         self._session_stats: dict | None = None
         self._last_telemetry_log_hour: int | None = None
 
@@ -58,7 +59,7 @@ class SimpleMeanReversionScanner:
         poll = self._cfg["poll_interval_sec"]
         hb_every = max(1, int(60 / poll))
         logger.info(
-            "[SMR] Scanner thread started (poll=%ds, heartbeat every %d iters)",
+            "[QUANTUM_LONDON] Scanner thread started (poll=%ds, heartbeat every %d iters)",
             poll, hb_every,
         )
         iter_count = 0
@@ -66,15 +67,15 @@ class SimpleMeanReversionScanner:
             try:
                 self._tick()
             except Exception as e:
-                logger.error("[SMR] Scanner error: %s", e, exc_info=True)
+                logger.error("[QUANTUM_LONDON] Scanner error: %s", e, exc_info=True)
             iter_count += 1
             if iter_count % hb_every == 0:
                 logger.info(
-                    "[SMR] heartbeat: iter=%d state=%s open_trade=%s",
+                    "[QUANTUM_LONDON] heartbeat: iter=%d state=%s open_trade=%s",
                     iter_count, self._tracker.state, self._open_trade_id,
                 )
             time.sleep(poll)
-        logger.info("[SMR] Scanner thread stopped")
+        logger.info("[QUANTUM_LONDON] Scanner thread stopped")
 
     def stop(self):
         self._running = False
@@ -120,7 +121,7 @@ class SimpleMeanReversionScanner:
                 return  # Sat/Sun captures skipped
             df = fetch_and_prepare(sym, cfg["capture_timeframe"], bars=2)
             if df is None or df.empty:
-                logger.warning("[SMR] Could not fetch capture bar")
+                logger.warning("[QUANTUM_LONDON] Could not fetch capture bar")
                 return
             bar = df.iloc[-1]
             session_open = float(bar["open"])
@@ -139,12 +140,12 @@ class SimpleMeanReversionScanner:
             }
             self._last_telemetry_log_hour = None
             logger.info(
-                "[SMR] Daily open captured: %.5f, date=%s, hold until %02d:00 UTC",
+                "[QUANTUM_LONDON] Daily open captured: %.5f, date=%s, hold until %02d:00 UTC",
                 session_open, now.date(), force_exit_hour,
             )
             if self._alerter:
                 self._alerter.send_message(
-                    f"<b>[SMR] Daily open captured</b>\n"
+                    f"<b>[QUANTUM_LONDON] Daily open captured</b>\n"
                     f"{sym}: {session_open:.5f}\n"
                     f"Date: {now.date()}\n"
                     f"Trigger: ±{cfg['trigger_pips']:.0f}p\n"
@@ -184,7 +185,7 @@ class SimpleMeanReversionScanner:
             if hour != self._last_telemetry_log_hour:
                 self._last_telemetry_log_hour = hour
                 logger.info(
-                    "[SMR] @%02d:00 UTC polls=%d max_below=%.1fp max_above=%.1fp "
+                    "[QUANTUM_LONDON] @%02d:00 UTC polls=%d max_below=%.1fp max_above=%.1fp "
                     "crosses(L/S)=%d/%d",
                     hour, s["polls"], s["max_below_pips"], s["max_above_pips"],
                     s["trigger_crosses_long"], s["trigger_crosses_short"],
@@ -210,7 +211,7 @@ class SimpleMeanReversionScanner:
             self._session_stats["executions_attempted"] += 1
 
         if self._circuit_breaker.is_tripped:
-            logger.info("[SMR] Circuit breaker tripped, skipping entry")
+            logger.info("[QUANTUM_LONDON] Circuit breaker tripped, skipping entry")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
@@ -218,7 +219,7 @@ class SimpleMeanReversionScanner:
 
         account = self._connector.get_account_info()
         if not account:
-            logger.error("[SMR] Cannot get account info")
+            logger.error("[QUANTUM_LONDON] Cannot get account info")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             return
@@ -234,7 +235,7 @@ class SimpleMeanReversionScanner:
             account_currency=account.get("currency", "USD"),
         )
         if lot_size <= 0:
-            logger.warning("[SMR] Lot size zero, skipping")
+            logger.warning("[QUANTUM_LONDON] Lot size zero, skipping")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
@@ -253,7 +254,7 @@ class SimpleMeanReversionScanner:
         )
 
         if not result:
-            logger.error("[SMR] Order placement failed (likely REQUOTE — price drifted past trigger)")
+            logger.error("[QUANTUM_LONDON] Order placement failed (likely REQUOTE — price drifted past trigger)")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
@@ -315,14 +316,14 @@ class SimpleMeanReversionScanner:
         self._tracker.mark_traded()
 
         logger.info(
-            "[SMR] %s %s: trigger=%.5f fill=%.5f TP=%.5f SL=%.5f lots=%s slip=%.1fp",
+            "[QUANTUM_LONDON] %s %s: trigger=%.5f fill=%.5f TP=%.5f SL=%.5f lots=%s slip=%.1fp",
             signal.direction, sym, signal.entry_price, fill_price,
             signal.take_profit, signal.stop_loss, lot_size,
             slippage / config.PIP_VALUES.get(sym, 0.0001),
         )
         if self._alerter:
             self._alerter.send_message(
-                f"<b>[SMR] {signal.direction} {sym}</b>\n"
+                f"<b>[QUANTUM_LONDON] {signal.direction} {sym}</b>\n"
                 f"Entry: {fill_price:.5f} (trigger {signal.entry_price:.5f})\n"
                 f"TP: {signal.take_profit:.5f} ({cfg['target_pips']:.0f}p)\n"
                 f"SL: {signal.stop_loss:.5f} ({cfg['stop_pips']:.0f}p)\n"
@@ -362,13 +363,13 @@ class SimpleMeanReversionScanner:
                 trade.id, close_price, pnl, pnl_pips, reason,
             )
             logger.info(
-                "[SMR] Trade closed: %s, PnL=$%+.2f (%+.1fp)",
+                "[QUANTUM_LONDON] Trade closed: %s, PnL=$%+.2f (%+.1fp)",
                 reason, pnl, pnl_pips,
             )
             if self._alerter:
                 emoji = "\u2705" if pnl > 0 else "\u274c"
                 self._alerter.send_message(
-                    f"<b>{emoji} [SMR] {reason}</b>\n"
+                    f"<b>{emoji} [QUANTUM_LONDON] {reason}</b>\n"
                     f"{trade.symbol} {trade.direction}\n"
                     f"Close: {close_price:.5f}\n"
                     f"PnL: ${pnl:+.2f} ({pnl_pips:+.1f}p)"
@@ -385,7 +386,7 @@ class SimpleMeanReversionScanner:
             self._open_trade_id = None
             return
         result = self._order_manager.close_position(
-            trade.mt5_ticket, trade.symbol, trade.direction, "SMR force_exit",
+            trade.mt5_ticket, trade.symbol, trade.direction, "QL force_exit",
         )
         pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
         if result:
@@ -399,13 +400,13 @@ class SimpleMeanReversionScanner:
                 trade.id, close_price, pnl, pnl_pips, "TIME_EXIT",
             )
             logger.info(
-                "[SMR] Force-exit: %s %s @ %.5f, PnL=$%+.2f (%+.1fp)",
+                "[QUANTUM_LONDON] Force-exit: %s %s @ %.5f, PnL=$%+.2f (%+.1fp)",
                 trade.symbol, trade.direction, close_price, pnl, pnl_pips,
             )
             if self._alerter:
                 emoji = "\u2705" if pnl > 0 else "\u274c"
                 self._alerter.send_message(
-                    f"<b>{emoji} [SMR] TIME_EXIT</b>\n"
+                    f"<b>{emoji} [QUANTUM_LONDON] TIME_EXIT</b>\n"
                     f"{trade.symbol} {trade.direction}\n"
                     f"Close: {close_price:.5f}  PnL: ${pnl:+.2f} ({pnl_pips:+.1f}p)"
                 )
@@ -422,7 +423,7 @@ class SimpleMeanReversionScanner:
         ex_filled = s["executions_filled"]
         ex_failed = s["executions_failed"]
         logger.info(
-            "[SMR] SESSION SUMMARY date=%s open=%.5f polls=%d "
+            "[QUANTUM_LONDON] SESSION SUMMARY date=%s open=%.5f polls=%d "
             "range=(below %.1fp / above %.1fp) trigger=%.0fp "
             "crosses(L/S)=%d/%d execution(att/fill/fail)=%d/%d/%d",
             s["date"], s["session_open"], s["polls"],
@@ -440,7 +441,7 @@ class SimpleMeanReversionScanner:
             else:
                 headline = "Setup not actioned"
             self._alerter.send_message(
-                f"<b>[SMR] Session ended — {headline}</b>\n"
+                f"<b>[QUANTUM_LONDON] Session ended — {headline}</b>\n"
                 f"Open: {s['session_open']:.5f}  trigger: {trig:.0f}p\n"
                 f"Range: -{s['max_below_pips']:.1f}p / +{s['max_above_pips']:.1f}p\n"
                 f"Crosses (L/S): {s['trigger_crosses_long']}/{s['trigger_crosses_short']}\n"

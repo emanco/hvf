@@ -1,18 +1,21 @@
-"""Simple Mean Reversion detector — faithful to FF thread #743125.
+"""Quantum London detector — faithful FF mean-reversion (thread #743125).
 
 Strategy: capture daily open at 22:00 UTC, then for the next ~22 hours
 (until 21:00 UTC the following day), watch for any tick crossing N pips
 from the open. Fade the move (LONG below, SHORT above), small reversion TP,
 wide SL.
 
-Per FF thread #743125 (Alphaomega "Simple Mean Reversion") and corroborating
-threads. NOT the FF Quantum London strategy (#551382, a Frankfurt grid EA).
+Note on naming: this module replaced the prior "Quantum London" grid-EA
+attempt with the canonical FF Simple Mean Reversion logic from thread
+#743125 (Alphaomega). The QUANTUM_LONDON name is kept for continuity
+with the project's naming and DB pattern_type history; the mechanics
+are pure mean-reversion, not the older grid/martingale variant.
 """
 from dataclasses import dataclass
 
 
 @dataclass
-class SMRSignal:
+class QLSignal:
     symbol: str
     direction: str          # LONG or SHORT
     entry_price: float      # the trigger price (limit-order target)
@@ -22,7 +25,7 @@ class SMRSignal:
     trigger_pips: float
 
 
-class SMRTracker:
+class QLTracker:
     """State: IDLE -> TRADING -> DONE.
 
     Lifecycle:
@@ -60,7 +63,7 @@ class SMRTracker:
         stop_pips: float,
         symbol: str,
     ):
-        """Return SMRSignal if a trigger is crossed, else None.
+        """Return QLSignal if a trigger is crossed, else None.
 
         Entry price is the TRIGGER LEVEL (not the live ask/bid). The bot
         places a limit order at that exact price. This is the canonical
@@ -75,7 +78,7 @@ class SMRTracker:
 
         if bid <= long_trigger:
             entry = long_trigger
-            return SMRSignal(
+            return QLSignal(
                 symbol=symbol, direction="LONG",
                 entry_price=entry,
                 take_profit=entry + target_pips * pip_value,
@@ -85,7 +88,7 @@ class SMRTracker:
             )
         if ask >= short_trigger:
             entry = short_trigger
-            return SMRSignal(
+            return QLSignal(
                 symbol=symbol, direction="SHORT",
                 entry_price=entry,
                 take_profit=entry - target_pips * pip_value,
