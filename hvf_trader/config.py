@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 DISPLAY_TZ = ZoneInfo("Europe/London")  # GMT/BST — used for Telegram display + scheduling
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY"]   # 2026-05-05: trimmed to 3 from 6 after pair-filter analysis on 117 live trades. Dropped EURAUD (PF 0.96), EURUSD (PF 0.93), USDCHF (PF 0.87). Previous: GBPJPY+CHFJPY dropped 2026-04-28 (low M30 signal). Analysis flagged CHFJPY (PF 1.27) as potential add-back if low-signal concern is resolved.
+INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # 2026-05-05: 4-pair subset. EURAUD added back after what-if showed score>=60 filter rescues it (PF 0.96→1.12, biggest total-pip contribution at +117p combined, vs 3-pair +97p). Trade-off: PF 1.51→1.33, DD 38p→65p, MAR 2.54→1.80. More volume for compounding. Dropped EURUSD (still PF 0.82 even with score filter), USDCHF, GBPJPY, CHFJPY.
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
