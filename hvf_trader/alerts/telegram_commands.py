@@ -161,6 +161,23 @@ class TelegramCommandHandler:
         open_trades = self.trade_logger.get_open_trades()
         armed = self.trade_logger.get_armed_patterns()
 
+        # Cross-check MT5 — if there's a position MT5 sees that the DB
+        # doesn't, surface it. Happens when a split-order partial outlives
+        # its parent record's RECONCILIATION close.
+        mt5_untracked = []
+        try:
+            import MetaTrader5 as mt5_lib
+            positions = mt5_lib.positions_get() or ()
+            db_tickets = {t.mt5_ticket for t in open_trades if t.mt5_ticket}
+            db_partials = {t.mt5_ticket_partial for t in open_trades
+                           if getattr(t, "mt5_ticket_partial", None)}
+            tracked = db_tickets | db_partials
+            for p in positions:
+                if p.magic == 20250305 and p.ticket not in tracked:
+                    mt5_untracked.append(p)
+        except Exception:
+            pass
+
         # Use MT5 balance change for accurate PnL (includes swaps, commissions, all legs)
         account = self.connector.get_account_info()
         if account:
@@ -194,11 +211,18 @@ class TelegramCommandHandler:
         emoji_w = "\u2705" if weekly_pnl >= 0 else "\u274C"
 
         cs = self._currency_symbol()
+        open_line = f"Open trades: <b>{len(open_trades)}</b>"
+        if mt5_untracked:
+            untracked_pnl = sum(p.profit for p in mt5_untracked)
+            open_line += (
+                f"\n\u26a0\ufe0f <b>+{len(mt5_untracked)} untracked in MT5</b> "
+                f"(orphan partial; PnL {cs}{untracked_pnl:+.2f})"
+            )
         text = (
             f"<b>\U0001F4CA Bot Status</b>\n"
             f"Time: {now.astimezone(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}\n\n"
             f"MT5: <b>{mt5_status}</b>\n"
-            f"Open trades: <b>{len(open_trades)}</b>\n"
+            f"{open_line}\n"
             f"Armed patterns: <b>{len(armed)}</b>\n\n"
             f"Today: {emoji_d} <b>{cs}{daily_pnl:+.2f}</b> ({len(today_trades)}T, W:{wins} L:{losses})\n"
             f"Week: {emoji_w} <b>{cs}{weekly_pnl:+.2f}</b>"
@@ -231,13 +255,31 @@ class TelegramCommandHandler:
 
     def _cmd_trades(self):
         open_trades = self.trade_logger.get_open_trades()
-        if not open_trades:
+
+        # Cross-check MT5 for any positions the DB doesn't know about
+        # (orphan partials whose parent record was reconciliation-closed).
+        mt5_untracked = []
+        try:
+            import MetaTrader5 as mt5_lib
+            positions = mt5_lib.positions_get() or ()
+            db_tickets = {t.mt5_ticket for t in open_trades if t.mt5_ticket}
+            db_partials = {t.mt5_ticket_partial for t in open_trades
+                           if getattr(t, "mt5_ticket_partial", None)}
+            tracked = db_tickets | db_partials
+            for p in positions:
+                if p.magic == 20250305 and p.ticket not in tracked:
+                    mt5_untracked.append(p)
+        except Exception:
+            pass
+
+        if not open_trades and not mt5_untracked:
             self.alerter.send_message("<b>No open trades</b>")
             return
 
         cs = self._currency_symbol()
         total_floating = 0.0
-        lines = [f"<b>\U0001F4C8 Open Trades ({len(open_trades)})</b>\n"]
+        total_count = len(open_trades) + len(mt5_untracked)
+        lines = [f"<b>\U0001F4C8 Open Trades ({total_count})</b>\n"]
         for t in open_trades:
             ptype = t.pattern_type or "LEGACY"
             arrow = "\u2B06" if t.direction == "LONG" else "\u2B07"
@@ -254,6 +296,18 @@ class TelegramCommandHandler:
                 f"   Entry: {t.entry_price:.5f} | SL: {t.stop_loss:.5f}\n"
                 f"   Floating: {floating_str}"
             )
+
+        for p in mt5_untracked:
+            arrow = "\u2B06" if p.type == 0 else "\u2B07"
+            direction = "LONG" if p.type == 0 else "SHORT"
+            total_floating += p.profit
+            lines.append(
+                f"{arrow} <code>{p.symbol}</code> {direction} (UNTRACKED — orphan)\n"
+                f"   Ticket: {p.ticket} | Entry: {p.price_open:.5f} | "
+                f"SL: {p.sl:.5f} | TP: {p.tp:.5f}\n"
+                f"   Floating: {cs}{p.profit:+.2f}"
+            )
+
         lines.append(f"\n<b>Total Floating: {cs}{total_floating:+.2f}</b>")
         self.alerter.send_message("\n".join(lines))
 
