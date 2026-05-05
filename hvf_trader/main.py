@@ -1555,9 +1555,10 @@ class HVFTrader:
             return
 
         # Execute market order(s) with spread-adjusted SL.
-        # Split into two positions: 60% with TP=T1 (MT5 handles at tick level)
-        # and 40% without TP (managed by trade monitor trailing stop).
-        # This ensures T1 is caught on any intra-bar wick, matching backtest behavior.
+        # Per-pattern split toggle: when False, place a single order with
+        # broker-side TP at target_1 (flat-TP exit). When True, split 60/40
+        # for partial-at-T1 + 40% trailed.
+        split_enabled = config.SPLIT_ORDER_BY_PATTERN.get(pattern_type, True)
         partial_pct = config.PARTIAL_CLOSE_PCT  # 0.60
         partial_lots = round(result.lot_size * partial_pct, 2)
         remaining_lots = round(result.lot_size - partial_lots, 2)
@@ -1565,7 +1566,11 @@ class HVFTrader:
         # Validate both lot sizes meet minimums
         symbol_info_mt5 = self.connector.get_symbol_info(symbol)
         vol_min = symbol_info_mt5.get("volume_min", 0.01) if symbol_info_mt5 else 0.01
-        can_split = partial_lots >= vol_min and remaining_lots >= vol_min
+        can_split = (
+            split_enabled
+            and partial_lots >= vol_min
+            and remaining_lots >= vol_min
+        )
 
         ticket_partial = None
         if can_split and pattern.target_1:
@@ -1617,13 +1622,19 @@ class HVFTrader:
                 f"remaining={remaining_lots} lots ticket={ticket}"
             )
         else:
-            # Fallback: single order (original behavior for small lots)
+            # Single order. If split was explicitly disabled (flat-TP policy),
+            # set broker-side TP at target_1 so the broker handles the exit
+            # at tick precision and trade monitor only watches SL/time-stop.
+            # If split was enabled but lot sizes too small, no broker TP —
+            # legacy snapshot path manages.
             ticket_partial = None
+            single_tp = pattern.target_1 if not split_enabled else 0.0
             order_result = self.order_manager.place_market_order(
                 symbol=symbol,
                 direction=direction,
                 lot_size=result.lot_size,
                 stop_loss=adjusted_sl,
+                take_profit=single_tp,
                 comment=pattern_type,
                 limit_price=entry_limit_price,
             )

@@ -156,9 +156,32 @@ TARGET_2_MULT = 1.0              # target_2 = midpoint + full_range * 1.0
 TRAILING_STOP_ATR_MULT_BY_PATTERN = {
     "HVF": 1.5,
     "VIPER": 2.0,        # V2 — tighter trail to lock profits faster
-    "KZ_HUNT": 1.0,      # V2 — tight trail on volume engine to secure gains
+    "KZ_HUNT": 0,        # 2026-05-05: disabled. Flat-TP exit policy chosen after sweep on 117 live trades (see project_kz_hunt_exit_optimum.md).
     "LONDON_SWEEP": 1.5,
     "WEDGE": 1.5,        # D1 patterns need more room
+}
+
+# Per-pattern flat-TP override. When set, overrides target_1/target_2 with a
+# fixed pip distance from entry — disables KZ-extreme-derived dynamic TPs.
+# Pairs with SPLIT_ORDER_BY_PATTERN = False to deliver pure broker-side
+# TP/SL with no partial close, no trailing, no BE-at-T1.
+# 2026-05-05: KZ_HUNT switched to 20p flat after exit-giveback analysis
+# (see memory project_kz_hunt_exit_optimum.md). +12p was the local optimum
+# but +20p chosen for durability (R:R 1.18 vs 0.7).
+FLAT_TP_PIPS_BY_PATTERN = {
+    "KZ_HUNT": 20.0,
+}
+
+# Per-pattern split-order toggle. False = single order with broker-side TP
+# at target_1; trade monitor only handles SL/time-exit. True = legacy 60/40
+# split (60% partial at T1, 40% trailed). 2026-05-05: KZ_HUNT switched to
+# False — flat exits proved superior in backtest.
+SPLIT_ORDER_BY_PATTERN = {
+    "KZ_HUNT": False,
+    "HVF": True,
+    "VIPER": True,
+    "LONDON_SWEEP": True,
+    "WEDGE": True,
 }
 
 # Limit-style entry: per-pattern toggle. When enabled, the order request goes
@@ -210,7 +233,7 @@ TIME_STOP_HOURS_BY_PATTERN = {
 # Combined with BE@50%T1 yields +94p net across 109 live KZ_HUNT trades.
 # 0.0 disables for that pattern.
 PRE_PARTIAL_TRAIL_ATR_BY_PATTERN = {
-    "KZ_HUNT": 1.0,
+    "KZ_HUNT": 0.0,      # 2026-05-05: disabled. Flat-TP exit policy.
     "HVF": 0.0,
     "VIPER": 0.0,
     "LONDON_SWEEP": 0.0,
@@ -221,7 +244,7 @@ PRE_PARTIAL_TRAIL_ATR_BY_PATTERN = {
 # 0.0 disables the feature for that pattern. Backtest: BE@50% T1 recovers
 # +113p from the SL bucket across 109 live KZ_HUNT trades.
 BE_AT_T1_PROGRESS_BY_PATTERN = {
-    "KZ_HUNT": 0.50,
+    "KZ_HUNT": 0.0,      # 2026-05-05: disabled. Flat-TP exit policy.
     "HVF": 0.0,
     "VIPER": 0.0,
     "LONDON_SWEEP": 0.0,

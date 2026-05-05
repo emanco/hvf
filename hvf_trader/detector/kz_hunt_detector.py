@@ -55,7 +55,14 @@ class KZHuntPattern:
     pattern_type: str = "KZ_HUNT"
 
     def compute_levels(self, current_atr: float):
-        """Calculate entry, SL, targets from KZ extremes."""
+        """Calculate entry, SL, targets from KZ extremes.
+
+        If config.FLAT_TP_PIPS_BY_PATTERN sets a flat pip TP for this pattern
+        type, target_1 and target_2 are overridden to that fixed distance from
+        entry — disabling the KZ-extreme-derived dynamic targets. This pairs
+        with SPLIT_ORDER_BY_PATTERN=False for pure broker-side TP/SL exit.
+        """
+        from hvf_trader import config
         atr_buffer = 0.5 * current_atr
 
         if self.direction == "LONG":
@@ -70,6 +77,18 @@ class KZHuntPattern:
             self.stop_loss = self.kz_high + atr_buffer
             self.target_1 = self.kz_low
             self.target_2 = self.rejection_price - (self.kz_range * 1.5)
+
+        # Flat-TP override (e.g., KZ_HUNT @ 20p)
+        flat_tp_pips = config.FLAT_TP_PIPS_BY_PATTERN.get(self.pattern_type, 0)
+        if flat_tp_pips and flat_tp_pips > 0:
+            pip = config.PIP_VALUES.get(getattr(self, "symbol", ""), 0.0001)
+            tp_distance = flat_tp_pips * pip
+            if self.direction == "LONG":
+                self.target_1 = self.entry_price + tp_distance
+                self.target_2 = self.target_1
+            else:
+                self.target_1 = self.entry_price - tp_distance
+                self.target_2 = self.target_1
 
         risk = abs(self.entry_price - self.stop_loss)
         reward = abs(self.target_2 - self.entry_price)

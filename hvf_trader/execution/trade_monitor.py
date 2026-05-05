@@ -504,8 +504,13 @@ class TradeMonitor:
             return
 
         # ─── Check target 1 (partial close) ──────────────────────────────
-        # Legacy path: only for trades without split orders (small lot fallback)
-        if not trade_record.partial_closed and trade_record.target_1:
+        # Legacy path: only for trades without split orders (small lot fallback).
+        # Skip when the pattern has split disabled (flat-TP policy) — broker
+        # already has TP set on the single ticket and will fire at tick level.
+        split_enabled = config.SPLIT_ORDER_BY_PATTERN.get(trade_record.pattern_type, True)
+        if (split_enabled
+                and not trade_record.partial_closed
+                and trade_record.target_1):
             if not getattr(trade_record, 'mt5_ticket_partial', None):
                 # No split order — use snapshot-based T1 detection
                 target_1_hit = False
