@@ -374,7 +374,7 @@ PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 
 # ─── Quantum London Strategy ────────────────────────────────────────────────
 QUANTUM_LONDON = {
-    "enabled": True,
+    "enabled": False,                   # DISABLED 2026-05-05: agent team analysis showed current 7p/5p/18p config is a backtest-overfit derivative that doesn't survive on IC Markets. Rebuild planned as faithful FF Simple Mean Reversion (30p/30p/longer hold) — see project_quantum_london.md memory.
     "instrument": "EURGBP",
     "formation_timeframe": "M15",
     "poll_interval_sec": 1,            # 1s polling — CPU verified comfortable; per-minute heartbeat log confirms thread is alive
@@ -391,7 +391,7 @@ QUANTUM_LONDON = {
     "max_spread_pips": 2.5,             # Asian-hours EURGBP spread is 3-5p live; 1.2p filtered out virtually all triggers
     "max_trades_per_session": 1,
     "direction": "BOTH",
-    "risk_pct": 5.0,
+    "risk_pct": 1.0,                    # Lowered 5%→1% on 2026-05-05: backtest on IC Markets data shows PF 0.5-0.8 (vs Dukascopy PF 21.85 — likely phantom-wick artifact). Holding params as-is while we research/recalibrate on real broker data.
     "daily_loss_limit_pct": 5.0,
     "kill_switch_consecutive_losses": 3,
     "pattern_type": "QUANTUM_LONDON",
