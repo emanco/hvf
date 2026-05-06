@@ -408,7 +408,7 @@ QUANTUM_LONDON = {
     "instrument": "EURGBP",
     "capture_timeframe": "M5",
     "poll_interval_sec": 1,
-    "days": [0, 1, 2, 3, 4],            # Mon-Fri capture nights → Tue-Sat trading. Sat session has no market so it just no-ops.
+    "days": [6, 0, 1, 2, 3],            # 2026-05-06: Sun-Thu capture nights → Mon-Fri trading sessions. Aligns with FF canonical daily cycle (capture at NY close = 22:00 UTC = 00:00 GMT+2). Previous [0,1,2,3,4] was Mon-Fri capture, missing Mon trading session and wasting Fri capture (Sat market closed).
     "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
     "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (~22hr hold, matches FF daily cycle)
     "trigger_pips": 40,                 # Wide trigger validated on IC Markets — 30p canonical was marginal
