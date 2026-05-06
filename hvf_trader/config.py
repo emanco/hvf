@@ -471,7 +471,7 @@ NIGHT_TIDE = {
     "stop_pips": 12,
     "max_hold_hours": 4,            # 16 M15 bars
     "spread_buffer_pips": 2.0,       # min TP-distance overhead vs spread
-    "max_spread_pips": 5.0,          # runtime: skip entry if spread > this (rollover protection)
+    "max_spread_pips": 7.0,          # 2026-05-06: 5→7. Live got 4 fills/30d vs backtest expectation of ~25/mo. Realistic-spread sweep showed PF 1.65 at 5p spread, PF 1.10 at 7p — strategy still profitable at 7p but captures more rollover-spike signals previously rejected.
     "risk_pct": 1.0,                 # 1% per trade — 4 pairs can fire concurrently
     "max_concurrent": 4,
 }
