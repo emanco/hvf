@@ -397,31 +397,47 @@ PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 
 # ─── Quantum London Strategy ────────────────────────────────────────────────
 # Rebuilt 2026-05-05 as faithful FF mean-reversion (thread #743125 by
-# Alphaomega). Replaces the prior 7p/5p/18p grid-EA derivative that
-# couldn't reproduce its Dukascopy backtest on IC Markets data.
-# Validated on IC Markets EURGBP M5 over 8 months: PF 2.52, 26 trades,
-# 0 SLs hit, +107p, 22p DD. M1 vs M5 fidelity check on the overlap
-# window confirmed M5 backtest is structurally accurate. Sample size
-# (N=26) remains the open risk; running live as forward-test on demo.
+# Alphaomega). Replaces the prior 7p/5p/18p grid-EA derivative.
+# 2026-05-06: extended to multi-instrument with per-pair param sets.
+# Each entry in QUANTUM_LONDON["instances"] gets its own scanner thread.
+#
+# Per-instrument backtests (IC Markets):
+#  - EURGBP M5 8mo: 40/12.5/40 → PF 2.52, +107p, 22p DD, 15% fire rate
+#  - EURCHF M15 4yr: 20/5/20 → PF 1.23, +468p, 90% fire rate, 85% WR
+#    (R:R 0.25, requires high WR; safer 35/10/35 alt would give PF 1.16)
+#
+# Pair-specific tuning matters: EURCHF is SNB-managed, low volatility,
+# tight reverts often → tight params win. EURGBP has bigger ranges → wide
+# params catch real reversals, tight ones get noise-shaken.
 QUANTUM_LONDON = {
     "enabled": True,
-    "instrument": "EURGBP",
+    "pattern_type": "QUANTUM_LONDON",
+    "risk_pct": 1.0,
     "capture_timeframe": "M5",
     "poll_interval_sec": 1,
-    "days": [6, 0, 1, 2, 3],            # 2026-05-06: Sun-Thu capture nights → Mon-Fri trading sessions. Aligns with FF canonical daily cycle (capture at NY close = 22:00 UTC = 00:00 GMT+2). Previous [0,1,2,3,4] was Mon-Fri capture, missing Mon trading session and wasting Fri capture (Sat market closed).
+    "days": [6, 0, 1, 2, 3],            # Sun-Thu capture nights → Mon-Fri trading sessions
     "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
-    "force_exit_utc_hour": 21,          # Force-close any still-open trade at 21:00 UTC next day (~22hr hold, matches FF daily cycle)
-    "trigger_pips": 40,                 # Wide trigger validated on IC Markets — 30p canonical was marginal
-    "target_pips": 12.5,                # Sweep showed 12.5p > 10p (PF 2.52 vs 1.99, +107p vs +69p)
-    "stop_pips": 40,                    # Wide SL, asymmetric R:R as per FF design
-    "risk_pct": 1.0,                    # Conservative until live-validated
-    "pattern_type": "QUANTUM_LONDON",
+    "force_exit_utc_hour": 21,          # Force-close at 21:00 UTC next day (~22hr hold)
+    "instances": [
+        {   # EURGBP — IC Markets 8mo backtest PF 2.52
+            "instrument": "EURGBP",
+            "trigger_pips": 40,
+            "target_pips": 12.5,
+            "stop_pips": 40,
+        },
+        {   # EURCHF — IC Markets 4yr backtest PF 1.23, 90% fire rate, 85% WR
+            "instrument": "EURCHF",
+            "trigger_pips": 20,
+            "target_pips": 5,
+            "stop_pips": 20,
+        },
+    ],
 }
 
 RISK_PCT_BY_PATTERN["QUANTUM_LONDON"] = QUANTUM_LONDON["risk_pct"]
-MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.2          # 12.5/40 = 0.3125; allow some slack
+MIN_RRR_BY_PATTERN["QUANTUM_LONDON"] = 0.2          # spans both 0.71 (EURGBP) and 0.25 (EURCHF)
 TRAILING_STOP_ATR_MULT_BY_PATTERN["QUANTUM_LONDON"] = 0  # No trailing — fixed TP/SL
-MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 30
+MIN_STOP_PIPS_BY_PATTERN["QUANTUM_LONDON"] = 3      # 5p TP on EURCHF needs lower floor
 PATTERN_FRESHNESS_BARS["QUANTUM_LONDON"] = 1
 INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 
