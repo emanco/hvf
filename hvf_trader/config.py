@@ -59,7 +59,7 @@ HVF_MIN_RRR = 1.0                # Global fallback minimum reward:risk ratio
 MIN_RRR_BY_PATTERN = {
     "HVF": 1.5,            # Tightened from 1.0→1.5 per backtest variant E (+200p/18T vs +154p/35T)
     "VIPER": 1.0,
-    "KZ_HUNT": 1.0,
+    "KZ_HUNT": 0.6,        # 2026-05-06: 1.0→0.6 to match flat 12p TP / ~17p SL geometry (R:R ~0.71). Old 1.0 was rejecting valid setups (errors log showed RRR 0.68/0.72/0.78 rejections that would have been profitable under the new policy).
     "LONDON_SWEEP": 1.0,
     "WEDGE": 1.0,
 }
