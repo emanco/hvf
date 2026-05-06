@@ -222,7 +222,7 @@ MAX_ENTRY_DRIFT_PIPS_JPY = 12.0     # JPY crosses (8p→12p, same reasoning + JP
 # Time-stop: force-close trades that have aged past N hours without hitting
 # TP or SL. KZ_HUNT: 4 H1 bars (backstop for slow drifters). 0 disables.
 TIME_STOP_HOURS_BY_PATTERN = {
-    "KZ_HUNT": 4,
+    "KZ_HUNT": 0,    # 2026-05-06: 4→0. Time-stop sweep on 62-trade live filtered sample showed 4h was capping +117p potential at +5p (PF 1.01 vs 1.33 at no-stop). Removing aligns with the broker-handles-exits policy.
     "HVF": 0,
     "VIPER": 0,
     "LONDON_SWEEP": 0,
