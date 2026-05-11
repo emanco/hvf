@@ -180,6 +180,13 @@ class BacktestEngine:
         enabled_patterns: list[str] = None,
         simulate_news_blocks: bool = False,
         simulate_circuit_breaker: bool = False,
+        # Friction realism — defaults restore the legacy flat-1.5p behavior
+        # for backward compat. Set use_realistic_spread=True to enable the
+        # per-symbol+hour model (recommended for any honest validation).
+        use_realistic_spread: bool = False,
+        slippage_pips: float | None = None,
+        slippage_random: bool = False,
+        spread_percentile: str = "median",
     ):
         self.starting_equity = starting_equity
         self.risk_pct = risk_pct or config.RISK_PCT
@@ -189,6 +196,31 @@ class BacktestEngine:
         self.enabled_patterns = enabled_patterns or ["HVF"]
         self.simulate_news_blocks = simulate_news_blocks
         self.simulate_circuit_breaker = simulate_circuit_breaker
+        self.use_realistic_spread = use_realistic_spread
+        # slippage_pips=None means "use random gaussian via spread_model
+        # when slippage_random=True, else zero slippage". A fixed float
+        # overrides both (e.g. 1.0 for sensitivity-test sweeps).
+        self.slippage_pips = slippage_pips
+        self.slippage_random = slippage_random
+        self.spread_percentile = spread_percentile
+
+    def _spread_pips_for(self, symbol: str, hour_utc: int) -> float:
+        """Return the entry-side spread in pips at the given symbol/hour."""
+        if not self.use_realistic_spread:
+            return 1.5
+        from hvf_trader.backtesting.spread_model import get_spread_pips
+        return get_spread_pips(
+            symbol, hour_utc, percentile=self.spread_percentile,
+        )
+
+    def _slippage_pips_for(self, symbol: str, hour_utc: int) -> float:
+        """Return the per-fill slippage in pips (adverse, always >= 0)."""
+        if self.slippage_pips is not None:
+            return self.slippage_pips
+        if self.slippage_random:
+            from hvf_trader.backtesting.spread_model import apply_slippage_pips
+            return apply_slippage_pips()
+        return 0.0
 
     # ------------------------------------------------------------------
     # News filter simulation helpers
@@ -441,7 +473,17 @@ class BacktestEngine:
                         triggered.append(j)
                         continue
 
-                    actual_entry = bar["close"]
+                    raw_entry = bar["close"]
+                    # Apply entry-side slippage (adverse fill) before any
+                    # post-entry checks so target/stop math sees the real
+                    # fill price the broker would have given us.
+                    bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 12
+                    pip_sz = config.PIP_VALUES.get(symbol, 0.0001)
+                    slip_p = self._slippage_pips_for(symbol, bar_hour)
+                    if pattern.direction == "LONG":
+                        actual_entry = raw_entry + slip_p * pip_sz
+                    else:
+                        actual_entry = raw_entry - slip_p * pip_sz
                     if pattern.direction == "LONG" and actual_entry >= pattern.target_1:
                         triggered.append(j)
                         continue
@@ -449,9 +491,11 @@ class BacktestEngine:
                         triggered.append(j)
                         continue
 
-                    # Spread simulation: widen SL by typical spread (matches live main.py:729-740)
-                    pip_sz = config.PIP_VALUES.get(symbol, 0.0001)
-                    spread_price = pip_sz * 1.5  # ~1.5 pip typical spread
+                    # Spread simulation: widen SL by typical spread for
+                    # this symbol/hour. Replaces the flat 1.5p assumption
+                    # that inflated backtest PF on cross pairs.
+                    spread_pips = self._spread_pips_for(symbol, bar_hour)
+                    spread_price = pip_sz * spread_pips
                     if pattern.direction == "LONG":
                         adjusted_sl = pattern.stop_loss - spread_price
                     else:
@@ -848,10 +892,17 @@ class BacktestEngine:
 
     def _calc_pnl(self, trade: BacktestTrade, pip_value: float):
         """Calculate PnL for a closed trade."""
-        # Simulate exit spread: closing a LONG sells at bid (worse by half-spread),
-        # closing a SHORT buys at ask (worse by half-spread).  Uses the same 1.5 pip
-        # typical spread as entry SL widening — half-spread = 0.75 pips.
-        half_spread = pip_value * 0.75
+        # Simulate exit spread: closing a LONG sells at bid (worse by
+        # half-spread), closing a SHORT buys at ask (worse by half-spread).
+        # Half-spread uses the same per-symbol+hour model as entry — much
+        # more punitive on cross pairs at Asian/rollover.
+        exit_hour = (
+            trade.exit_time.hour
+            if (trade.exit_time is not None and hasattr(trade.exit_time, "hour"))
+            else 12
+        )
+        exit_spread_pips = self._spread_pips_for(trade.symbol, exit_hour)
+        half_spread = pip_value * (exit_spread_pips / 2.0)
         if trade.direction == "LONG":
             exit_price = trade.exit_price - half_spread
             raw_pips = (exit_price - trade.entry_price) / pip_value
