@@ -265,6 +265,9 @@ class QuantumLondonScanner:
 
         ticket = result["ticket"]
         fill_price = result["fill_price"]
+        pip = config.PIP_VALUES.get(sym, 0.0001)
+        slip_pips = (fill_price - signal.entry_price) / pip
+        adverse_pips = slip_pips if signal.direction == "LONG" else -slip_pips
 
         pattern_metadata = json.dumps({
             "session_open": signal.session_open,
@@ -318,9 +321,51 @@ class QuantumLondonScanner:
         logger.info(
             "[QUANTUM_LONDON] %s %s: trigger=%.5f fill=%.5f TP=%.5f SL=%.5f lots=%s slip=%.1fp",
             signal.direction, sym, signal.entry_price, fill_price,
-            signal.take_profit, signal.stop_loss, lot_size,
-            slippage / config.PIP_VALUES.get(sym, 0.0001),
+            signal.take_profit, signal.stop_loss, lot_size, slip_pips,
         )
+
+        # Adverse-slippage geometry guard: IC Markets is observed to fill QL
+        # entries beyond `deviation=0` (e.g. 5–20p past trigger on EURCHF at
+        # the 22:00 UTC capture). Once adverse slip exceeds the TP distance,
+        # the TP lands on the wrong side of entry — the trade is unwinnable
+        # and will hang until SL or 21:00 UTC force-exit. Close immediately
+        # and book the fill-spread loss instead.
+        max_adverse_pips = cfg.get("max_adverse_slip_pips", cfg["target_pips"] * 0.5)
+        if adverse_pips > max_adverse_pips:
+            logger.warning(
+                "[QUANTUM_LONDON] %s %s ADVERSE-SLIP ABORT: %.1fp > %.1fp limit "
+                "(trigger=%.5f fill=%.5f TP=%.5f). Closing position.",
+                signal.direction, sym, adverse_pips, max_adverse_pips,
+                signal.entry_price, fill_price, signal.take_profit,
+            )
+            close_result = self._order_manager.close_position(
+                ticket, sym, signal.direction, "QL adverse-slip abort",
+            )
+            if isinstance(close_result, dict):
+                close_price = close_result["fill_price"]
+            else:
+                close_price = fill_price
+            if signal.direction == "LONG":
+                realized_pips = (close_price - fill_price) / pip
+            else:
+                realized_pips = (fill_price - close_price) / pip
+            realized_pnl = realized_pips * 10.0 * lot_size
+            self._trade_logger.log_trade_close(
+                trade_record.id, close_price, realized_pnl, realized_pips,
+                "ADVERSE_SLIP_ABORT", pnl_estimated=True,
+            )
+            self._open_trade_id = None
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
+            if self._alerter:
+                self._alerter.send_message(
+                    f"<b>\u26a0\ufe0f [QUANTUM_LONDON] {signal.direction} {sym} ABORTED</b>\n"
+                    f"Adverse slip {adverse_pips:.1f}p > {max_adverse_pips:.1f}p limit\n"
+                    f"Trigger {signal.entry_price:.5f} \u2192 Fill {fill_price:.5f} "
+                    f"\u2192 Close {close_price:.5f}\n"
+                    f"Realized: {realized_pips:+.1f}p (${realized_pnl:+.2f})"
+                )
+            return
         if self._alerter:
             self._alerter.send_message(
                 f"<b>[QUANTUM_LONDON] {signal.direction} {sym}</b>\n"
