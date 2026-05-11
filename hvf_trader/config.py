@@ -90,12 +90,12 @@ SCORE_THRESHOLD_BY_PATTERN = {
     "WEDGE": 40,
 }
 
-# KZ_HUNT detector mode. Sweep-mode requires the bar to actually take out the
-# prior KZ extreme (true ICT-style liquidity sweep) before counting the wick
-# as a rejection. Backtest "approach + wick" entry population conflated real
-# sweeps with mere tests; live live degradation (1.53 -> 0.79 PF) is consistent
-# with that gap. Default True. Flip to False to A/B against legacy behaviour.
-KZ_HUNT_REQUIRE_SWEEP = True
+# KZ_HUNT detector mode. Sweep-mode required the bar to actually take out
+# the prior KZ extreme. Walk-forward on 3yr M30 (2023-08 to 2026-02, 167
+# OOS trades, hardened harness) showed sweep-mode delivers PF 0.52 vs
+# legacy 1.20 -- it filters OUT the only edge instead of adding signal.
+# Flipped back 2026-05-11.
+KZ_HUNT_REQUIRE_SWEEP = False
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
 # forex downside momentum is sharper and more persistent than upside.
