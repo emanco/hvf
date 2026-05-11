@@ -328,6 +328,75 @@ class TradeLogger:
                 record.pattern_type, record.symbol, is_win=pnl_pips > 0
             )
 
+    def update_closed_trade_pnl(
+        self,
+        trade_id: int,
+        close_price: float,
+        pnl: float,
+        pnl_pips: float,
+        close_reason: str | None = None,
+    ) -> bool:
+        """Replace an estimated PnL on a CLOSED trade with real deal-history data.
+
+        Only updates rows where ``pnl_estimated=True``. Does not touch
+        status, closed_at, or trigger TRADE_CLOSED events — those were set
+        on the original close. Logs a RECONCILIATION_LATE_UPDATE event so
+        we can audit how often this saves us from estimate drift.
+
+        Returns:
+            True if the row was updated, False if skipped (not closed,
+            already real, or missing).
+        """
+        record = self._session.get(TradeRecord, trade_id)
+        if record is None:
+            logger.warning("TradeRecord %d not found for late PnL update", trade_id)
+            return False
+        if record.status != "CLOSED":
+            logger.info(
+                "TradeRecord %d not CLOSED (status=%s), skipping late PnL update",
+                trade_id, record.status,
+            )
+            return False
+        if not record.pnl_estimated:
+            logger.info(
+                "TradeRecord %d already has real PnL, skipping late update",
+                trade_id,
+            )
+            return False
+
+        old_pnl = record.pnl or 0.0
+        old_pnl_pips = record.pnl_pips or 0.0
+        record.close_price = close_price
+        record.pnl = pnl
+        record.pnl_pips = pnl_pips
+        record.pnl_estimated = False
+        if close_reason:
+            record.close_reason = close_reason
+        try:
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+
+        self.log_event(
+            event_type="RECONCILIATION_LATE_UPDATE",
+            symbol=record.symbol,
+            trade_id=trade_id,
+            details={
+                "old_pnl": old_pnl,
+                "old_pnl_pips": old_pnl_pips,
+                "new_pnl": pnl,
+                "new_pnl_pips": pnl_pips,
+                "close_price": close_price,
+            },
+        )
+        logger.info(
+            f"[RECONCILIATION_LATE_UPDATE] trade {trade_id} ({record.symbol}): "
+            f"PnL {old_pnl:+.2f} → {pnl:+.2f}, "
+            f"pips {old_pnl_pips:+.1f} → {pnl_pips:+.1f}"
+        )
+        return True
+
     def log_partial_close(self, trade_id: int, close_price: float) -> None:
         """Record a partial close on a trade (e.g., 50% at target_1).
 

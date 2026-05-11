@@ -25,6 +25,12 @@ except ImportError:
 
 
 class Reconciliator:
+    # Delay schedule (seconds from fallback) for late-update retries.
+    # The broker can take several minutes to write the exit deal after the
+    # position disappears; we re-check until either real deal data is found
+    # or the schedule is exhausted.
+    LATE_UPDATE_SCHEDULE = (60, 180, 600, 1800)  # 1min, 3min, 10min, 30min
+
     def __init__(self, trade_logger, order_manager=None):
         """
         Args:
@@ -34,6 +40,9 @@ class Reconciliator:
         self.trade_logger = trade_logger
         self.order_manager = order_manager
         self._missing_counts = {}  # ticket -> consecutive miss count
+        # trade_id -> {'ticket', 'symbol', 'direction', 'opened_at',
+        #              'enqueued_at', 'attempts', 'next_attempt_at'}
+        self._pending_late_updates: dict[int, dict] = {}
 
     def reconcile(self) -> list[dict]:
         """
@@ -50,6 +59,11 @@ class Reconciliator:
         Returns:
             List of discrepancy dicts with keys: type, details, trade_id, ticket
         """
+        # Service any pending late-update retries first. These re-fetch deal
+        # history for trades previously closed via the SL-estimate fallback
+        # and overwrite the estimate with real PnL when the broker catches up.
+        self._process_late_updates()
+
         discrepancies = []
 
         # Get internal open trades
@@ -369,3 +383,95 @@ class Reconciliator:
             f"[RECONCILIATION] {trade.symbol} trade {trade.id} closed "
             f"without deal history, estimated at {source}: {pnl_pips:+.1f} pips"
         )
+
+        # Enqueue for late-update — the broker often writes the exit deal a
+        # few minutes after the position disappears. We'll re-fetch and
+        # overwrite the estimate with real PnL when it lands.
+        self._enqueue_late_update(trade, ticket)
+
+    def _enqueue_late_update(self, trade, ticket):
+        """Schedule periodic re-checks of MT5 deal history to replace estimated PnL."""
+        now = datetime.now(timezone.utc)
+        self._pending_late_updates[trade.id] = {
+            "ticket": ticket,
+            "symbol": trade.symbol,
+            "direction": trade.direction,
+            "opened_at": trade.opened_at,
+            "enqueued_at": now,
+            "attempts": 0,
+            "next_attempt_at": now + timedelta(seconds=self.LATE_UPDATE_SCHEDULE[0]),
+        }
+        logger.info(
+            f"[RECONCILIATION_LATE_UPDATE] enqueued trade {trade.id} "
+            f"(ticket {ticket}, {trade.symbol}) for deal-history retry"
+        )
+
+    def _process_late_updates(self) -> None:
+        """Re-fetch deal history for queued estimated-PnL trades and update if found.
+
+        Called at the start of every reconcile() cycle. Drops entries that
+        exhaust the LATE_UPDATE_SCHEDULE without finding deal data.
+        """
+        if not self._pending_late_updates:
+            return
+        now = datetime.now(timezone.utc)
+        resolved: list[int] = []
+        for trade_id, entry in self._pending_late_updates.items():
+            if now < entry["next_attempt_at"]:
+                continue
+            ticket = entry["ticket"]
+            symbol = entry["symbol"]
+            direction = entry["direction"]
+            opened_at = entry["opened_at"]
+            entry["attempts"] += 1
+            # No internal retry inside search_deal_history here — the recon
+            # loop handles cadence, and we don't want to block the thread.
+            deals = search_deal_history(ticket, symbol, retries=1)
+            close_deal = find_close_deal(deals, ticket, symbol, direction, opened_at)
+            if close_deal:
+                # Reload the trade row for combine_split_pnl to pick up the
+                # current state (e.g. partial_closed back-fill).
+                trade = self.trade_logger._session.get(TradeRecord, trade_id)
+                if trade is None:
+                    logger.warning(
+                        f"[RECONCILIATION_LATE_UPDATE] trade {trade_id} not "
+                        f"found in DB, dropping from queue"
+                    )
+                    resolved.append(trade_id)
+                    continue
+                close_price = close_deal.price
+                pnl, pnl_pips = combine_split_pnl(
+                    trade, close_price, close_deal.profit
+                )
+                # Real PnL drives the close-reason inference (overwriting
+                # "RECONCILIATION" with STOP_LOSS / TAKE_PROFIT).
+                new_reason = "STOP_LOSS" if pnl < 0 else "TAKE_PROFIT"
+                updated = self.trade_logger.update_closed_trade_pnl(
+                    trade_id, close_price, pnl, pnl_pips, close_reason=new_reason,
+                )
+                if updated:
+                    logger.info(
+                        f"[RECONCILIATION_LATE_UPDATE] trade {trade_id} resolved "
+                        f"on attempt {entry['attempts']} after "
+                        f"{(now - entry['enqueued_at']).total_seconds():.0f}s"
+                    )
+                resolved.append(trade_id)
+                continue
+            # Still no deals — schedule next attempt or give up.
+            if entry["attempts"] >= len(self.LATE_UPDATE_SCHEDULE):
+                logger.warning(
+                    f"[RECONCILIATION_LATE_UPDATE] trade {trade_id} "
+                    f"(ticket {ticket} {symbol}) exhausted "
+                    f"{entry['attempts']} retries — leaving estimated PnL"
+                )
+                resolved.append(trade_id)
+            else:
+                next_delay = self.LATE_UPDATE_SCHEDULE[entry["attempts"]]
+                entry["next_attempt_at"] = now + timedelta(seconds=next_delay)
+                logger.info(
+                    f"[RECONCILIATION_LATE_UPDATE] trade {trade_id} attempt "
+                    f"{entry['attempts']}/{len(self.LATE_UPDATE_SCHEDULE)} "
+                    f"still no deals, next retry in {next_delay}s"
+                )
+        for tid in resolved:
+            self._pending_late_updates.pop(tid, None)

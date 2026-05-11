@@ -5,6 +5,7 @@ Used by both TradeMonitor and Reconciliator to avoid logic duplication.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from hvf_trader import config
@@ -19,13 +20,42 @@ except ImportError:
     mt5 = None
 
 
-def search_deal_history(ticket: int, symbol: str, lookback_days: int = 7):
-    """Search MT5 deal history for a position, with IC Markets broad fallback.
+def _query_deal_history(ticket: int, symbol: str, lookback_days: int):
+    """Single query attempt: by-ticket then broad-search fallback."""
+    now = datetime.now(timezone.utc)
+    from_date = now - timedelta(days=lookback_days)
+
+    deals = mt5.history_deals_get(from_date, now, position=ticket)
+
+    # IC Markets often returns nothing for position=ticket filter.
+    # Fall back to broad search filtered by symbol.
+    if not deals:
+        all_deals = mt5.history_deals_get(from_date, now)
+        if all_deals:
+            deals = [d for d in all_deals if d.symbol == symbol]
+
+    return deals or []
+
+
+def search_deal_history(
+    ticket: int,
+    symbol: str,
+    lookback_days: int = 7,
+    retries: int = 3,
+    retry_delay: float = 5.0,
+):
+    """Search MT5 deal history for a position, with retries + IC Markets broad fallback.
+
+    The broker can take several seconds (or longer) to write the exit deal into
+    history after the position disappears from positions_get. Retry the lookup
+    a few times with a short delay before giving up.
 
     Args:
         ticket: MT5 position ticket.
         symbol: Instrument symbol.
         lookback_days: How far back to search.
+        retries: Total attempts (>=1). Default 3 → max 2 retries.
+        retry_delay: Seconds between attempts.
 
     Returns:
         List of deal objects, or empty list.
@@ -33,24 +63,27 @@ def search_deal_history(ticket: int, symbol: str, lookback_days: int = 7):
     if not MT5_AVAILABLE:
         return []
 
-    now = datetime.now(timezone.utc)
-    from_date = now - timedelta(days=lookback_days)
+    for attempt in range(1, retries + 1):
+        deals = _query_deal_history(ticket, symbol, lookback_days)
+        if deals:
+            if attempt > 1:
+                logger.info(
+                    f"[DEAL_SEARCH] Resolved on attempt {attempt}/{retries} "
+                    f"for ticket={ticket} {symbol} ({len(deals)} deals)"
+                )
+            return deals
+        if attempt < retries:
+            logger.info(
+                f"[DEAL_SEARCH] Empty result on attempt {attempt}/{retries} "
+                f"for ticket={ticket} {symbol}, retrying in {retry_delay}s"
+            )
+            time.sleep(retry_delay)
 
-    # Try position-filtered lookup first
-    deals = mt5.history_deals_get(from_date, now, position=ticket)
-
-    # IC Markets often returns nothing for position=ticket filter.
-    # Fall back to broad search filtered by symbol.
-    if not deals:
-        logger.info(
-            f"[DEAL_SEARCH] No deals for position={ticket}, "
-            f"trying broad search for {symbol}"
-        )
-        all_deals = mt5.history_deals_get(from_date, now)
-        if all_deals:
-            deals = [d for d in all_deals if d.symbol == symbol]
-
-    return deals or []
+    logger.info(
+        f"[DEAL_SEARCH] No deals found for ticket={ticket} {symbol} "
+        f"after {retries} attempts"
+    )
+    return []
 
 
 def find_close_deal(deals, ticket: int, symbol: str, direction: str,
