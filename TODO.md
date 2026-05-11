@@ -138,6 +138,13 @@ Last updated: 2026-04-22 (late afternoon session)
 - Scale lot size down when multiple correlated pairs are open simultaneously
 - e.g., if 3 EUR pairs open, reduce next EUR pair's lot by 50%
 
+## Completed (2026-05-11 — QL true LIMIT orders)
+
+- ~~QL TRADE_ACTION_DEAL `deviation=0` not enforced by IC Markets~~ — fills observed 5–20p past trigger on EURCHF (#170 -25.7p, #171 -40.7p), inverting TP geometry. Migrated to `TRADE_ACTION_PENDING` + `ORDER_TYPE_*_LIMIT`: both BUY_LIMIT and SELL_LIMIT placed at 22:00 UTC capture, whichever fills first cancels the survivor. Broker enforces limit-or-better, so TP/SL geometry is now guaranteed.
+- ~~Removed adverse-slip abort band-aid~~ (commit c82c546) — no longer needed; broker rejects/holds orders that would slip past limit.
+- ~~Startup-cleanup for stale pendings~~ — `_cleanup_stale_pendings_on_startup` cancels any QL pending orders left in the broker book by a prior process before the scanner loop begins, preventing ghost-position risk.
+- New OrderManager helpers: `place_pending_limit_order`, `cancel_pending_order`, `get_pending_order`.
+
 ## Completed (2026-04-22 Late-Afternoon Session — commit b43657d)
 
 - ~~QL news filter whole-day blocking~~ — now windowed (only events inside 00:00–05:00 UTC trading window block the session). Thursday's 07:30/08:30 UTC PMIs no longer kill the night

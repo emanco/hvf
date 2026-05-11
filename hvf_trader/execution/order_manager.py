@@ -469,3 +469,110 @@ class OrderManager:
                 "price_current": pos.price_current,
             })
         return result
+
+    def place_pending_limit_order(
+        self,
+        symbol: str,
+        direction: str,
+        lot_size: float,
+        limit_price: float,
+        stop_loss: float,
+        take_profit: float = 0.0,
+        comment: str = "AUTO",
+        magic: int = 20250305,
+    ) -> Optional[dict]:
+        """
+        Place a pending LIMIT order. Broker fills only when bid (SHORT) /
+        ask (LONG) reaches limit_price, at limit-or-better. Used by
+        Quantum London to guarantee entry geometry (TP/SL anchored to a
+        known fill price, not a hoped-for one).
+
+        Returns:
+            Dict with 'order_ticket' on success, None on failure.
+        """
+        if not MT5_AVAILABLE:
+            logger.error("MT5 not available")
+            return None
+
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            logger.error(f"Symbol {symbol} not found")
+            return None
+
+        if not symbol_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                logger.error(f"Failed to select symbol {symbol}")
+                return None
+
+        order_type = (
+            mt5.ORDER_TYPE_BUY_LIMIT if direction == "LONG"
+            else mt5.ORDER_TYPE_SELL_LIMIT
+        )
+        digits = symbol_info.digits
+        limit_price = round(limit_price, digits)
+        stop_loss = round(stop_loss, digits)
+        take_profit = round(take_profit, digits) if take_profit > 0 else 0.0
+
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": lot_size,
+            "type": order_type,
+            "price": limit_price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "magic": magic,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_RETURN,
+        }
+
+        result = mt5.order_send(request)
+        if result is None:
+            error = mt5.last_error()
+            logger.error(f"Pending order send failed: {error}")
+            return None
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(
+                f"Pending order failed: retcode={result.retcode}, "
+                f"comment={result.comment}"
+            )
+            return None
+
+        logger.info(
+            f"Pending limit placed: ticket={result.order}, "
+            f"{direction}_LIMIT {lot_size} {symbol} @ {limit_price}, "
+            f"SL={stop_loss}, TP={take_profit}"
+        )
+        return {"order_ticket": result.order, "limit_price": limit_price}
+
+    def cancel_pending_order(self, ticket: int) -> bool:
+        """Cancel a still-pending limit/stop order by ticket."""
+        if not MT5_AVAILABLE:
+            return False
+        request = {
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": ticket,
+        }
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            rc = result.retcode if result is not None else "None"
+            logger.error(f"Cancel pending order {ticket} failed: retcode={rc}")
+            return False
+        logger.info(f"Pending order {ticket} cancelled")
+        return True
+
+    def get_pending_order(self, ticket: int) -> Optional[dict]:
+        """Return pending order details, or None if not found (filled/cancelled)."""
+        if not MT5_AVAILABLE:
+            return None
+        orders = mt5.orders_get(ticket=ticket)
+        if not orders:
+            return None
+        o = orders[0]
+        return {
+            "ticket": o.ticket, "symbol": o.symbol, "type": o.type,
+            "volume": o.volume_current, "price_open": o.price_open,
+            "sl": o.sl, "tp": o.tp, "magic": o.magic, "comment": o.comment,
+        }

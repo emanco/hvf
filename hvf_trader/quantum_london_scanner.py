@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from hvf_trader import config
-from hvf_trader.detector.quantum_london import QLTracker
+from hvf_trader.detector.quantum_london import QLTracker, QLSignal
 from hvf_trader.data.data_fetcher import fetch_and_prepare
 
 logger = logging.getLogger("hvf_trader")
@@ -48,6 +48,16 @@ class QuantumLondonScanner:
         self._alerter = alerter
         self._running = False
         self._open_trade_id = None
+        # Pending-order state: at capture we place BOTH a BUY_LIMIT and a
+        # SELL_LIMIT in the broker book (the canonical FF setup). Whichever
+        # gets hit first becomes the trade; the survivor is cancelled. DB
+        # write is deferred until the broker actually fills one.
+        self._pending_long_ticket: int | None = None
+        self._pending_short_ticket: int | None = None
+        self._pending_long_signal = None
+        self._pending_short_signal = None
+        self._pending_lot_size: float | None = None
+        self._pending_placed_at: datetime | None = None
         self._cfg = cfg or config.QUANTUM_LONDON
         self._session_stats: dict | None = None
         self._last_telemetry_log_hour: int | None = None
@@ -62,6 +72,11 @@ class QuantumLondonScanner:
             "[QUANTUM_LONDON] Scanner thread started (poll=%ds, heartbeat every %d iters)",
             poll, hb_every,
         )
+        # Clean up any stale QL pending orders left in the broker book from a
+        # prior process. Without this, a restart between capture (22:00 UTC)
+        # and force-exit (21:00 UTC next day) would leave orders the bot
+        # can't see — potentially filling into a ghost position.
+        self._cleanup_stale_pendings_on_startup()
         iter_count = 0
         while self._running:
             try:
@@ -71,8 +86,11 @@ class QuantumLondonScanner:
             iter_count += 1
             if iter_count % hb_every == 0:
                 logger.info(
-                    "[QUANTUM_LONDON] heartbeat: iter=%d state=%s open_trade=%s",
-                    iter_count, self._tracker.state, self._open_trade_id,
+                    "[QUANTUM_LONDON] heartbeat: iter=%d state=%s "
+                    "pending(L/S)=%s/%s open_trade=%s",
+                    iter_count, self._tracker.state,
+                    self._pending_long_ticket, self._pending_short_ticket,
+                    self._open_trade_id,
                 )
             time.sleep(poll)
         logger.info("[QUANTUM_LONDON] Scanner thread stopped")
@@ -93,6 +111,11 @@ class QuantumLondonScanner:
         capture_hour = cfg["capture_utc_hour"]      # 22
         force_exit_hour = cfg["force_exit_utc_hour"]  # 21
         days = cfg["days"]                            # [0,1,2,3,4]
+
+        # ── Pending-order monitoring (limits waiting to fill) ──
+        if self._pending_long_ticket is not None or self._pending_short_ticket is not None:
+            self._check_pending_status(sym, hour, force_exit_hour, cfg, pip)
+            return
 
         # ── Open-trade monitoring (always runs first if a trade is alive) ──
         if self._open_trade_id is not None:
@@ -152,6 +175,10 @@ class QuantumLondonScanner:
                     f"TP/SL: {cfg['target_pips']:.0f}p / {cfg['stop_pips']:.0f}p\n"
                     f"Force-exit: {force_exit_hour:02d}:00 UTC"
                 )
+            # Place both pending LIMITs in the broker book — broker fills
+            # whichever direction price reaches first; survivor is cancelled
+            # on fill or at force-exit.
+            self._place_capture_pendings(sym, session_open, cfg, pip)
             return
 
         # ── Trading phase: poll for trigger ──
@@ -191,27 +218,43 @@ class QuantumLondonScanner:
                     s["trigger_crosses_long"], s["trigger_crosses_short"],
                 )
 
-        # Trigger check
-        signal = self._tracker.check_trigger(
-            bid=tick.bid, ask=tick.ask, pip_value=pip,
-            trigger_pips=cfg["trigger_pips"],
-            target_pips=cfg["target_pips"],
-            stop_pips=cfg["stop_pips"],
-            symbol=sym,
-        )
-        if signal:
-            self._execute(signal)
+        # Execution is now broker-side via the pending LIMIT orders placed at
+        # capture; the trading-phase tick loop runs only for telemetry.
 
     # ─── Execution ───────────────────────────────────────────────────
 
-    def _execute(self, signal):
-        cfg = self._cfg
-        sym = signal.symbol
+    def _place_capture_pendings(self, sym, session_open, cfg, pip):
+        """Place BUY_LIMIT and SELL_LIMIT in the broker book at capture time.
+
+        Whichever side price reaches first fills; the survivor is cancelled.
+        This is the canonical FF Simple Mean Reversion setup (thread #743125)
+        and guarantees TP/SL geometry by anchoring to the exact limit price.
+        """
+        trigger_pips = cfg["trigger_pips"]
+        target_pips = cfg["target_pips"]
+        stop_pips = cfg["stop_pips"]
+
+        long_limit = session_open - trigger_pips * pip
+        short_limit = session_open + trigger_pips * pip
+
+        long_signal = QLSignal(
+            symbol=sym, direction="LONG", entry_price=long_limit,
+            take_profit=long_limit + target_pips * pip,
+            stop_loss=long_limit - stop_pips * pip,
+            session_open=session_open, trigger_pips=trigger_pips,
+        )
+        short_signal = QLSignal(
+            symbol=sym, direction="SHORT", entry_price=short_limit,
+            take_profit=short_limit - target_pips * pip,
+            stop_loss=short_limit + stop_pips * pip,
+            session_open=session_open, trigger_pips=trigger_pips,
+        )
+
         if self._session_stats is not None:
             self._session_stats["executions_attempted"] += 1
 
         if self._circuit_breaker.is_tripped:
-            logger.info("[QUANTUM_LONDON] Circuit breaker tripped, skipping entry")
+            logger.info("[QUANTUM_LONDON] Circuit breaker tripped, skipping pendings")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
@@ -219,14 +262,15 @@ class QuantumLondonScanner:
 
         account = self._connector.get_account_info()
         if not account:
-            logger.error("[QUANTUM_LONDON] Cannot get account info")
+            logger.error("[QUANTUM_LONDON] Cannot get account info — skipping pendings")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
+            self._tracker.mark_traded()
             return
 
         equity = account["equity"]
         risk_pct = cfg["risk_pct"]
-        stop_distance = abs(signal.entry_price - signal.stop_loss)
+        stop_distance = stop_pips * pip  # symmetric across both directions
 
         from hvf_trader.risk.position_sizer import calculate_lot_size
         lot_size = calculate_lot_size(
@@ -235,39 +279,177 @@ class QuantumLondonScanner:
             account_currency=account.get("currency", "USD"),
         )
         if lot_size <= 0:
-            logger.warning("[QUANTUM_LONDON] Lot size zero, skipping")
+            logger.warning("[QUANTUM_LONDON] Lot size zero, skipping pendings")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
             return
 
-        # CRITICAL: limit_price = signal.entry_price ensures we fill AT the
-        # trigger or not at all. If price has already drifted past the trigger
-        # by the time the order request reaches the broker, MT5 returns
-        # REQUOTE and we skip — this is correct behavior, mirrors the
-        # backtest assumption. See order_manager.place_market_order docs.
-        result = self._order_manager.place_market_order(
-            symbol=sym, direction=signal.direction, lot_size=lot_size,
-            stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+        long_result = self._order_manager.place_pending_limit_order(
+            symbol=sym, direction="LONG", lot_size=lot_size,
+            limit_price=long_signal.entry_price,
+            stop_loss=long_signal.stop_loss,
+            take_profit=long_signal.take_profit,
             comment=self.PATTERN_TYPE,
-            limit_price=signal.entry_price,
+        )
+        short_result = self._order_manager.place_pending_limit_order(
+            symbol=sym, direction="SHORT", lot_size=lot_size,
+            limit_price=short_signal.entry_price,
+            stop_loss=short_signal.stop_loss,
+            take_profit=short_signal.take_profit,
+            comment=self.PATTERN_TYPE,
         )
 
-        if not result:
-            logger.error("[QUANTUM_LONDON] Order placement failed (likely REQUOTE — price drifted past trigger)")
+        if not long_result or not short_result:
+            # Asymmetric failure: clean up the successful side so we don't
+            # run a one-sided book that the strategy didn't intend.
+            if long_result and not short_result:
+                self._order_manager.cancel_pending_order(long_result["order_ticket"])
+                logger.error(
+                    "[QUANTUM_LONDON] SELL_LIMIT placement failed — "
+                    "cancelled BUY_LIMIT %d to keep both-sided invariant",
+                    long_result["order_ticket"],
+                )
+            elif short_result and not long_result:
+                self._order_manager.cancel_pending_order(short_result["order_ticket"])
+                logger.error(
+                    "[QUANTUM_LONDON] BUY_LIMIT placement failed — "
+                    "cancelled SELL_LIMIT %d to keep both-sided invariant",
+                    short_result["order_ticket"],
+                )
+            else:
+                logger.error("[QUANTUM_LONDON] Both LIMIT placements failed")
             if self._session_stats is not None:
                 self._session_stats["executions_failed"] += 1
             self._tracker.mark_traded()
+            if self._alerter:
+                self._alerter.send_message(
+                    f"<b>\u26a0\ufe0f [QUANTUM_LONDON] {sym} pendings NOT placed</b>\n"
+                    f"Placement failed (long_ok={bool(long_result)}, "
+                    f"short_ok={bool(short_result)}). Session skipped."
+                )
             return
+
+        self._pending_long_ticket = long_result["order_ticket"]
+        self._pending_short_ticket = short_result["order_ticket"]
+        self._pending_long_signal = long_signal
+        self._pending_short_signal = short_signal
+        self._pending_lot_size = lot_size
+        self._pending_placed_at = datetime.now(timezone.utc)
+        self._tracker.mark_traded()
+
+        logger.info(
+            "[QUANTUM_LONDON] %s LIMITs placed: BUY_LIMIT=%d @ %.5f "
+            "(TP=%.5f SL=%.5f), SELL_LIMIT=%d @ %.5f (TP=%.5f SL=%.5f) lots=%s",
+            sym,
+            self._pending_long_ticket, long_signal.entry_price,
+            long_signal.take_profit, long_signal.stop_loss,
+            self._pending_short_ticket, short_signal.entry_price,
+            short_signal.take_profit, short_signal.stop_loss,
+            lot_size,
+        )
+        if self._alerter:
+            self._alerter.send_message(
+                f"<b>[QUANTUM_LONDON] {sym} LIMITs placed</b>\n"
+                f"BUY_LIMIT @ {long_signal.entry_price:.5f}  "
+                f"(TP {long_signal.take_profit:.5f} / SL {long_signal.stop_loss:.5f})\n"
+                f"SELL_LIMIT @ {short_signal.entry_price:.5f}  "
+                f"(TP {short_signal.take_profit:.5f} / SL {short_signal.stop_loss:.5f})\n"
+                f"Lots: {lot_size}  Force-exit: {cfg['force_exit_utc_hour']:02d}:00 UTC"
+            )
+
+    # ─── Pending-order helpers ───────────────────────────────────────
+
+    def _check_pending_status(self, sym, hour, force_exit_hour, cfg, pip):
+        """Poll pending LIMITs for a fill (one direction); cancel the survivor
+        on fill or both at force-exit."""
+        if not MT5_AVAILABLE:
+            return
+
+        placed_at_ts = (
+            int(self._pending_placed_at.timestamp())
+            if self._pending_placed_at else 0
+        )
+
+        # Look for a filled position from either side. Filter strictly by
+        # magic + comment + open_time so we never bind to a stale orphan
+        # or another strategy's position.
+        positions = mt5.positions_get(symbol=sym) or []
+        our_position = None
+        for pos in positions:
+            if pos.magic != 20250305:
+                continue
+            if pos.comment != self.PATTERN_TYPE:
+                continue
+            if pos.time < placed_at_ts - 2:
+                continue
+            our_position = pos
+            break
+
+        if our_position is not None:
+            # Identify which side filled, cancel the other.
+            if our_position.type == mt5.ORDER_TYPE_BUY:
+                filled_signal = self._pending_long_signal
+                survivor_ticket = self._pending_short_ticket
+                survivor_dir = "SHORT"
+            else:
+                filled_signal = self._pending_short_signal
+                survivor_ticket = self._pending_long_ticket
+                survivor_dir = "LONG"
+            if survivor_ticket is not None:
+                cancelled = self._order_manager.cancel_pending_order(survivor_ticket)
+                if not cancelled:
+                    logger.warning(
+                        "[QUANTUM_LONDON] %s survivor %s LIMIT %d cancel failed "
+                        "(may already be gone)", sym, survivor_dir, survivor_ticket,
+                    )
+            self._on_pending_fill(our_position, filled_signal, cfg, pip)
+            return
+
+        # No fill yet. Check both tickets — are they still pending?
+        long_still = (
+            self._pending_long_ticket is not None
+            and bool(mt5.orders_get(ticket=self._pending_long_ticket))
+        )
+        short_still = (
+            self._pending_short_ticket is not None
+            and bool(mt5.orders_get(ticket=self._pending_short_ticket))
+        )
+
+        if not long_still and not short_still:
+            # Both orders vanished without a position — rejected/expired.
+            logger.warning(
+                "[QUANTUM_LONDON] %s both pending orders gone with no position "
+                "(L=%s S=%s). Clearing state.",
+                sym, self._pending_long_ticket, self._pending_short_ticket,
+            )
+            if self._alerter:
+                self._alerter.send_message(
+                    f"<b>[QUANTUM_LONDON] {sym} pending orders vanished</b>\n"
+                    f"Both LIMITs gone, no position created."
+                )
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
+            self._clear_pending_state()
+            return
+
+        if hour == force_exit_hour:
+            logger.info(
+                "[QUANTUM_LONDON] %s force-exit with unfilled LIMITs — cancelling both",
+                sym,
+            )
+            self._cancel_all_pending("force_exit")
+            self._reset_session_after_pending()
+
+    def _on_pending_fill(self, position, signal, cfg, pip):
+        """Limit filled into a position — log to DB and transition to monitoring."""
+        lot_size = self._pending_lot_size
+        sym = position.symbol
+        fill_price = position.price_open
+        position_ticket = position.ticket
 
         if self._session_stats is not None:
             self._session_stats["executions_filled"] += 1
-
-        ticket = result["ticket"]
-        fill_price = result["fill_price"]
-        pip = config.PIP_VALUES.get(sym, 0.0001)
-        slip_pips = (fill_price - signal.entry_price) / pip
-        adverse_pips = slip_pips if signal.direction == "LONG" else -slip_pips
 
         pattern_metadata = json.dumps({
             "session_open": signal.session_open,
@@ -296,12 +478,13 @@ class QuantumLondonScanner:
         pattern_record = self._trade_logger.log_pattern(pattern_data)
 
         slippage = fill_price - signal.entry_price
+        slip_pips = slippage / pip
         trade_data = {
             "pattern_id": pattern_record.id,
             "symbol": sym,
             "direction": signal.direction,
             "pattern_type": self.PATTERN_TYPE,
-            "mt5_ticket": ticket,
+            "mt5_ticket": position_ticket,
             "entry_price": fill_price,
             "stop_loss": signal.stop_loss,
             "target_1": signal.take_profit,
@@ -316,64 +499,110 @@ class QuantumLondonScanner:
         }
         trade_record = self._trade_logger.log_trade_open(trade_data)
         self._open_trade_id = trade_record.id
-        self._tracker.mark_traded()
+        self._clear_pending_state()
 
         logger.info(
-            "[QUANTUM_LONDON] %s %s: trigger=%.5f fill=%.5f TP=%.5f SL=%.5f lots=%s slip=%.1fp",
-            signal.direction, sym, signal.entry_price, fill_price,
-            signal.take_profit, signal.stop_loss, lot_size, slip_pips,
+            "[QUANTUM_LONDON] %s %s LIMIT FILLED: pos=%d @ %.5f "
+            "(limit=%.5f slip=%+.2fp TP=%.5f SL=%.5f)",
+            signal.direction, sym, position_ticket, fill_price,
+            signal.entry_price, slip_pips,
+            signal.take_profit, signal.stop_loss,
         )
-
-        # Adverse-slippage geometry guard: IC Markets is observed to fill QL
-        # entries beyond `deviation=0` (e.g. 5–20p past trigger on EURCHF at
-        # the 22:00 UTC capture). Once adverse slip exceeds the TP distance,
-        # the TP lands on the wrong side of entry — the trade is unwinnable
-        # and will hang until SL or 21:00 UTC force-exit. Close immediately
-        # and book the fill-spread loss instead.
-        max_adverse_pips = cfg.get("max_adverse_slip_pips", cfg["target_pips"] * 0.5)
-        if adverse_pips > max_adverse_pips:
-            logger.warning(
-                "[QUANTUM_LONDON] %s %s ADVERSE-SLIP ABORT: %.1fp > %.1fp limit "
-                "(trigger=%.5f fill=%.5f TP=%.5f). Closing position.",
-                signal.direction, sym, adverse_pips, max_adverse_pips,
-                signal.entry_price, fill_price, signal.take_profit,
-            )
-            close_result = self._order_manager.close_position(
-                ticket, sym, signal.direction, "QL adverse-slip abort",
-            )
-            if isinstance(close_result, dict):
-                close_price = close_result["fill_price"]
-            else:
-                close_price = fill_price
-            if signal.direction == "LONG":
-                realized_pips = (close_price - fill_price) / pip
-            else:
-                realized_pips = (fill_price - close_price) / pip
-            realized_pnl = realized_pips * 10.0 * lot_size
-            self._trade_logger.log_trade_close(
-                trade_record.id, close_price, realized_pnl, realized_pips,
-                "ADVERSE_SLIP_ABORT", pnl_estimated=True,
-            )
-            self._open_trade_id = None
-            if self._session_stats is not None:
-                self._session_stats["executions_failed"] += 1
-            if self._alerter:
-                self._alerter.send_message(
-                    f"<b>\u26a0\ufe0f [QUANTUM_LONDON] {signal.direction} {sym} ABORTED</b>\n"
-                    f"Adverse slip {adverse_pips:.1f}p > {max_adverse_pips:.1f}p limit\n"
-                    f"Trigger {signal.entry_price:.5f} \u2192 Fill {fill_price:.5f} "
-                    f"\u2192 Close {close_price:.5f}\n"
-                    f"Realized: {realized_pips:+.1f}p (${realized_pnl:+.2f})"
-                )
-            return
         if self._alerter:
             self._alerter.send_message(
-                f"<b>[QUANTUM_LONDON] {signal.direction} {sym}</b>\n"
-                f"Entry: {fill_price:.5f} (trigger {signal.entry_price:.5f})\n"
-                f"TP: {signal.take_profit:.5f} ({cfg['target_pips']:.0f}p)\n"
+                f"<b>[QUANTUM_LONDON] {signal.direction} {sym} FILLED</b>\n"
+                f"Entry: {fill_price:.5f} (limit {signal.entry_price:.5f}, "
+                f"slip {slip_pips:+.2f}p)\n"
+                f"TP: {signal.take_profit:.5f} ({cfg['target_pips']:.0f}p)  "
                 f"SL: {signal.stop_loss:.5f} ({cfg['stop_pips']:.0f}p)\n"
                 f"Lots: {lot_size}"
             )
+
+    def _cancel_all_pending(self, reason):
+        """Cancel any still-active pending LIMITs and clear state."""
+        cancelled_any = False
+        for ticket, label in (
+            (self._pending_long_ticket, "BUY_LIMIT"),
+            (self._pending_short_ticket, "SELL_LIMIT"),
+        ):
+            if ticket is None:
+                continue
+            ok = self._order_manager.cancel_pending_order(ticket)
+            if ok:
+                logger.info(
+                    "[QUANTUM_LONDON] %s %d cancelled (%s)",
+                    label, ticket, reason,
+                )
+                cancelled_any = True
+            else:
+                logger.warning(
+                    "[QUANTUM_LONDON] Cancel failed for %s %d — may already "
+                    "be filled/expired", label, ticket,
+                )
+        if cancelled_any and self._alerter:
+            sym = (
+                (self._pending_long_signal and self._pending_long_signal.symbol)
+                or (self._pending_short_signal and self._pending_short_signal.symbol)
+                or "?"
+            )
+            self._alerter.send_message(
+                f"<b>[QUANTUM_LONDON] {sym} pending LIMITs cancelled</b>\n"
+                f"Reason: {reason}"
+            )
+        if self._session_stats is not None:
+            self._session_stats["executions_failed"] += 1
+        self._clear_pending_state()
+
+    def _clear_pending_state(self):
+        self._pending_long_ticket = None
+        self._pending_short_ticket = None
+        self._pending_long_signal = None
+        self._pending_short_signal = None
+        self._pending_lot_size = None
+        self._pending_placed_at = None
+
+    def _cleanup_stale_pendings_on_startup(self):
+        """Cancel any QL pending orders in the broker book at process start.
+
+        Required because pending state lives only in process memory — a
+        restart loses the tickets. Stale pendings could fill while the bot
+        is blind to them, creating a ghost position.
+        """
+        if not MT5_AVAILABLE:
+            return
+        sym = self._cfg["instrument"]
+        try:
+            orders = mt5.orders_get(symbol=sym) or []
+        except Exception as e:
+            logger.warning(
+                "[QUANTUM_LONDON] startup-cleanup: orders_get failed: %s", e,
+            )
+            return
+        cancelled = 0
+        for o in orders:
+            if o.magic != 20250305:
+                continue
+            if o.comment != self.PATTERN_TYPE:
+                continue
+            if self._order_manager.cancel_pending_order(o.ticket):
+                cancelled += 1
+                logger.info(
+                    "[QUANTUM_LONDON] startup-cleanup: cancelled stale pending "
+                    "ticket=%d type=%s @ %.5f", o.ticket, o.type, o.price_open,
+                )
+        if cancelled and self._alerter:
+            self._alerter.send_message(
+                f"<b>[QUANTUM_LONDON] {sym} startup cleanup</b>\n"
+                f"Cancelled {cancelled} stale pending order(s) from prior session."
+            )
+
+    def _reset_session_after_pending(self):
+        """Mirror the force-exit reset path used in _tick."""
+        if self._tracker.state == "TRADING":
+            self._emit_session_summary()
+        if self._tracker.state != "IDLE":
+            self._tracker.reset()
+            self._session_stats = None
 
     # ─── Trade-monitor helpers ───────────────────────────────────────
 
