@@ -27,6 +27,25 @@ class OrderManager:
         """
         self.connector = connector
 
+    def is_mt5_healthy(self) -> bool:
+        """Sanity-check that MT5 IPC is responsive.
+
+        Used as a gate before destructive recon actions — an empty
+        positions_get() on a transient IPC failure looks identical to
+        "no open positions" and would otherwise trigger wrongful closes.
+        """
+        if not MT5_AVAILABLE:
+            return False
+        info = mt5.account_info()
+        if info is None:
+            err = mt5.last_error()
+            logger.warning(
+                "[MT5_HEALTH] account_info() returned None, last_error=%s",
+                err,
+            )
+            return False
+        return True
+
     def place_market_order(
         self,
         symbol: str,

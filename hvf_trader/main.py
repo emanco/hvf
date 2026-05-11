@@ -869,7 +869,7 @@ class HVFTrader:
             logger.info("[NIGHT_TIDE] %s no signal", symbol)
             return
 
-        # Runtime spread filter (rollover protection)
+        # Runtime spread filter (rollover protection + TP economics)
         try:
             import MetaTrader5 as mt5
             tick = mt5.symbol_info_tick(symbol)
@@ -880,6 +880,17 @@ class HVFTrader:
                     logger.info(
                         "[NIGHT_TIDE] %s skip: spread %.1fp > max %.1fp",
                         symbol, spread_pips, cfg["max_spread_pips"],
+                    )
+                    return
+                # TP must beat the actual spread by at least the buffer —
+                # the static buffer in detect_signal only checks vs a constant,
+                # so an 8p TP + 7p spread otherwise passes (uneconomic fill).
+                tp_distance_pips = abs(signal.take_profit - signal.entry_price) / pip
+                buffer = cfg.get("spread_buffer_pips", 2.0)
+                if tp_distance_pips < spread_pips + buffer:
+                    logger.info(
+                        "[NIGHT_TIDE] %s skip: tp_distance %.1fp < spread %.1fp + buffer %.1fp",
+                        symbol, tp_distance_pips, spread_pips, buffer,
                     )
                     return
         except ImportError:

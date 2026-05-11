@@ -16,6 +16,7 @@ Notes:
 import json
 import logging
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from hvf_trader import config
@@ -61,6 +62,11 @@ class QuantumLondonScanner:
         self._cfg = cfg or config.QUANTUM_LONDON
         self._session_stats: dict | None = None
         self._last_telemetry_log_hour: int | None = None
+        # State checkpoint — pending tickets/signals/lot survive process restart
+        # so a deploy between capture (22:00 UTC) and force-exit (21:00 UTC
+        # next day) can re-adopt rather than cancel-and-forget.
+        instrument = self._cfg["instrument"]
+        self._state_file = config.LOG_DIR / f"ql_state_{instrument}.json"
 
     # ─── Lifecycle ───────────────────────────────────────────────────
 
@@ -250,6 +256,25 @@ class QuantumLondonScanner:
             session_open=session_open, trigger_pips=trigger_pips,
         )
 
+        # Directional bias filter — a symmetric BUY+SELL bracket guarantees
+        # the side that fills is the side the market is moving toward
+        # (adverse selection). When H1 trend is strongly one direction,
+        # skip the pending that fights it; only fade the side that
+        # mean-reverts with the trend.
+        place_long, place_short = True, True
+        if cfg.get("directional_filter", True):
+            bias = self._compute_h1_bias(sym)
+            if bias == "UP":
+                place_short = False  # don't fade up-trend with SHORT
+                logger.info(
+                    "[QUANTUM_LONDON] %s H1 bias=UP — skipping SELL_LIMIT", sym,
+                )
+            elif bias == "DOWN":
+                place_long = False
+                logger.info(
+                    "[QUANTUM_LONDON] %s H1 bias=DOWN — skipping BUY_LIMIT", sym,
+                )
+
         if self._session_stats is not None:
             self._session_stats["executions_attempted"] += 1
 
@@ -285,32 +310,38 @@ class QuantumLondonScanner:
             self._tracker.mark_traded()
             return
 
-        long_result = self._order_manager.place_pending_limit_order(
-            symbol=sym, direction="LONG", lot_size=lot_size,
-            limit_price=long_signal.entry_price,
-            stop_loss=long_signal.stop_loss,
-            take_profit=long_signal.take_profit,
-            comment=self.PATTERN_TYPE,
-        )
-        short_result = self._order_manager.place_pending_limit_order(
-            symbol=sym, direction="SHORT", lot_size=lot_size,
-            limit_price=short_signal.entry_price,
-            stop_loss=short_signal.stop_loss,
-            take_profit=short_signal.take_profit,
-            comment=self.PATTERN_TYPE,
-        )
+        long_result = None
+        short_result = None
+        if place_long:
+            long_result = self._order_manager.place_pending_limit_order(
+                symbol=sym, direction="LONG", lot_size=lot_size,
+                limit_price=long_signal.entry_price,
+                stop_loss=long_signal.stop_loss,
+                take_profit=long_signal.take_profit,
+                comment=self.PATTERN_TYPE,
+            )
+        if place_short:
+            short_result = self._order_manager.place_pending_limit_order(
+                symbol=sym, direction="SHORT", lot_size=lot_size,
+                limit_price=short_signal.entry_price,
+                stop_loss=short_signal.stop_loss,
+                take_profit=short_signal.take_profit,
+                comment=self.PATTERN_TYPE,
+            )
 
-        if not long_result or not short_result:
+        long_ok = (not place_long) or bool(long_result)
+        short_ok = (not place_short) or bool(short_result)
+        if not (long_ok and short_ok):
             # Asymmetric failure: clean up the successful side so we don't
             # run a one-sided book that the strategy didn't intend.
-            if long_result and not short_result:
+            if long_result and not short_ok:
                 self._order_manager.cancel_pending_order(long_result["order_ticket"])
                 logger.error(
                     "[QUANTUM_LONDON] SELL_LIMIT placement failed — "
                     "cancelled BUY_LIMIT %d to keep both-sided invariant",
                     long_result["order_ticket"],
                 )
-            elif short_result and not long_result:
+            elif short_result and not long_ok:
                 self._order_manager.cancel_pending_order(short_result["order_ticket"])
                 logger.error(
                     "[QUANTUM_LONDON] BUY_LIMIT placement failed — "
@@ -325,38 +356,102 @@ class QuantumLondonScanner:
             if self._alerter:
                 self._alerter.send_message(
                     f"<b>\u26a0\ufe0f [QUANTUM_LONDON] {sym} pendings NOT placed</b>\n"
-                    f"Placement failed (long_ok={bool(long_result)}, "
-                    f"short_ok={bool(short_result)}). Session skipped."
+                    f"Placement failed (long_ok={long_ok}, "
+                    f"short_ok={short_ok}). Session skipped."
                 )
             return
 
-        self._pending_long_ticket = long_result["order_ticket"]
-        self._pending_short_ticket = short_result["order_ticket"]
-        self._pending_long_signal = long_signal
-        self._pending_short_signal = short_signal
+        self._pending_long_ticket = (
+            long_result["order_ticket"] if long_result else None
+        )
+        self._pending_short_ticket = (
+            short_result["order_ticket"] if short_result else None
+        )
+        self._pending_long_signal = long_signal if place_long else None
+        self._pending_short_signal = short_signal if place_short else None
         self._pending_lot_size = lot_size
         self._pending_placed_at = datetime.now(timezone.utc)
         self._tracker.mark_traded()
+        self._save_state()
 
+        sides = []
+        if place_long:
+            sides.append(
+                f"BUY_LIMIT={self._pending_long_ticket} @ "
+                f"{long_signal.entry_price:.5f} "
+                f"(TP={long_signal.take_profit:.5f} SL={long_signal.stop_loss:.5f})"
+            )
+        if place_short:
+            sides.append(
+                f"SELL_LIMIT={self._pending_short_ticket} @ "
+                f"{short_signal.entry_price:.5f} "
+                f"(TP={short_signal.take_profit:.5f} SL={short_signal.stop_loss:.5f})"
+            )
         logger.info(
-            "[QUANTUM_LONDON] %s LIMITs placed: BUY_LIMIT=%d @ %.5f "
-            "(TP=%.5f SL=%.5f), SELL_LIMIT=%d @ %.5f (TP=%.5f SL=%.5f) lots=%s",
-            sym,
-            self._pending_long_ticket, long_signal.entry_price,
-            long_signal.take_profit, long_signal.stop_loss,
-            self._pending_short_ticket, short_signal.entry_price,
-            short_signal.take_profit, short_signal.stop_loss,
-            lot_size,
+            "[QUANTUM_LONDON] %s LIMITs placed: %s lots=%s",
+            sym, ", ".join(sides), lot_size,
         )
         if self._alerter:
-            self._alerter.send_message(
-                f"<b>[QUANTUM_LONDON] {sym} LIMITs placed</b>\n"
-                f"BUY_LIMIT @ {long_signal.entry_price:.5f}  "
-                f"(TP {long_signal.take_profit:.5f} / SL {long_signal.stop_loss:.5f})\n"
-                f"SELL_LIMIT @ {short_signal.entry_price:.5f}  "
-                f"(TP {short_signal.take_profit:.5f} / SL {short_signal.stop_loss:.5f})\n"
-                f"Lots: {lot_size}  Force-exit: {cfg['force_exit_utc_hour']:02d}:00 UTC"
+            msg_lines = [f"<b>[QUANTUM_LONDON] {sym} LIMITs placed</b>"]
+            if place_long:
+                msg_lines.append(
+                    f"BUY_LIMIT @ {long_signal.entry_price:.5f}  "
+                    f"(TP {long_signal.take_profit:.5f} / "
+                    f"SL {long_signal.stop_loss:.5f})"
+                )
+            if place_short:
+                msg_lines.append(
+                    f"SELL_LIMIT @ {short_signal.entry_price:.5f}  "
+                    f"(TP {short_signal.take_profit:.5f} / "
+                    f"SL {short_signal.stop_loss:.5f})"
+                )
+            msg_lines.append(
+                f"Lots: {lot_size}  "
+                f"Force-exit: {cfg['force_exit_utc_hour']:02d}:00 UTC"
             )
+            self._alerter.send_message("\n".join(msg_lines))
+
+    # ─── Directional filter ──────────────────────────────────────────
+
+    def _compute_h1_bias(self, sym: str) -> str:
+        """Return 'UP', 'DOWN', or 'NEUTRAL' based on H1 EMA200 alignment.
+
+        Used to skip the QL pending-order side that fights the prevailing
+        trend. A symmetric BUY+SELL bracket otherwise picks whichever side
+        the market is moving toward (adverse selection); the trend-aligned
+        pending then fills into a runner, blowing the SL.
+
+        Default thresholds are deliberately permissive — only filter when
+        the trend is clearly extended, leaving both sides active in
+        chop/range regimes where mean reversion works.
+        """
+        try:
+            df = fetch_and_prepare(sym, "H1", bars=220)
+        except Exception as e:
+            logger.warning(
+                "[QUANTUM_LONDON] %s bias fetch failed: %s — defaulting NEUTRAL",
+                sym, e,
+            )
+            return "NEUTRAL"
+        if df is None or df.empty or len(df) < 200:
+            return "NEUTRAL"
+        closes = df["close"]
+        ema200 = closes.ewm(span=200, adjust=False).mean().iloc[-1]
+        current = float(closes.iloc[-1])
+        pip = config.PIP_VALUES.get(sym, 0.0001)
+        diff_pips = (current - ema200) / pip
+        threshold = self._cfg.get("bias_threshold_pips", 50)
+        if diff_pips > threshold:
+            bias = "UP"
+        elif diff_pips < -threshold:
+            bias = "DOWN"
+        else:
+            bias = "NEUTRAL"
+        logger.info(
+            "[QUANTUM_LONDON] %s H1 bias=%s (price-EMA200 diff=%+.1fp, thr=%.1fp)",
+            sym, bias, diff_pips, threshold,
+        )
+        return bias
 
     # ─── Pending-order helpers ───────────────────────────────────────
 
@@ -560,17 +655,92 @@ class QuantumLondonScanner:
         self._pending_short_signal = None
         self._pending_lot_size = None
         self._pending_placed_at = None
+        # Best-effort: remove the checkpoint file. If it's missing, fine.
+        try:
+            self._state_file.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("[QUANTUM_LONDON] failed to clear state file: %s", e)
+
+    # ─── State persistence ───────────────────────────────────────────
+
+    def _save_state(self):
+        """Snapshot the pending-order state to disk so a deploy/restart
+        between capture (22:00 UTC) and force-exit (21:00 UTC next day)
+        can re-adopt the broker tickets rather than cancelling blindly."""
+        payload = {
+            "pending_long_ticket": self._pending_long_ticket,
+            "pending_short_ticket": self._pending_short_ticket,
+            "pending_long_signal": (
+                asdict(self._pending_long_signal)
+                if self._pending_long_signal else None
+            ),
+            "pending_short_signal": (
+                asdict(self._pending_short_signal)
+                if self._pending_short_signal else None
+            ),
+            "pending_lot_size": self._pending_lot_size,
+            "pending_placed_at": (
+                self._pending_placed_at.isoformat()
+                if self._pending_placed_at else None
+            ),
+            "open_trade_id": self._open_trade_id,
+            "instrument": self._cfg["instrument"],
+        }
+        try:
+            tmp = self._state_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self._state_file)
+        except Exception as e:
+            logger.warning("[QUANTUM_LONDON] failed to save state: %s", e)
+
+    def _load_state(self) -> dict | None:
+        """Read the checkpoint file, returning the parsed payload or None.
+
+        Validates the instrument matches this scanner (multi-instance setups
+        share LOG_DIR but write per-instrument files; defensive check)."""
+        if not self._state_file.exists():
+            return None
+        try:
+            payload = json.loads(self._state_file.read_text())
+        except Exception as e:
+            logger.warning(
+                "[QUANTUM_LONDON] failed to load state file %s: %s",
+                self._state_file, e,
+            )
+            return None
+        if payload.get("instrument") != self._cfg["instrument"]:
+            logger.warning(
+                "[QUANTUM_LONDON] state file instrument mismatch "
+                "(file=%s, cfg=%s), ignoring",
+                payload.get("instrument"), self._cfg["instrument"],
+            )
+            return None
+        return payload
 
     def _cleanup_stale_pendings_on_startup(self):
-        """Cancel any QL pending orders in the broker book at process start.
+        """Recover or clean up QL pending state across a restart.
 
-        Required because pending state lives only in process memory — a
-        restart loses the tickets. Stale pendings could fill while the bot
-        is blind to them, creating a ghost position.
+        Order of attempts:
+        1. Load state file. If a saved pending ticket now corresponds to an
+           open position, re-adopt as the active trade (broker filled while
+           we were down — don't orphan it).
+        2. If a saved ticket is still a pending order, re-adopt into the
+           in-memory pending state (resume normal monitoring).
+        3. Otherwise (no file, or saved tickets are gone): cancel any stale
+           QL pendings left in the broker book.
         """
         if not MT5_AVAILABLE:
             return
         sym = self._cfg["instrument"]
+        saved = self._load_state()
+
+        # Step 1+2 — try to re-adopt from saved state
+        if saved:
+            adopted = self._try_re_adopt_from_state(saved)
+            if adopted:
+                return  # in-memory state restored; skip blind-cancel
+
+        # Step 3 — fall through to cancel any orphans
         try:
             orders = mt5.orders_get(symbol=sym) or []
         except Exception as e:
@@ -595,6 +765,113 @@ class QuantumLondonScanner:
                 f"<b>[QUANTUM_LONDON] {sym} startup cleanup</b>\n"
                 f"Cancelled {cancelled} stale pending order(s) from prior session."
             )
+        # State file may exist from a prior run that was never cleared
+        # (e.g. crash). Now that we've reconciled the broker view, drop it.
+        try:
+            self._state_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _try_re_adopt_from_state(self, saved: dict) -> bool:
+        """Attempt to restore in-memory pending state from a saved checkpoint.
+
+        Returns True if re-adoption succeeded (a position or pending order
+        was rebound to in-memory state) — caller should skip the blind
+        cancel path.
+        """
+        sym = self._cfg["instrument"]
+        long_ticket = saved.get("pending_long_ticket")
+        short_ticket = saved.get("pending_short_ticket")
+        long_sig = saved.get("pending_long_signal")
+        short_sig = saved.get("pending_short_signal")
+        lot_size = saved.get("pending_lot_size")
+        placed_at_iso = saved.get("pending_placed_at")
+
+        # Restore signals from dicts back to QLSignal dataclasses
+        long_signal = QLSignal(**long_sig) if long_sig else None
+        short_signal = QLSignal(**short_sig) if short_sig else None
+        placed_at = (
+            datetime.fromisoformat(placed_at_iso) if placed_at_iso else None
+        )
+
+        # First — did a pending FILL into a position while we were down?
+        positions = mt5.positions_get(symbol=sym) or []
+        for pos in positions:
+            if pos.magic != 20250305 or pos.comment != self.PATTERN_TYPE:
+                continue
+            # A live QL position with no DB record means the fill happened
+            # post-restart. Re-adopt: log the trade open and transition to
+            # monitoring. The signal we use is whichever side matches.
+            if pos.type == mt5.ORDER_TYPE_BUY and long_signal:
+                filled = long_signal
+                survivor = short_ticket
+            elif pos.type == mt5.ORDER_TYPE_SELL and short_signal:
+                filled = short_signal
+                survivor = long_ticket
+            else:
+                logger.warning(
+                    "[QUANTUM_LONDON] startup re-adopt: found position "
+                    "ticket=%d but no matching saved signal. Skipping.",
+                    pos.ticket,
+                )
+                continue
+            # Cancel any survivor pending (it lost the race while we were down)
+            if survivor is not None:
+                self._order_manager.cancel_pending_order(survivor)
+            # Restore enough state for _on_pending_fill to log the trade
+            self._pending_long_signal = long_signal
+            self._pending_short_signal = short_signal
+            self._pending_lot_size = lot_size
+            self._pending_placed_at = placed_at
+            self._tracker.start_session(filled.session_open, str(filled.symbol))
+            self._tracker.mark_traded()
+            pip = config.PIP_VALUES.get(sym, 0.0001)
+            self._on_pending_fill(pos, filled, self._cfg, pip)
+            logger.warning(
+                "[QUANTUM_LONDON] startup re-adopt: position ticket=%d filled "
+                "while bot was down — adopted as active trade",
+                pos.ticket,
+            )
+            if self._alerter:
+                self._alerter.send_message(
+                    f"<b>[QUANTUM_LONDON] {sym} re-adopted live position</b>\n"
+                    f"Ticket {pos.ticket} filled while bot was down; "
+                    f"now monitoring."
+                )
+            return True
+
+        # No position fill — check if the pending orders themselves are still
+        # alive in the broker book. If so, just restore the in-memory state.
+        long_alive = (
+            long_ticket is not None
+            and bool(mt5.orders_get(ticket=long_ticket))
+        )
+        short_alive = (
+            short_ticket is not None
+            and bool(mt5.orders_get(ticket=short_ticket))
+        )
+        if long_alive or short_alive:
+            self._pending_long_ticket = long_ticket if long_alive else None
+            self._pending_short_ticket = short_ticket if short_alive else None
+            self._pending_long_signal = long_signal
+            self._pending_short_signal = short_signal
+            self._pending_lot_size = lot_size
+            self._pending_placed_at = placed_at
+            if long_signal:
+                self._tracker.start_session(
+                    long_signal.session_open, str(long_signal.symbol),
+                )
+                self._tracker.mark_traded()
+            logger.warning(
+                "[QUANTUM_LONDON] startup re-adopt: pending tickets recovered "
+                "L=%s S=%s (alive: L=%s S=%s)",
+                long_ticket, short_ticket, long_alive, short_alive,
+            )
+            self._save_state()  # may have changed if one side vanished
+            return True
+
+        # Neither position nor pending — saved state is stale, fall through
+        return False
 
     def _reset_session_after_pending(self):
         """Mirror the force-exit reset path used in _tick."""

@@ -146,43 +146,58 @@ def detect_kz_hunt_patterns(
             if np.isnan(atr) or atr <= 0:
                 continue
 
-            # Check for rejection candle at KZ HIGH (bearish rejection → SHORT)
-            if bar["high"] >= kz_levels.high - (0.3 * atr):
-                if _is_rejection_candle(bar, "BEARISH"):
-                    pattern = KZHuntPattern(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        direction="SHORT",
-                        kz_name=kz_name,
-                        kz_high=kz_levels.high,
-                        kz_low=kz_levels.low,
-                        kz_range=kz_range,
-                        rejection_bar_idx=i,
-                        rejection_price=bar["close"],
-                        detected_at=bar["time"] if "time" in df.columns else None,
-                    )
-                    pattern.compute_levels(float(atr))
-                    if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
-                        patterns.append(pattern)
+            # SHORT — bearish rejection at KZ HIGH.
+            # ICT/Hunt sweep semantics: bar must have actually TAKEN OUT the
+            # prior KZ high (true stop-run) AND closed back inside the range.
+            # An "approach + wick" without a sweep is a different (weaker)
+            # population and conflates non-sweep tests with real liquidity
+            # grabs, which is the prevailing hypothesis for the live PF
+            # collapse from 1.53 backtest to 0.79 live.
+            require_sweep = config.KZ_HUNT_REQUIRE_SWEEP
+            short_trigger = (
+                (bar["high"] > kz_levels.high and bar["close"] <= kz_levels.high)
+                if require_sweep
+                else (bar["high"] >= kz_levels.high - (0.3 * atr))
+            )
+            if short_trigger and _is_rejection_candle(bar, "BEARISH"):
+                pattern = KZHuntPattern(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    direction="SHORT",
+                    kz_name=kz_name,
+                    kz_high=kz_levels.high,
+                    kz_low=kz_levels.low,
+                    kz_range=kz_range,
+                    rejection_bar_idx=i,
+                    rejection_price=bar["close"],
+                    detected_at=bar["time"] if "time" in df.columns else None,
+                )
+                pattern.compute_levels(float(atr))
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
+                    patterns.append(pattern)
 
-            # Check for rejection candle at KZ LOW (bullish rejection → LONG)
-            if bar["low"] <= kz_levels.low + (0.3 * atr):
-                if _is_rejection_candle(bar, "BULLISH"):
-                    pattern = KZHuntPattern(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        direction="LONG",
-                        kz_name=kz_name,
-                        kz_high=kz_levels.high,
-                        kz_low=kz_levels.low,
-                        kz_range=kz_range,
-                        rejection_bar_idx=i,
-                        rejection_price=bar["close"],
-                        detected_at=bar["time"] if "time" in df.columns else None,
-                    )
-                    pattern.compute_levels(float(atr))
-                    if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
-                        patterns.append(pattern)
+            # LONG — bullish rejection at KZ LOW (mirror).
+            long_trigger = (
+                (bar["low"] < kz_levels.low and bar["close"] >= kz_levels.low)
+                if require_sweep
+                else (bar["low"] <= kz_levels.low + (0.3 * atr))
+            )
+            if long_trigger and _is_rejection_candle(bar, "BULLISH"):
+                pattern = KZHuntPattern(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    direction="LONG",
+                    kz_name=kz_name,
+                    kz_high=kz_levels.high,
+                    kz_low=kz_levels.low,
+                    kz_range=kz_range,
+                    rejection_bar_idx=i,
+                    rejection_price=bar["close"],
+                    detected_at=bar["time"] if "time" in df.columns else None,
+                )
+                pattern.compute_levels(float(atr))
+                if pattern.rrr >= config.MIN_RRR_BY_PATTERN.get("KZ_HUNT", config.HVF_MIN_RRR):
+                    patterns.append(pattern)
 
     # Filter stale (last_bar is an original df index, not positional)
     patterns = [

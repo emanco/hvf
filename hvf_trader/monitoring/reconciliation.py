@@ -3,6 +3,7 @@ Internal state vs MT5 positions reconciliation.
 Runs every 60s to detect discrepancies.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -43,6 +44,11 @@ class Reconciliator:
         # trade_id -> {'ticket', 'symbol', 'direction', 'opened_at',
         #              'enqueued_at', 'attempts', 'next_attempt_at'}
         self._pending_late_updates: dict[int, dict] = {}
+        # Checkpoint file so the queue survives restarts (otherwise trades
+        # closed via the SL-estimate fallback in the 30 min before a deploy
+        # keep their estimated PnL forever).
+        self._late_update_file = config.LOG_DIR / "late_update_queue.json"
+        self._load_late_updates()
 
     def reconcile(self) -> list[dict]:
         """
@@ -59,6 +65,17 @@ class Reconciliator:
         Returns:
             List of discrepancy dicts with keys: type, details, trade_id, ticket
         """
+        # MT5 sanity gate — a transient IPC failure makes positions_get()
+        # return an empty tuple, indistinguishable from "no open positions".
+        # Without this gate, three consecutive 60s transient failures would
+        # panic-close every open DB trade with estimated PnL.
+        if self.order_manager and not self.order_manager.is_mt5_healthy():
+            logger.warning(
+                "[RECONCILIATION] MT5 unhealthy (account_info unavailable), "
+                "skipping cycle"
+            )
+            return []
+
         # Service any pending late-update retries first. These re-fetch deal
         # history for trades previously closed via the SL-estimate fallback
         # and overwrite the estimate with real PnL when the broker catches up.
@@ -401,10 +418,71 @@ class Reconciliator:
             "attempts": 0,
             "next_attempt_at": now + timedelta(seconds=self.LATE_UPDATE_SCHEDULE[0]),
         }
+        self._save_late_updates()
         logger.info(
             f"[RECONCILIATION_LATE_UPDATE] enqueued trade {trade.id} "
             f"(ticket {ticket}, {trade.symbol}) for deal-history retry"
         )
+
+    def _save_late_updates(self):
+        """Persist the late-update queue so it survives process restart."""
+        payload = {}
+        for tid, entry in self._pending_late_updates.items():
+            payload[str(tid)] = {
+                "ticket": entry["ticket"],
+                "symbol": entry["symbol"],
+                "direction": entry["direction"],
+                "opened_at": (
+                    entry["opened_at"].isoformat()
+                    if hasattr(entry["opened_at"], "isoformat")
+                    else entry["opened_at"]
+                ),
+                "enqueued_at": entry["enqueued_at"].isoformat(),
+                "attempts": entry["attempts"],
+                "next_attempt_at": entry["next_attempt_at"].isoformat(),
+            }
+        try:
+            tmp = self._late_update_file.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.replace(self._late_update_file)
+        except Exception as e:
+            logger.warning("[RECONCILIATION] failed to save late-update queue: %s", e)
+
+    def _load_late_updates(self):
+        """Restore the queue from the checkpoint file. Idempotent on empty."""
+        if not self._late_update_file.exists():
+            return
+        try:
+            raw = json.loads(self._late_update_file.read_text())
+        except Exception as e:
+            logger.warning(
+                "[RECONCILIATION] failed to load late-update queue %s: %s",
+                self._late_update_file, e,
+            )
+            return
+        for tid_str, entry in raw.items():
+            try:
+                opened_at_val = entry.get("opened_at")
+                if isinstance(opened_at_val, str):
+                    opened_at_val = datetime.fromisoformat(opened_at_val)
+                self._pending_late_updates[int(tid_str)] = {
+                    "ticket": entry["ticket"],
+                    "symbol": entry["symbol"],
+                    "direction": entry["direction"],
+                    "opened_at": opened_at_val,
+                    "enqueued_at": datetime.fromisoformat(entry["enqueued_at"]),
+                    "attempts": entry["attempts"],
+                    "next_attempt_at": datetime.fromisoformat(entry["next_attempt_at"]),
+                }
+            except Exception as e:
+                logger.warning(
+                    "[RECONCILIATION] failed to load queue entry %s: %s", tid_str, e,
+                )
+        if self._pending_late_updates:
+            logger.info(
+                "[RECONCILIATION] loaded %d pending late-update(s) from checkpoint",
+                len(self._pending_late_updates),
+            )
 
     def _process_late_updates(self) -> None:
         """Re-fetch deal history for queued estimated-PnL trades and update if found.
@@ -475,3 +553,5 @@ class Reconciliator:
                 )
         for tid in resolved:
             self._pending_late_updates.pop(tid, None)
+        if resolved:
+            self._save_late_updates()
