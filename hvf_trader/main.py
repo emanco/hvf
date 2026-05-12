@@ -127,6 +127,11 @@ class HVFTrader:
         # ─── State (init early so refs can be passed) ──────────────────
         self._armed_patterns = []  # In-memory list of armed patterns (dicts with pattern_type)
         self._armed_lock = threading.Lock()  # Protects _armed_patterns from concurrent access
+        # KZ_HUNT broker-limit pending orders.
+        # ticket -> {pattern_record, pattern, lot_size, placed_at, sl, tp}
+        # Each entry is a pending LIMIT order in the broker book at the
+        # rejection close. Polled per scanner cycle for fills/expiries.
+        self._kz_pending_orders: dict[int, dict] = {}
 
         # ─── Telegram Commands ─────────────────────────────────────────
         self.telegram_commands = TelegramCommandHandler(
@@ -286,6 +291,15 @@ class HVFTrader:
             logger.info(f"Expired {dedup_count} duplicate armed patterns on startup")
         logger.info(f"Loaded {len(self._armed_patterns)} armed patterns from DB")
 
+        # Cancel any orphan KZ_HUNT pending LIMIT orders left in the broker
+        # book from a prior process — in-memory _kz_pending_orders state is
+        # gone after restart, so we can't track them. Better to cancel than
+        # let them fill into ghost positions.
+        try:
+            self._cleanup_orphan_kz_limit_orders_on_startup()
+        except Exception as e:
+            logger.warning(f"[KZ_HUNT_LIMIT] startup cleanup failed: {e}")
+
         # Start threads
         self._running = True
 
@@ -384,6 +398,15 @@ class HVFTrader:
                     self._scan_night_tide(now)
                 except Exception as e:
                     logger.error(f"Night Tide scan failed: {e}", exc_info=True)
+
+            # KZ_HUNT broker-limit fills/expiries (runs alongside the
+            # legacy armed-pattern poll for backward compat).
+            try:
+                self._check_kz_hunt_pending_fills()
+            except Exception as e:
+                logger.error(
+                    f"KZ_HUNT pending-fill check failed: {e}", exc_info=True,
+                )
 
             # Entry monitor: check armed patterns for confirmation
             try:
@@ -1312,17 +1335,41 @@ class HVFTrader:
 
         pattern_record = self.trade_logger.log_pattern(pattern_data)
 
-        # Store armed pattern with its type and the original pattern object
-        with self._armed_lock:
-            self._armed_patterns.append({
-                "record": _detach_record(pattern_record),
-                "pattern_type": pattern_type,
-                "pattern_obj": pattern,
-            })
+        # KZ_HUNT broker-limit path: instead of armed-list confirmation,
+        # immediately place a pending LIMIT in the broker book at the
+        # rejection close. Eliminates the adverse slippage drift that
+        # market-on-touch fills incur (~4-5p observed live on trade 174).
+        kz_limit_armed = False
+        if (
+            pattern_type == "KZ_HUNT"
+            and getattr(config, "KZ_HUNT_USE_BROKER_LIMITS", False)
+            and getattr(config, "KZ_HUNT_SKIP_CONFIRMATION", False)
+        ):
+            try:
+                kz_limit_armed = self._place_kz_hunt_limit_order(
+                    _detach_record(pattern_record), pattern,
+                )
+            except Exception as e:
+                logger.error(
+                    f"[KZ_HUNT_LIMIT] _place_kz_hunt_limit_order failed for "
+                    f"{sig.symbol} {sig.direction}: {e}",
+                    exc_info=True,
+                )
+
+        # Fallback to legacy armed-list (touch-based confirmation) when the
+        # limit path is off or its placement failed.
+        if not kz_limit_armed:
+            with self._armed_lock:
+                self._armed_patterns.append({
+                    "record": _detach_record(pattern_record),
+                    "pattern_type": pattern_type,
+                    "pattern_obj": pattern,
+                })
 
         logger.info(
             f"[{pattern_type}] Armed: {sig.symbol} {sig.direction} "
             f"score={sig.score:.0f} rrr={pattern.rrr:.1f}"
+            f"{' [BROKER_LIMIT]' if kz_limit_armed else ''}"
         )
         self.trade_logger.log_event(
             "PATTERN_ARMED",
@@ -1439,6 +1486,289 @@ class HVFTrader:
             for armed in triggered:
                 if armed in self._armed_patterns:
                     self._armed_patterns.remove(armed)
+
+    # ─── KZ_HUNT broker-limit orders ─────────────────────────────────
+
+    def _place_kz_hunt_limit_order(self, pattern_record, pattern) -> bool:
+        """Place a pending LIMIT order at the rejection close.
+
+        Returns True if the limit path consumed the pattern (either placed
+        the order OR rejected via risk gates). Returns False only when the
+        limit path was not invoked (e.g. pattern_obj is None) so the caller
+        can fall through to the legacy armed_patterns confirmation flow.
+        """
+        symbol = pattern_record.symbol
+        direction = pattern_record.direction
+        pattern_type = "KZ_HUNT"
+
+        if pattern is None:
+            logger.warning(
+                f"[KZ_HUNT_LIMIT] pattern_obj is None for {symbol} {direction}, "
+                f"falling back to legacy armed-pattern path"
+            )
+            return False  # let legacy path handle DB-loaded patterns
+
+        account = self.connector.get_account_info()
+        if not account:
+            return True  # connector failure — don't double-arm via legacy
+        symbol_info = self.connector.get_symbol_info(symbol)
+        if not symbol_info:
+            return True
+
+        # Same SL widening as legacy market entry — broker-side spread comp.
+        spread_price = symbol_info["spread"] * symbol_info["point"]
+        pip_size = config.PIP_VALUES.get(symbol, 0.0001)
+        limit_price = pattern.entry_price  # the rejection bar's close
+        if direction == "LONG":
+            adjusted_sl = pattern.stop_loss - spread_price
+        else:
+            adjusted_sl = pattern.stop_loss + spread_price
+
+        # Min-stop distance check using LIMIT price (not live ask/bid),
+        # since the broker will fill at limit-or-better.
+        min_stop_pips = config.MIN_STOP_PIPS_BY_PATTERN.get(pattern_type, 5)
+        min_stop_dist = max(spread_price * 5, pip_size * min_stop_pips)
+        if direction == "LONG" and (limit_price - adjusted_sl) < min_stop_dist:
+            logger.info(
+                f"[KZ_HUNT_LIMIT] Skipping {symbol} {direction}: SL too close "
+                f"(limit={limit_price:.5f}, sl={adjusted_sl:.5f}, "
+                f"min_dist={min_stop_dist:.5f})"
+            )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
+            return True
+        if direction == "SHORT" and (adjusted_sl - limit_price) < min_stop_dist:
+            logger.info(
+                f"[KZ_HUNT_LIMIT] Skipping {symbol} {direction}: SL too close "
+                f"(limit={limit_price:.5f}, sl={adjusted_sl:.5f}, "
+                f"min_dist={min_stop_dist:.5f})"
+            )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
+            return True
+
+        # Convert pip value to account currency
+        fx_rate = self._get_quote_to_account_rate(symbol)
+        news_blocking = has_upcoming_news(symbol)
+        open_trades = self.trade_logger.get_open_trades()
+
+        # Pre-trade risk gates (margin, RRR, news, circuit breaker, etc.)
+        result = self.risk_manager.pre_trade_check(
+            symbol=symbol,
+            direction=direction,
+            entry_price=limit_price,
+            stop_loss=adjusted_sl,
+            target_2=pattern.target_2,
+            equity=account["equity"],
+            free_margin=account["free_margin"],
+            margin_used=account.get("margin", 0),
+            current_spread=spread_price,
+            open_trades=open_trades,
+            news_within_window=news_blocking,
+            pattern_type=pattern_type,
+            exchange_rate_to_account=fx_rate,
+        )
+        if not result.passed:
+            logger.info(
+                f"[KZ_HUNT_LIMIT] Pre-trade check failed for {symbol}: "
+                f"{result.check_name} — {result.reason}"
+            )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
+            self.trade_logger.log_event(
+                "TRADE_REJECTED",
+                symbol=symbol,
+                pattern_id=pattern_record.id,
+                details=f"Check={result.check_name}: {result.reason}",
+            )
+            return True  # consumed: pattern is REJECTED, no legacy fallback
+
+        # Single broker-side TP (flat-TP exit policy). Compute TP from the
+        # limit price + FLAT_TP_PIPS_BY_PATTERN like the legacy path does.
+        flat_tp_pips = config.FLAT_TP_PIPS_BY_PATTERN.get(pattern_type, 12.0)
+        if direction == "LONG":
+            take_profit = limit_price + flat_tp_pips * pip_size
+        else:
+            take_profit = limit_price - flat_tp_pips * pip_size
+
+        order_result = self.order_manager.place_pending_limit_order(
+            symbol=symbol,
+            direction=direction,
+            lot_size=result.lot_size,
+            limit_price=limit_price,
+            stop_loss=adjusted_sl,
+            take_profit=take_profit,
+            comment=pattern_type,
+        )
+        if order_result is None:
+            logger.error(
+                f"[KZ_HUNT_LIMIT] Order placement failed for {symbol} {direction}"
+            )
+            self.trade_logger.update_pattern_status(pattern_record.id, "REJECTED")
+            return True  # consumed: pattern is REJECTED, no legacy fallback
+
+        ticket = order_result["order_ticket"]
+        self._kz_pending_orders[ticket] = {
+            "pattern_record": pattern_record,
+            "pattern": pattern,
+            "lot_size": result.lot_size,
+            "placed_at": pd.Timestamp.now(tz="UTC"),
+            "limit_price": limit_price,
+            "stop_loss": adjusted_sl,
+            "take_profit": take_profit,
+            "symbol": symbol,
+            "direction": direction,
+        }
+        logger.info(
+            f"[KZ_HUNT_LIMIT] Placed {direction}_LIMIT @ {limit_price:.5f} "
+            f"on {symbol}: ticket={ticket} lots={result.lot_size} "
+            f"SL={adjusted_sl:.5f} TP={take_profit:.5f}"
+        )
+        self.alerter.send_message(
+            f"<b>[KZ_HUNT_LIMIT] {direction} {symbol} pending</b>\n"
+            f"Limit: {limit_price:.5f}  SL: {adjusted_sl:.5f}  "
+            f"TP: {take_profit:.5f}\nLots: {result.lot_size}"
+        )
+        return True
+
+    def _check_kz_hunt_pending_fills(self) -> None:
+        """Poll broker for fills/expiries on KZ_HUNT pending LIMIT orders."""
+        if not self._kz_pending_orders:
+            return
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        now = pd.Timestamp.now(tz="UTC")
+        # Per-pattern freshness expiry, M30 bars × 30 minutes
+        freshness_bars = config.PATTERN_FRESHNESS_BARS.get(
+            "KZ_HUNT", config.PATTERN_EXPIRY_BARS,
+        )
+        # M30 timeframe assumed (live config: PRIMARY_TIMEFRAME = "M30")
+        expiry_delta = pd.Timedelta(minutes=30 * freshness_bars)
+        resolved: list[int] = []
+
+        for ticket, entry in list(self._kz_pending_orders.items()):
+            pattern_record = entry["pattern_record"]
+            symbol = entry["symbol"]
+            direction = entry["direction"]
+
+            # 1. Has the limit FILLED into a position?
+            positions = mt5.positions_get(ticket=ticket) or ()
+            if positions:
+                pos = positions[0]
+                self._on_kz_limit_filled(ticket, pos, entry)
+                resolved.append(ticket)
+                continue
+
+            # 2. Is the pending order still in the broker book?
+            orders = mt5.orders_get(ticket=ticket) or ()
+            if not orders:
+                # Order vanished without filling — likely cancelled by broker
+                # or expired GTC. Mark pattern REJECTED.
+                logger.warning(
+                    f"[KZ_HUNT_LIMIT] Ticket {ticket} ({symbol} {direction}) "
+                    f"vanished from broker without filling. Marking pattern REJECTED."
+                )
+                self.trade_logger.update_pattern_status(
+                    pattern_record.id, "REJECTED",
+                )
+                resolved.append(ticket)
+                continue
+
+            # 3. Freshness expiry — cancel the limit if it's been waiting
+            # too long without filling.
+            age = now - entry["placed_at"]
+            if age > expiry_delta:
+                logger.info(
+                    f"[KZ_HUNT_LIMIT] Ticket {ticket} ({symbol} {direction}) "
+                    f"exceeded freshness ({age.total_seconds()/60:.0f} min "
+                    f"> {expiry_delta.total_seconds()/60:.0f} min). Cancelling."
+                )
+                if self.order_manager.cancel_pending_order(ticket):
+                    self.trade_logger.update_pattern_status(
+                        pattern_record.id, "EXPIRED",
+                    )
+                resolved.append(ticket)
+
+        for ticket in resolved:
+            self._kz_pending_orders.pop(ticket, None)
+
+    def _on_kz_limit_filled(self, ticket: int, position, entry: dict) -> None:
+        """Limit filled into a position — log the trade and hand off to monitor."""
+        pattern_record = entry["pattern_record"]
+        pattern = entry["pattern"]
+        symbol = entry["symbol"]
+        direction = entry["direction"]
+        fill_price = position.price_open
+
+        slippage = fill_price - entry["limit_price"]
+        pip_size = config.PIP_VALUES.get(symbol, 0.0001)
+        slip_pips = slippage / pip_size
+
+        trade_data = {
+            "pattern_id": pattern_record.id,
+            "symbol": symbol,
+            "direction": direction,
+            "pattern_type": "KZ_HUNT",
+            "mt5_ticket": position.ticket,
+            "entry_price": fill_price,
+            "stop_loss": entry["stop_loss"],
+            "target_1": pattern.target_1,
+            "target_2": pattern.target_2,
+            "lot_size": entry["lot_size"],
+            "opened_at": datetime.now(timezone.utc),
+            "status": "OPEN",
+            "intended_entry": entry["limit_price"],
+            "intended_sl": entry["stop_loss"],
+            "slippage": slippage,
+        }
+        trade_record = self.trade_logger.log_trade_open(trade_data)
+        self.trade_logger.update_pattern_status(pattern_record.id, "TRIGGERED")
+
+        logger.info(
+            f"[KZ_HUNT_LIMIT] FILLED {direction} {symbol}: pos={position.ticket} "
+            f"@ {fill_price:.5f} (limit={entry['limit_price']:.5f} "
+            f"slip={slip_pips:+.2f}p) trade={trade_record.id}"
+        )
+        self.alerter.send_message(
+            f"<b>[KZ_HUNT_LIMIT] {direction} {symbol} FILLED</b>\n"
+            f"Entry: {fill_price:.5f} (limit {entry['limit_price']:.5f}, "
+            f"slip {slip_pips:+.2f}p)\n"
+            f"SL: {entry['stop_loss']:.5f}  TP: {entry['take_profit']:.5f}\n"
+            f"Lots: {entry['lot_size']}"
+        )
+
+    def _cleanup_orphan_kz_limit_orders_on_startup(self) -> None:
+        """Cancel any KZ_HUNT pending LIMIT orders left in the broker book.
+
+        In-memory state (_kz_pending_orders) is empty after a restart; any
+        pending KZ_HUNT orders from a prior process are orphans we can no
+        longer track. Cancel them so they don't fill into ghost positions.
+        """
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        try:
+            orders = mt5.orders_get() or ()
+        except Exception as e:
+            logger.warning(f"[KZ_HUNT_LIMIT] startup cleanup orders_get failed: {e}")
+            return
+        cancelled = 0
+        for o in orders:
+            if o.magic != 20250305:
+                continue
+            if o.comment != "KZ_HUNT":
+                continue
+            if self.order_manager.cancel_pending_order(o.ticket):
+                cancelled += 1
+                logger.info(
+                    f"[KZ_HUNT_LIMIT] startup cleanup: cancelled stale pending "
+                    f"ticket={o.ticket} {o.symbol} @ {o.price_open:.5f}"
+                )
+        if cancelled:
+            logger.info(
+                f"[KZ_HUNT_LIMIT] startup cleanup: cancelled {cancelled} "
+                f"orphan KZ_HUNT pending order(s)"
+            )
 
     def _get_quote_to_account_rate(self, symbol: str) -> float:
         """Get exchange rate to convert pip value from quote currency to account currency.

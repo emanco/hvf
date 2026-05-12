@@ -106,6 +106,13 @@ KZ_HUNT_REQUIRE_SWEEP = False
 # trades on EURGBP+NZDUSD (vs hardened-legacy PF 0.55 with confirmation wait).
 KZ_HUNT_SKIP_CONFIRMATION = True
 
+# When True (and SKIP_CONFIRMATION=True), KZ_HUNT places a real broker
+# pending LIMIT at the rejection close instead of a market order on touch.
+# This eliminates adverse slippage drift (live market-on-touch fills ~4-5p
+# worse than the limit, which erodes the modeled edge). Mirrors the way
+# Quantum London handles its mean-reversion entries.
+KZ_HUNT_USE_BROKER_LIMITS = True
+
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
 # forex downside momentum is sharper and more persistent than upside.
 ALLOWED_DIRECTIONS_BY_PATTERN = {
