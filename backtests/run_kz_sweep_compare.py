@@ -1,6 +1,8 @@
-"""Compare KZ_HUNT walk-forward under the rebuilt harness:
-  A) Legacy:  flat 1.5p spread, 0p slippage, no sweep requirement, 0d embargo
-  B) Hardened: realistic spread (per symbol+hour), random slippage, sweep=True, 14d embargo
+"""Compare KZ_HUNT walk-forward under the rebuilt harness, three arms:
+  A) Legacy:    flat 1.5p spread, 0p slippage, no sweep, no skip, 0d embargo
+  B) Hardened:  realistic spread, random slippage, sweep=True, 14d embargo
+  C) Skip-conf: realistic spread, random slippage, sweep=False but
+                SKIP_CONFIRMATION=True (LIMIT at rejection close), 14d embargo
 
 Runs on the local M30 CSV — no MT5 connection required.
 """
@@ -64,7 +66,15 @@ def run_arm(label: str, df: pd.DataFrame, symbol: str, **kwargs):
 
 
 def main():
-    symbols = ["EURGBP", "NZDUSD", "EURJPY", "EURAUD"]
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument(
+        "--pairs", nargs="+",
+        default=["EURGBP", "NZDUSD", "EURJPY", "EURAUD"],
+        help="Which pairs to run (default: all 4)",
+    )
+    args = p.parse_args()
+    symbols = args.pairs
     data_dir = REPO_ROOT / "backtests" / "data"
 
     # Run both arms per symbol and collate per-symbol summary
@@ -80,10 +90,12 @@ def main():
             sym, len(df), df["time"].iloc[0], df["time"].iloc[-1],
         )
 
-        # Temporarily flip the sweep flag for arm A.
+        # Temporarily flip flags per arm.
         sweep_original = config.KZ_HUNT_REQUIRE_SWEEP
+        skip_original = config.KZ_HUNT_SKIP_CONFIRMATION
         try:
             config.KZ_HUNT_REQUIRE_SWEEP = False
+            config.KZ_HUNT_SKIP_CONFIRMATION = False
             res_legacy = run_arm(
                 f"{sym} — LEGACY (flat 1.5p, no slip, no sweep, no embargo)",
                 df, sym,
@@ -93,6 +105,7 @@ def main():
                 slippage_pips=0.0,
             )
             config.KZ_HUNT_REQUIRE_SWEEP = True
+            config.KZ_HUNT_SKIP_CONFIRMATION = False
             res_hardened = run_arm(
                 f"{sym} — HARDENED (real spread, random slip, sweep, 14d embargo)",
                 df, sym,
@@ -100,26 +113,36 @@ def main():
                 use_realistic_spread=True,
                 slippage_random=True,
             )
+            config.KZ_HUNT_REQUIRE_SWEEP = False
+            config.KZ_HUNT_SKIP_CONFIRMATION = True
+            res_skip = run_arm(
+                f"{sym} — SKIP-CONF (real spread, random slip, LIMIT at rejection close, 14d embargo)",
+                df, sym,
+                embargo_days=14,
+                use_realistic_spread=True,
+                slippage_random=True,
+            )
         finally:
             config.KZ_HUNT_REQUIRE_SWEEP = sweep_original
+            config.KZ_HUNT_SKIP_CONFIRMATION = skip_original
 
-        summary.append((sym, res_legacy, res_hardened))
+        summary.append((sym, res_legacy, res_hardened, res_skip))
 
     # Print the summary table
     print()
     print("=" * 90)
     print("KZ_HUNT WALK-FORWARD COMPARISON — LEGACY vs HARDENED HARNESS")
     print("=" * 90)
-    print(f"{'sym':<8} {'arm':<10} {'N':>4} {'WR':>6} {'PF':>6} {'pips':>9} {'DD':>6} {'win-wins':>10}")
-    print("-" * 90)
-    for sym, leg, har in summary:
-        for label, r in (("legacy", leg), ("hardened", har)):
+    print(f"{'sym':<8} {'arm':<11} {'N':>4} {'WR':>6} {'PF':>6} {'pips':>9} {'DD':>6} {'win-wins':>10}")
+    print("-" * 95)
+    for sym, leg, har, skp in summary:
+        for label, r in (("legacy", leg), ("hardened", har), ("skip-conf", skp)):
             n = r.total_oos_trades
             if n == 0:
-                print(f"{sym:<8} {label:<10} {'0':>4}")
+                print(f"{sym:<8} {label:<11} {'0':>4}")
                 continue
             print(
-                f"{sym:<8} {label:<10} "
+                f"{sym:<8} {label:<11} "
                 f"{n:>4} {r.oos_win_rate:>5.1f}% {r.oos_profit_factor:>6.2f} "
                 f"{r.oos_total_pnl_pips:>+9.1f} {r.oos_max_drawdown_pct:>5.1f}% "
                 f"{r.oos_positive_windows}/{len(r.windows):>5}"
@@ -128,7 +151,7 @@ def main():
     # Combined portfolio numbers (concat trades across pairs per arm)
     print()
     print("Portfolio aggregate:")
-    for label, idx in (("legacy", 1), ("hardened", 2)):
+    for label, idx in (("legacy", 1), ("hardened", 2), ("skip-conf", 3)):
         all_trades = []
         all_windows = 0
         positive_windows = 0

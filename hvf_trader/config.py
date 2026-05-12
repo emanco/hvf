@@ -97,6 +97,15 @@ SCORE_THRESHOLD_BY_PATTERN = {
 # Flipped back 2026-05-11.
 KZ_HUNT_REQUIRE_SWEEP = False
 
+# KZ_HUNT entry timing. The legacy confirmation requires the next bar to
+# CLOSE past the rejection candle's close before firing — by then the move
+# is 60-90 min old. With SKIP_CONFIRMATION=True, both the backtest and the
+# live bot instead fire when price revisits the rejection bar's close:
+# SHORT confirms when bar.high >= entry_price, LONG when bar.low <= entry_price.
+# 2026-05-12: enabled live after walk-forward showed PF 1.19 across 334
+# trades on EURGBP+NZDUSD (vs hardened-legacy PF 0.55 with confirmation wait).
+KZ_HUNT_SKIP_CONFIRMATION = True
+
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
 # forex downside momentum is sharper and more persistent than upside.
 ALLOWED_DIRECTIONS_BY_PATTERN = {

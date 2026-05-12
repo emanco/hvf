@@ -1375,7 +1375,26 @@ class HVFTrader:
             # Entry confirmation: KZ_HUNT is the only armed-then-confirmed strategy
             confirmed = False
             if pattern_type == "KZ_HUNT":
-                if pattern_obj is not None:
+                skip_conf = getattr(config, "KZ_HUNT_SKIP_CONFIRMATION", False)
+                if skip_conf:
+                    # LIMIT-at-rejection-close model: fire as soon as price
+                    # revisits the rejection bar's close. Mirrors the backtest
+                    # engine's instant_fire path. SHORT needs high to reach
+                    # the limit from below; LONG needs low to reach it from
+                    # above. Far less lag than the legacy close-past wait.
+                    entry_p = (
+                        pattern_obj.entry_price if pattern_obj is not None
+                        else record.entry_price
+                    )
+                    if entry_p:
+                        bar_high = latest_bar.get("high")
+                        bar_low = latest_bar.get("low")
+                        if bar_high is not None and bar_low is not None:
+                            if direction == "LONG":
+                                confirmed = float(bar_low) <= entry_p
+                            else:
+                                confirmed = float(bar_high) >= entry_p
+                elif pattern_obj is not None:
                     confirmed = check_kz_hunt_entry_confirmation(pattern_obj, latest_bar)
                 else:
                     # DB-loaded pattern (no pattern_obj after restart):
