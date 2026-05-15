@@ -236,6 +236,14 @@ class QuantumLondonScanner:
         This is the canonical FF Simple Mean Reversion setup (thread #743125)
         and guarantees TP/SL geometry by anchoring to the exact limit price.
         """
+        # Hygiene: cancel any leftover QL pendings for this symbol from
+        # previous sessions before placing new ones. Without this, orders
+        # from prior captures (which got overwritten in _pending_*_ticket
+        # state at the next capture) can sit dormant for days and fire
+        # against the current daily-open geometry — exactly what bled
+        # the account 2026-05-14 (3 EURGBP SELL_LIMITs from different
+        # capture days all filled within 30 minutes).
+        self._cancel_leftover_pendings_for_symbol(sym)
         trigger_pips = cfg["trigger_pips"]
         target_pips = cfg["target_pips"]
         stop_pips = cfg["stop_pips"]
@@ -716,6 +724,47 @@ class QuantumLondonScanner:
             )
             return None
         return payload
+
+    def _cancel_leftover_pendings_for_symbol(self, sym: str) -> int:
+        """Cancel any QL pending orders for this symbol still in the broker book.
+
+        Called at capture time so a fresh session starts with a clean book.
+        Without this, pendings from previous days can fire against current
+        geometry — the QL bot only tracks ONE session's tickets in memory
+        and overwrites them on each capture, orphaning previous days' orders.
+
+        Returns the number of orders cancelled.
+        """
+        if not MT5_AVAILABLE:
+            return 0
+        try:
+            orders = mt5.orders_get(symbol=sym) or []
+        except Exception as e:
+            logger.warning(
+                "[QUANTUM_LONDON] %s leftover-cleanup orders_get failed: %s",
+                sym, e,
+            )
+            return 0
+        cancelled = 0
+        for o in orders:
+            if o.magic != 20250305:
+                continue
+            if o.comment != self.PATTERN_TYPE:
+                continue
+            if self._order_manager.cancel_pending_order(o.ticket):
+                cancelled += 1
+                logger.warning(
+                    "[QUANTUM_LONDON] %s leftover-cleanup: cancelled stale "
+                    "pending ticket=%d type=%s @ %.5f from prior session",
+                    sym, o.ticket, o.type, o.price_open,
+                )
+        if cancelled and self._alerter:
+            self._alerter.send_message(
+                f"<b>[QUANTUM_LONDON] {sym} pre-capture cleanup</b>\n"
+                f"Cancelled {cancelled} leftover pending order(s) from "
+                f"prior session(s) before fresh placement."
+            )
+        return cancelled
 
     def _cleanup_stale_pendings_on_startup(self):
         """Recover or clean up QL pending state across a restart.
