@@ -43,7 +43,7 @@ INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # 2026-05-05: 4-pair su
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["KZ_HUNT"]  # 2026-05-15 PM: re-enabled at 0.5% risk after recognising the May 15 disable was based on single-seed harness runs (PF 0.40-0.59) without quantifying variance. Live PF 0.79 over N=120 is consistent with a small unproven edge. Reduced risk halves the cost of being wrong while collecting cleaner data under the broker-LIMIT + geometric-validity + skip-conf paths shipped this week.
+ENABLED_PATTERNS = []  # 2026-05-15 PM: KZ_HUNT disabled (definitively this time). Variance + geometric-validity ablation on EURGBP M30 (5 seeds + 1 ablation pair, run_kz_variance_and_geometric.py) measured: with geometric-validity ON (real strategy) mean PF = 0.44 ± 0.02 across 5 seeds; with it OFF (May 12 buggy behaviour) PF = 1.23. The 18 invalid-geometry trades per window contributed +646p (+36p each avg) — they were all fake quick wins from SL-on-profit-side mechanics. Honest expected PF is 0.44 with tight CI, not the 1.19 we acted on. Decision is no longer a coin flip.
 PRIMARY_TIMEFRAME = "M30"   # KZ_HUNT switched 2026-04-28 — backtest +57% pips vs H1 over 3yrs
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -120,6 +120,14 @@ KZ_HUNT_USE_BROKER_LIMITS = True
 # gate. Backtest sweep needed before raising this — wider stops reduce
 # RRR and change the SL-hit / TP-hit profile.
 KZ_HUNT_SL_ATR_BUFFER = 0.5
+
+# Geometric-validity guard. When True, KZHuntPattern.compute_levels short-
+# circuits with rrr=0 when the computed SL ends up on the profit side of
+# entry (rejection close past kz_extreme + atr_buffer — i.e. the rejection
+# didn't return inside the KZ range). Default True. Disable only for
+# investigative scripts that measure the historical contribution of the
+# invalid-pattern population.
+KZ_HUNT_ENFORCE_VALID_GEOMETRY = True
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
 # forex downside momentum is sharper and more persistent than upside.

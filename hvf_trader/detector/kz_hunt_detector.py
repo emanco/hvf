@@ -96,15 +96,17 @@ class KZHuntPattern:
         # or the bullish rejection from below), the computed SL ends up in
         # profit direction — invalid pattern. Set rrr=0 so the detector's
         # MIN_RRR filter drops it cleanly.
-        invalid_short = (
-            self.direction == "SHORT" and self.stop_loss <= self.entry_price
-        )
-        invalid_long = (
-            self.direction == "LONG" and self.stop_loss >= self.entry_price
-        )
-        if invalid_short or invalid_long:
-            self.rrr = 0.0
-            return
+        # Toggleable via KZ_HUNT_ENFORCE_VALID_GEOMETRY for A/B studies.
+        if getattr(config, "KZ_HUNT_ENFORCE_VALID_GEOMETRY", True):
+            invalid_short = (
+                self.direction == "SHORT" and self.stop_loss <= self.entry_price
+            )
+            invalid_long = (
+                self.direction == "LONG" and self.stop_loss >= self.entry_price
+            )
+            if invalid_short or invalid_long:
+                self.rrr = 0.0
+                return
 
         risk = abs(self.entry_price - self.stop_loss)
         reward = abs(self.target_2 - self.entry_price)
