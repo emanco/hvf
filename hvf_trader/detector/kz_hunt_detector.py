@@ -90,6 +90,22 @@ class KZHuntPattern:
                 self.target_1 = self.entry_price - tp_distance
                 self.target_2 = self.target_1
 
+        # Geometric validity: SL must be on the loss side of entry. If the
+        # rejection candle closes past `kz_extreme + atr_buffer` (i.e., the
+        # bearish rejection didn't return inside the KZ range from above,
+        # or the bullish rejection from below), the computed SL ends up in
+        # profit direction — invalid pattern. Set rrr=0 so the detector's
+        # MIN_RRR filter drops it cleanly.
+        invalid_short = (
+            self.direction == "SHORT" and self.stop_loss <= self.entry_price
+        )
+        invalid_long = (
+            self.direction == "LONG" and self.stop_loss >= self.entry_price
+        )
+        if invalid_short or invalid_long:
+            self.rrr = 0.0
+            return
+
         risk = abs(self.entry_price - self.stop_loss)
         reward = abs(self.target_2 - self.entry_price)
         self.rrr = reward / risk if risk > 0 else 0.0
