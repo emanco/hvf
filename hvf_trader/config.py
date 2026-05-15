@@ -43,7 +43,7 @@ INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # 2026-05-05: 4-pair su
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = []  # 2026-05-15: KZ_HUNT disabled — hardened buffer sweep (0.5/1.0/1.5/2.0 ATR) showed PF 0.40-0.59 on EURGBP+NZDUSD, none profitable. Prior PF 1.19 inflated by geometric-invalid trades (fake quick wins from SL-below-entry). HVF + TREND_RIDE previously disabled for similar reasons. QL + NT scanners run on separate paths and remain active.
+ENABLED_PATTERNS = ["KZ_HUNT"]  # 2026-05-15 PM: re-enabled at 0.5% risk after recognising the May 15 disable was based on single-seed harness runs (PF 0.40-0.59) without quantifying variance. Live PF 0.79 over N=120 is consistent with a small unproven edge. Reduced risk halves the cost of being wrong while collecting cleaner data under the broker-LIMIT + geometric-validity + skip-conf paths shipped this week.
 PRIMARY_TIMEFRAME = "M30"   # KZ_HUNT switched 2026-04-28 — backtest +57% pips vs H1 over 3yrs
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -165,7 +165,7 @@ RISK_PCT = 1.0                    # 1% per trade (conservative until validated)
 RISK_PCT_BY_PATTERN = {
     "HVF": 1.0,
     "VIPER": 2.0,          # V2 aggressive — PF 1.50+ SHORT-only, push while account is small
-    "KZ_HUNT": 1.0,        # Reduced from 2% — expert panel: 2% on correlated pairs too aggressive for micro account
+    "KZ_HUNT": 0.5,        # 2026-05-15: 1.0 -> 0.5 — halves bleed cost while collecting data under new broker-LIMIT + geometric-fix + skip-conf paths. Re-evaluate after 30-50 fills.
     "LONDON_SWEEP": 0.5,
     "WEDGE": 0.5,          # Conservative — unproven pattern type
 }
