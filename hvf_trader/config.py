@@ -43,7 +43,7 @@ INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # 2026-05-05: 4-pair su
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
-ENABLED_PATTERNS = ["KZ_HUNT"]  # HVF disabled — PF=0.06 live. TREND_RIDE removed — PF=0.86 backtest. WEDGE available for backtesting only.
+ENABLED_PATTERNS = []  # 2026-05-15: KZ_HUNT disabled — hardened buffer sweep (0.5/1.0/1.5/2.0 ATR) showed PF 0.40-0.59 on EURGBP+NZDUSD, none profitable. Prior PF 1.19 inflated by geometric-invalid trades (fake quick wins from SL-below-entry). HVF + TREND_RIDE previously disabled for similar reasons. QL + NT scanners run on separate paths and remain active.
 PRIMARY_TIMEFRAME = "M30"   # KZ_HUNT switched 2026-04-28 — backtest +57% pips vs H1 over 3yrs
 CONFIRMATION_TIMEFRAME = "H4"
 
@@ -112,6 +112,14 @@ KZ_HUNT_SKIP_CONFIRMATION = True
 # worse than the limit, which erodes the modeled edge). Mirrors the way
 # Quantum London handles its mean-reversion entries.
 KZ_HUNT_USE_BROKER_LIMITS = True
+
+# SL buffer beyond the KZ extreme as a multiple of current ATR.
+# Default 0.5 was set when KZ_HUNT ran on H1; on M30 (since 2026-04-28)
+# ATR is roughly half H1's, so 0.5*ATR produces stops that often fall
+# below MIN_STOP_PIPS_BY_PATTERN["KZ_HUNT"]=8 → patterns rejected at the
+# gate. Backtest sweep needed before raising this — wider stops reduce
+# RRR and change the SL-hit / TP-hit profile.
+KZ_HUNT_SL_ATR_BUFFER = 0.5
 
 # Per-pattern allowed directions (None = both). SHORT-only Viper is a structural edge:
 # forex downside momentum is sharper and more persistent than upside.

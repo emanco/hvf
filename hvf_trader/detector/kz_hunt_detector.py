@@ -63,7 +63,7 @@ class KZHuntPattern:
         with SPLIT_ORDER_BY_PATTERN=False for pure broker-side TP/SL exit.
         """
         from hvf_trader import config
-        atr_buffer = 0.5 * current_atr
+        atr_buffer = getattr(config, "KZ_HUNT_SL_ATR_BUFFER", 0.5) * current_atr
 
         if self.direction == "LONG":
             # Reversal from KZ low — long entry
