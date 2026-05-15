@@ -521,6 +521,34 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["NIGHT_TIDE"] = 0
 MIN_STOP_PIPS_BY_PATTERN["NIGHT_TIDE"] = 8
 PATTERN_FRESHNESS_BARS["NIGHT_TIDE"] = 1
 
+# ─── Asian Session Breakout Strategy ─────────────────────────────────────────
+# Backtest 2025-08 to 2026-04 (8mo, hardened harness on M5):
+#   GBPJPY+EURJPY 2-pair: PF 1.40, 119 trades, WR 56%, MaxDD 5.4%, +15.5% USD.
+#   GBPUSD dropped — PF 0.58 standalone, dragged portfolio.
+# Limited backtest sample (8mo only on M5 data). Deploy at 0.5% risk for
+# research-mode data collection; re-evaluate after 30-50 live fills.
+ASIAN_SESSION_BREAKOUT = {
+    "enabled": True,
+    "instruments": ["GBPJPY", "EURJPY"],
+    "asian_start_hour": 0,            # UTC
+    "asian_end_hour": 7,              # UTC — capture range at this hour
+    "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
+    "eod_force_close_hour": 20,       # UTC — force-close any open position
+    "min_range_pct_adr": 0.4,         # range >= 0.4 * ADR(14)
+    "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
+    "min_buffer_pips": 2.0,
+    "buffer_pct_range": 0.10,         # buffer = max(min_buffer, 10% of range)
+    "tp_range_mult": 1.0,             # TP at 1× range from entry
+    "risk_pct": 0.5,                  # conservative for first deploy
+    "skip_weekdays": [4, 5, 6],       # Fri/Sat/Sun (Fri = weekend gap risk)
+}
+
+RISK_PCT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = ASIAN_SESSION_BREAKOUT["risk_pct"]
+MIN_RRR_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 0.8   # natural R:R near 1.0; allow some slip
+MIN_STOP_PIPS_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 5
+TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 0
+PATTERN_FRESHNESS_BARS["ASIAN_SESSION_BREAKOUT"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,

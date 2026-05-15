@@ -566,6 +566,78 @@ class OrderManager:
         )
         return {"order_ticket": result.order, "limit_price": limit_price}
 
+    def place_pending_stop_order(
+        self,
+        symbol: str,
+        direction: str,
+        lot_size: float,
+        stop_price: float,
+        stop_loss: float,
+        take_profit: float = 0.0,
+        comment: str = "AUTO",
+        magic: int = 20250305,
+    ) -> Optional[dict]:
+        """Place a pending STOP order for breakout entries.
+
+        BUY_STOP fills when bid reaches stop_price (placed ABOVE current price).
+        SELL_STOP fills when ask reaches stop_price (placed BELOW current price).
+
+        Returns dict with 'order_ticket' on success, None on failure.
+        """
+        if not MT5_AVAILABLE:
+            logger.error("MT5 not available")
+            return None
+
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            logger.error(f"Symbol {symbol} not found")
+            return None
+        if not symbol_info.visible:
+            if not mt5.symbol_select(symbol, True):
+                logger.error(f"Failed to select symbol {symbol}")
+                return None
+
+        order_type = (
+            mt5.ORDER_TYPE_BUY_STOP if direction == "LONG"
+            else mt5.ORDER_TYPE_SELL_STOP
+        )
+        digits = symbol_info.digits
+        stop_price = round(stop_price, digits)
+        stop_loss = round(stop_loss, digits)
+        take_profit = round(take_profit, digits) if take_profit > 0 else 0.0
+
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": lot_size,
+            "type": order_type,
+            "price": stop_price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "magic": magic,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_RETURN,
+        }
+        result = mt5.order_send(request)
+        if result is None:
+            err = mt5.last_error()
+            logger.error(f"Pending stop send failed: {err}")
+            return None
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.error(
+                f"Pending stop failed: retcode={result.retcode}, "
+                f"comment={result.comment}"
+            )
+            return None
+
+        logger.info(
+            f"Pending stop placed: ticket={result.order}, "
+            f"{direction}_STOP {lot_size} {symbol} @ {stop_price}, "
+            f"SL={stop_loss}, TP={take_profit}"
+        )
+        return {"order_ticket": result.order, "stop_price": stop_price}
+
     def cancel_pending_order(self, ticket: int) -> bool:
         """Cancel a still-pending limit/stop order by ticket."""
         if not MT5_AVAILABLE:

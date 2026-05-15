@@ -201,6 +201,13 @@ class HVFTrader:
         self._night_tide_enabled = config.NIGHT_TIDE.get("enabled", False)
         self._night_tide_last_bar: dict[str, pd.Timestamp] = {}
 
+        # ─── Asian Session Breakout (capture-and-bracket at London open) ─
+        self._asb_enabled = config.ASIAN_SESSION_BREAKOUT.get("enabled", False)
+        # Per-symbol per-day state:
+        # {symbol: {"date": date, "long_ticket": int|None, "short_ticket": int|None,
+        #          "range": AsianRange, "open_trade_id": int|None, "placed_at": ts}}
+        self._asb_state: dict[str, dict] = {}
+
         # ─── State ───────────────────────────────────────────────────────
         self._running = False
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
@@ -398,6 +405,13 @@ class HVFTrader:
                     self._scan_night_tide(now)
                 except Exception as e:
                     logger.error(f"Night Tide scan failed: {e}", exc_info=True)
+
+            # Asian Session Breakout: capture-and-bracket at London open
+            if getattr(self, "_asb_enabled", False):
+                try:
+                    self._scan_asb(now)
+                except Exception as e:
+                    logger.error(f"ASB scan failed: {e}", exc_info=True)
 
             # KZ_HUNT broker-limit fills/expiries (runs alongside the
             # legacy armed-pattern poll for backward compat).
@@ -1769,6 +1783,289 @@ class HVFTrader:
                 f"[KZ_HUNT_LIMIT] startup cleanup: cancelled {cancelled} "
                 f"orphan KZ_HUNT pending order(s)"
             )
+
+    # ─── Asian Session Breakout ──────────────────────────────────────
+
+    def _scan_asb(self, now):
+        """Top-level ASB scanner — called every main loop iteration.
+
+        Responsibilities (per UTC hour):
+          - capture hour (default 07:00): compute Asian range, place
+            bracketed BUY_STOP + SELL_STOP for each ASB pair
+          - 07-11 UTC: poll for pending fill or both-vanished states
+          - active_end (default 11:00): cancel any unfilled pendings
+          - 20:00 UTC: force-close any still-open ASB positions
+        """
+        cfg = config.ASIAN_SESSION_BREAKOUT
+        today = now.date()
+        weekday = now.weekday()
+
+        # Skip weekend/Friday-late
+        if weekday in cfg.get("skip_weekdays", [5, 6]):
+            return
+
+        # Force-close at EOD across all instruments
+        if now.hour >= cfg["eod_force_close_hour"]:
+            self._asb_force_close_eod()
+
+        # Cancel unfilled pendings at active_end
+        if cfg["asian_end_hour"] <= now.hour < cfg["eod_force_close_hour"]:
+            self._asb_poll_pendings(now)
+        if now.hour >= cfg["active_end_hour"]:
+            self._asb_cancel_unfilled(now)
+
+        # Capture at start of the active window (one-shot per day per pair)
+        if now.hour == cfg["asian_end_hour"]:
+            for sym in cfg["instruments"]:
+                st = self._asb_state.get(sym, {})
+                if st.get("date") == today:
+                    continue  # already processed today
+                try:
+                    self._asb_capture_and_place(sym, today, now)
+                except Exception as e:
+                    logger.error(
+                        f"[ASB] {sym} capture-and-place failed: {e}",
+                        exc_info=True,
+                    )
+
+    def _asb_capture_and_place(self, sym, today, now):
+        """Compute Asian range and place BUY_STOP+SELL_STOP for this symbol."""
+        from hvf_trader.detector.asb_detector import compute_asian_range
+        from hvf_trader.risk.position_sizer import calculate_lot_size
+
+        cfg = config.ASIAN_SESSION_BREAKOUT
+        df = fetch_and_prepare(sym, "H1", bars=720)  # 30 days of H1 covers ADR(14)
+        if df is None or df.empty:
+            logger.warning(f"[ASB] {sym}: no H1 data, skipping")
+            self._asb_state[sym] = {"date": today, "skipped": "no_data"}
+            return
+
+        ar = compute_asian_range(sym, df, now)
+        if ar is None:
+            logger.info(
+                f"[ASB] {sym}: range filter rejected (no setup today)"
+            )
+            self._asb_state[sym] = {"date": today, "skipped": "filter"}
+            return
+
+        # Sizing
+        account = self.connector.get_account_info()
+        if not account:
+            self._asb_state[sym] = {"date": today, "skipped": "no_account"}
+            return
+        pip = 0.01 if "JPY" in sym else 0.0001
+        # SL distance from entry: same as range (because SL = opposite buffer)
+        sl_pips = ar.range_pips + 2 * ar.buffer_pips
+        stop_distance_price = sl_pips * pip
+        fx_rate = self._get_quote_to_account_rate(sym)
+        lot_size = calculate_lot_size(
+            equity=account["equity"], risk_pct=cfg["risk_pct"],
+            stop_distance_price=stop_distance_price, symbol=sym,
+            account_currency=account.get("currency", "USD"),
+        )
+        if lot_size <= 0:
+            logger.warning(f"[ASB] {sym}: lot_size 0, skipping")
+            self._asb_state[sym] = {"date": today, "skipped": "lot_size"}
+            return
+
+        long_res = self.order_manager.place_pending_stop_order(
+            symbol=sym, direction="LONG", lot_size=lot_size,
+            stop_price=ar.long_stop,
+            stop_loss=ar.long_sl, take_profit=ar.long_tp,
+            comment="ASB",
+        )
+        short_res = self.order_manager.place_pending_stop_order(
+            symbol=sym, direction="SHORT", lot_size=lot_size,
+            stop_price=ar.short_stop,
+            stop_loss=ar.short_sl, take_profit=ar.short_tp,
+            comment="ASB",
+        )
+
+        if long_res is None or short_res is None:
+            # Clean up the side that succeeded
+            if long_res:
+                self.order_manager.cancel_pending_order(long_res["order_ticket"])
+            if short_res:
+                self.order_manager.cancel_pending_order(short_res["order_ticket"])
+            logger.error(
+                f"[ASB] {sym}: bracket placement failed "
+                f"(long_ok={bool(long_res)}, short_ok={bool(short_res)})"
+            )
+            self._asb_state[sym] = {"date": today, "skipped": "placement_fail"}
+            return
+
+        self._asb_state[sym] = {
+            "date": today,
+            "long_ticket": long_res["order_ticket"],
+            "short_ticket": short_res["order_ticket"],
+            "range_high": ar.high, "range_low": ar.low,
+            "range_pips": ar.range_pips, "adr_pips": ar.adr_pips,
+            "long_stop": ar.long_stop, "short_stop": ar.short_stop,
+            "long_sl": ar.long_sl, "long_tp": ar.long_tp,
+            "short_sl": ar.short_sl, "short_tp": ar.short_tp,
+            "lot_size": lot_size,
+            "placed_at": now,
+            "open_trade_id": None,
+        }
+        logger.info(
+            f"[ASB] {sym} bracketed: range={ar.range_pips:.1f}p "
+            f"(ADR={ar.adr_pips:.1f}p)  "
+            f"BUY_STOP={ar.long_stop:.5f} ({long_res['order_ticket']})  "
+            f"SELL_STOP={ar.short_stop:.5f} ({short_res['order_ticket']})  "
+            f"lot={lot_size}"
+        )
+        if self.alerter:
+            self.alerter.send_message(
+                f"<b>[ASB] {sym} bracket placed</b>\n"
+                f"Asian range: {ar.low:.5f}-{ar.high:.5f} ({ar.range_pips:.1f}p, "
+                f"ADR {ar.adr_pips:.1f}p)\n"
+                f"BUY_STOP {ar.long_stop:.5f}  TP {ar.long_tp:.5f}  "
+                f"SL {ar.long_sl:.5f}\n"
+                f"SELL_STOP {ar.short_stop:.5f}  TP {ar.short_tp:.5f}  "
+                f"SL {ar.short_sl:.5f}\n"
+                f"Lot: {lot_size}"
+            )
+
+    def _asb_poll_pendings(self, now):
+        """Detect which side filled into a position; cancel the survivor."""
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        cfg = config.ASIAN_SESSION_BREAKOUT
+        for sym in cfg["instruments"]:
+            st = self._asb_state.get(sym, {})
+            if "long_ticket" not in st or st.get("open_trade_id") is not None:
+                continue
+            long_t = st.get("long_ticket")
+            short_t = st.get("short_ticket")
+
+            # Look for a filled position with our magic + comment for this symbol
+            positions = mt5.positions_get(symbol=sym) or []
+            our_pos = None
+            for p in positions:
+                if p.magic != 20250305 or p.comment != "ASB":
+                    continue
+                our_pos = p
+                break
+            if our_pos is None:
+                continue
+
+            # Identify side, cancel survivor
+            if our_pos.type == mt5.ORDER_TYPE_BUY:
+                survivor = short_t
+                direction = "LONG"
+            else:
+                survivor = long_t
+                direction = "SHORT"
+            if survivor:
+                self.order_manager.cancel_pending_order(survivor)
+            self._asb_on_fill(sym, our_pos, direction, st)
+
+    def _asb_on_fill(self, sym, position, direction, state):
+        """Log the trade record when a pending stop fills into a position."""
+        trade_data = {
+            "pattern_id": None,
+            "symbol": sym,
+            "direction": direction,
+            "pattern_type": "ASIAN_SESSION_BREAKOUT",
+            "mt5_ticket": position.ticket,
+            "entry_price": position.price_open,
+            "stop_loss": position.sl,
+            "target_1": position.tp,
+            "target_2": position.tp,
+            "lot_size": state["lot_size"],
+            "opened_at": datetime.now(timezone.utc),
+            "status": "OPEN",
+            "intended_entry": (
+                state["long_stop"] if direction == "LONG" else state["short_stop"]
+            ),
+            "intended_sl": (
+                state["long_sl"] if direction == "LONG" else state["short_sl"]
+            ),
+            "slippage": (
+                position.price_open
+                - (state["long_stop"] if direction == "LONG" else state["short_stop"])
+            ),
+        }
+        trade = self.trade_logger.log_trade_open(trade_data)
+        state["open_trade_id"] = trade.id
+        logger.info(
+            f"[ASB] {sym} {direction} FILLED: ticket={position.ticket} "
+            f"@ {position.price_open:.5f} (intended {trade_data['intended_entry']:.5f}, "
+            f"slip {trade_data['slippage']*10000:+.2f}p)  trade={trade.id}"
+        )
+        if self.alerter:
+            pip = 0.01 if "JPY" in sym else 0.0001
+            slip_p = trade_data["slippage"] / pip
+            self.alerter.send_message(
+                f"<b>[ASB] {direction} {sym} FILLED</b>\n"
+                f"Entry: {position.price_open:.5f} "
+                f"(slip {slip_p:+.2f}p)\n"
+                f"SL: {position.sl:.5f}  TP: {position.tp:.5f}\n"
+                f"Lot: {state['lot_size']}"
+            )
+
+    def _asb_cancel_unfilled(self, now):
+        """Cancel pendings still alive past active_end_hour."""
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        for sym, st in list(self._asb_state.items()):
+            if st.get("open_trade_id") is not None:
+                continue
+            for key in ("long_ticket", "short_ticket"):
+                tic = st.get(key)
+                if not tic:
+                    continue
+                # If still in orders, cancel
+                if mt5.orders_get(ticket=tic):
+                    self.order_manager.cancel_pending_order(tic)
+                    logger.info(
+                        f"[ASB] {sym} cancel unfilled {key}={tic} past "
+                        f"{config.ASIAN_SESSION_BREAKOUT['active_end_hour']:02d}:00 UTC"
+                    )
+                st[key] = None
+
+    def _asb_force_close_eod(self):
+        """Force-close any still-open ASB positions at EOD."""
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        for sym, st in self._asb_state.items():
+            tid = st.get("open_trade_id")
+            if not tid:
+                continue
+            # Find the position
+            from hvf_trader.database.models import TradeRecord
+            trade = self.trade_logger._session.get(TradeRecord, tid)
+            if not trade or trade.status == "CLOSED":
+                st["open_trade_id"] = None
+                continue
+            positions = mt5.positions_get(ticket=trade.mt5_ticket) or []
+            if not positions:
+                continue  # already closed broker-side
+            pos = positions[0]
+            res = self.order_manager.close_position(
+                pos.ticket, sym, trade.direction, "ASB_TIME_STOP"
+            )
+            if res:
+                pip = 0.01 if "JPY" in sym else 0.0001
+                if trade.direction == "LONG":
+                    pnl_pips = (res["close_price"] - trade.entry_price) / pip
+                else:
+                    pnl_pips = (trade.entry_price - res["close_price"]) / pip
+                self.trade_logger.log_trade_close(
+                    trade.id, res["close_price"],
+                    res.get("profit", 0.0), pnl_pips, "TIME_STOP",
+                )
+                st["open_trade_id"] = None
+                logger.info(
+                    f"[ASB] {sym} EOD time-stop: closed @ "
+                    f"{res['close_price']:.5f}, pnl {pnl_pips:+.1f}p"
+                )
 
     def _get_quote_to_account_rate(self, symbol: str) -> float:
         """Get exchange rate to convert pip value from quote currency to account currency.
