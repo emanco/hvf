@@ -1,16 +1,21 @@
-"""Sample live bid/ask spreads on cross pairs during quiet hours.
+"""Sample live bid/ask spreads on all bot pairs, 24/7, for 14 days.
 
-Runs on the VPS alongside the bot. Polls mt5.symbol_info_tick() every 10s
-for each pair during 20:00-02:00 UTC (covers the BB+RSI strategy's 21:00-01:00
-window with margin). Writes CSV with timestamp, bid, ask, spread_pips.
+Feeds the hardened-harness spread_model.py with real broker spread data
+instead of my hard-coded estimates. After ~2 weeks of samples, aggregate
+to per-(symbol, hour_utc) median + p95 and save to backtests/data/spreads.csv.
+
+Runs on the VPS alongside the bot. Independent MT5 connection.
 
 Usage on VPS (PowerShell):
-    Start-Process C:\hvf_trader\venv\Scripts\python.exe \
-        -ArgumentList "C:\hvf_trader\spread_sampler_vps.py" \
-        -RedirectStandardOutput C:\hvf_trader\logs\spread_sampler.log \
-        -NoNewWindow
+    Start-Process C:\\hvf_trader\\venv\\Scripts\\python.exe `
+        -ArgumentList "C:\\hvf_trader\\spread_sampler_vps.py" `
+        -RedirectStandardOutput C:\\hvf_trader\\logs\\spread_sampler.log `
+        -RedirectStandardError C:\\hvf_trader\\logs\\spread_sampler_err.log `
+        -WindowStyle Hidden
 
-Stops automatically after end_time (configurable via env var SAMPLER_HOURS).
+Configurable via env vars:
+    SAMPLER_HOURS  (default 336 = 14 days)
+    SAMPLE_INTERVAL_SEC (default 60)
 """
 import csv
 import os
@@ -22,21 +27,26 @@ from dotenv import load_dotenv
 load_dotenv(r"C:/hvf_trader/.env")
 import MetaTrader5 as mt5
 
-PAIRS = ["AUDNZD", "NZDCAD", "AUDCAD", "EURCHF"]
-SAMPLE_INTERVAL_SEC = 10
-WINDOW_START_HOUR = 20  # UTC — start a bit before 21:00 to catch ramp
-WINDOW_END_HOUR = 2     # UTC — end a bit after 01:00
+# All KZ_HUNT pairs + QL + NIGHT_TIDE + LB pairs the bot might trade
+PAIRS = [
+    # KZ_HUNT (recently disabled but back on)
+    "NZDUSD", "EURGBP", "EURJPY", "EURAUD",
+    # Quantum London
+    "EURCHF",
+    # Night Tide cross pairs
+    "AUDNZD", "AUDCAD", "NZDCAD",
+    # London Breakout
+    "GBPUSD",
+]
+SAMPLE_INTERVAL_SEC = int(os.environ.get("SAMPLE_INTERVAL_SEC", "60"))
 
-# Total runtime — quit after this many hours of wall clock to avoid running forever
-HOURS = float(os.environ.get("SAMPLER_HOURS", "12"))
-
-PIP = 0.0001  # all 4 pairs are 4-digit
+# Default 14 days = 336 hours; the spread_model.py code reads the result.
+HOURS = float(os.environ.get("SAMPLER_HOURS", "336"))
 
 
-def in_window(hour):
-    if WINDOW_START_HOUR <= WINDOW_END_HOUR:
-        return WINDOW_START_HOUR <= hour < WINDOW_END_HOUR
-    return hour >= WINDOW_START_HOUR or hour < WINDOW_END_HOUR
+def _pip_size(symbol: str) -> float:
+    """Pip size for a symbol — JPY pairs are 3-digit, rest are 5-digit."""
+    return 0.01 if "JPY" in symbol else 0.0001
 
 
 def main():
@@ -49,66 +59,74 @@ def main():
         print(f"MT5 login failed: {mt5.last_error()}", flush=True)
         sys.exit(1)
 
-    # Subscribe each pair to make sure ticks flow
     for sym in PAIRS:
         if not mt5.symbol_select(sym, True):
             print(f"WARN: symbol_select failed for {sym}", flush=True)
         else:
             print(f"  subscribed {sym}", flush=True)
 
-    out_path = r"C:/hvf_trader/_export_m15/spread_samples.csv"
+    out_path = r"C:/hvf_trader/logs/spread_samples.csv"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     deadline = datetime.now(timezone.utc) + timedelta(hours=HOURS)
-    print(f"Sampler started. Running until {deadline.isoformat()}", flush=True)
-    print(f"Window: {WINDOW_START_HOUR:02d}:00-{WINDOW_END_HOUR:02d}:00 UTC", flush=True)
-    print(f"Output: {out_path}", flush=True)
+    print(
+        f"Spread sampler started "
+        f"@ {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        flush=True,
+    )
+    print(f"  Pairs: {PAIRS}", flush=True)
+    print(f"  Interval: {SAMPLE_INTERVAL_SEC}s", flush=True)
+    print(f"  Deadline: {deadline.isoformat()}", flush=True)
+    print(f"  Output: {out_path}", flush=True)
 
-    # Open CSV in append mode so re-runs don't overwrite
     write_header = not os.path.exists(out_path)
     with open(out_path, "a", newline="") as f:
         w = csv.writer(f)
         if write_header:
-            w.writerow(["timestamp_utc", "symbol", "bid", "ask", "spread_pips"])
+            w.writerow(
+                ["timestamp_utc", "symbol", "bid", "ask", "spread_pips"]
+            )
 
         last_status_hour = None
         samples_this_hour = 0
         while True:
             now = datetime.now(timezone.utc)
             if now >= deadline:
-                print(f"Reached deadline at {now.isoformat()}, exiting.", flush=True)
+                print(
+                    f"Deadline reached @ {now.isoformat()}, exiting.",
+                    flush=True,
+                )
                 break
 
-            if in_window(now.hour):
-                for sym in PAIRS:
-                    tick = mt5.symbol_info_tick(sym)
-                    if tick is None:
-                        continue
-                    spread_pips = (tick.ask - tick.bid) / PIP
-                    w.writerow([
-                        now.isoformat(timespec="seconds"),
-                        sym,
-                        f"{tick.bid:.5f}",
-                        f"{tick.ask:.5f}",
-                        f"{spread_pips:.2f}",
-                    ])
-                f.flush()
-                samples_this_hour += 1
+            for sym in PAIRS:
+                tick = mt5.symbol_info_tick(sym)
+                if tick is None:
+                    continue
+                pip = _pip_size(sym)
+                spread_pips = (tick.ask - tick.bid) / pip
+                w.writerow([
+                    now.isoformat(timespec="seconds"),
+                    sym,
+                    f"{tick.bid:.5f}",
+                    f"{tick.ask:.5f}",
+                    f"{spread_pips:.2f}",
+                ])
+            f.flush()
+            samples_this_hour += 1
 
-                # Hourly status print
-                if last_status_hour != now.hour:
-                    print(f"{now.strftime('%H:%M UTC')}  in window  samples this hour: {samples_this_hour}", flush=True)
-                    last_status_hour = now.hour
-                    samples_this_hour = 0
-            else:
-                if last_status_hour != now.hour:
-                    print(f"{now.strftime('%H:%M UTC')}  outside window — sleeping", flush=True)
-                    last_status_hour = now.hour
+            if last_status_hour != now.hour:
+                print(
+                    f"{now.strftime('%Y-%m-%d %H:%M UTC')} status: "
+                    f"prev hour samples per pair={samples_this_hour}",
+                    flush=True,
+                )
+                last_status_hour = now.hour
+                samples_this_hour = 0
 
             time.sleep(SAMPLE_INTERVAL_SEC)
 
     mt5.shutdown()
-    print("Sampler done.", flush=True)
+    print("Spread sampler done.", flush=True)
 
 
 if __name__ == "__main__":
