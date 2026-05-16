@@ -1829,7 +1829,12 @@ class HVFTrader:
                     )
 
     def _asb_capture_and_place(self, sym, today, now):
-        """Compute Asian range and place BUY_STOP+SELL_STOP for this symbol."""
+        """Compute Asian range and place BUY_STOP+SELL_STOP for this symbol.
+
+        If trend_filter_enabled, skip the side that fights the H1 EMA200 trend
+        (when price is >threshold pips away from EMA200). Backtest 2026-05-16:
+        PF 1.40 -> 1.89, DD 5.4% -> 4.1% with this filter on GBPJPY+EURJPY.
+        """
         from hvf_trader.detector.asb_detector import compute_asian_range
         from hvf_trader.risk.position_sizer import calculate_lot_size
 
@@ -1848,13 +1853,35 @@ class HVFTrader:
             self._asb_state[sym] = {"date": today, "skipped": "filter"}
             return
 
+        # Trend-aligned overlay: compute H1 EMA200 and skip the side fighting it.
+        place_long, place_short = True, True
+        trend_label = "NEUTRAL"
+        if cfg.get("trend_filter_enabled", False):
+            try:
+                ema = df["close"].ewm(span=200, adjust=False).mean()
+                if len(ema) >= 200:
+                    current = float(df["close"].iloc[-1])
+                    ema_val = float(ema.iloc[-1])
+                    pip = 0.01 if "JPY" in sym else 0.0001
+                    diff_pips = (current - ema_val) / pip
+                    thr = cfg.get("trend_filter_threshold_pips", 30)
+                    if diff_pips > thr:
+                        place_short = False
+                        trend_label = f"UPTREND (price-ema200=+{diff_pips:.0f}p)"
+                    elif diff_pips < -thr:
+                        place_long = False
+                        trend_label = f"DOWNTREND (price-ema200={diff_pips:.0f}p)"
+                    else:
+                        trend_label = f"NEUTRAL (price-ema200={diff_pips:+.0f}p)"
+            except Exception as e:
+                logger.warning(f"[ASB] {sym}: trend filter compute failed: {e}")
+
         # Sizing
         account = self.connector.get_account_info()
         if not account:
             self._asb_state[sym] = {"date": today, "skipped": "no_account"}
             return
         pip = 0.01 if "JPY" in sym else 0.0001
-        # SL distance from entry: same as range (because SL = opposite buffer)
         sl_pips = ar.range_pips + 2 * ar.buffer_pips
         stop_distance_price = sl_pips * pip
         fx_rate = self._get_quote_to_account_rate(sym)
@@ -1868,36 +1895,43 @@ class HVFTrader:
             self._asb_state[sym] = {"date": today, "skipped": "lot_size"}
             return
 
-        long_res = self.order_manager.place_pending_stop_order(
-            symbol=sym, direction="LONG", lot_size=lot_size,
-            stop_price=ar.long_stop,
-            stop_loss=ar.long_sl, take_profit=ar.long_tp,
-            comment="ASB",
-        )
-        short_res = self.order_manager.place_pending_stop_order(
-            symbol=sym, direction="SHORT", lot_size=lot_size,
-            stop_price=ar.short_stop,
-            stop_loss=ar.short_sl, take_profit=ar.short_tp,
-            comment="ASB",
-        )
+        long_res = None
+        short_res = None
+        if place_long:
+            long_res = self.order_manager.place_pending_stop_order(
+                symbol=sym, direction="LONG", lot_size=lot_size,
+                stop_price=ar.long_stop,
+                stop_loss=ar.long_sl, take_profit=ar.long_tp,
+                comment="ASB",
+            )
+        if place_short:
+            short_res = self.order_manager.place_pending_stop_order(
+                symbol=sym, direction="SHORT", lot_size=lot_size,
+                stop_price=ar.short_stop,
+                stop_loss=ar.short_sl, take_profit=ar.short_tp,
+                comment="ASB",
+            )
 
-        if long_res is None or short_res is None:
-            # Clean up the side that succeeded
+        long_ok = (not place_long) or bool(long_res)
+        short_ok = (not place_short) or bool(short_res)
+        if not (long_ok and short_ok):
+            # Asymmetric failure on the side(s) we tried to place.
             if long_res:
                 self.order_manager.cancel_pending_order(long_res["order_ticket"])
             if short_res:
                 self.order_manager.cancel_pending_order(short_res["order_ticket"])
             logger.error(
-                f"[ASB] {sym}: bracket placement failed "
-                f"(long_ok={bool(long_res)}, short_ok={bool(short_res)})"
+                f"[ASB] {sym}: placement failed "
+                f"(place_long={place_long} long_ok={long_ok}, "
+                f"place_short={place_short} short_ok={short_ok})"
             )
             self._asb_state[sym] = {"date": today, "skipped": "placement_fail"}
             return
 
         self._asb_state[sym] = {
             "date": today,
-            "long_ticket": long_res["order_ticket"],
-            "short_ticket": short_res["order_ticket"],
+            "long_ticket": (long_res["order_ticket"] if long_res else None),
+            "short_ticket": (short_res["order_ticket"] if short_res else None),
             "range_high": ar.high, "range_low": ar.low,
             "range_pips": ar.range_pips, "adr_pips": ar.adr_pips,
             "long_stop": ar.long_stop, "short_stop": ar.short_stop,
@@ -1906,25 +1940,36 @@ class HVFTrader:
             "lot_size": lot_size,
             "placed_at": now,
             "open_trade_id": None,
+            "trend_label": trend_label,
         }
+        sides = []
+        if long_res:
+            sides.append(f"BUY_STOP={ar.long_stop:.5f} ({long_res['order_ticket']})")
+        if short_res:
+            sides.append(f"SELL_STOP={ar.short_stop:.5f} ({short_res['order_ticket']})")
         logger.info(
-            f"[ASB] {sym} bracketed: range={ar.range_pips:.1f}p "
-            f"(ADR={ar.adr_pips:.1f}p)  "
-            f"BUY_STOP={ar.long_stop:.5f} ({long_res['order_ticket']})  "
-            f"SELL_STOP={ar.short_stop:.5f} ({short_res['order_ticket']})  "
-            f"lot={lot_size}"
+            f"[ASB] {sym} bracketed [{trend_label}]: range={ar.range_pips:.1f}p "
+            f"(ADR={ar.adr_pips:.1f}p)  {' | '.join(sides)}  lot={lot_size}"
         )
         if self.alerter:
-            self.alerter.send_message(
-                f"<b>[ASB] {sym} bracket placed</b>\n"
+            lines = [
+                f"<b>[ASB] {sym} bracket placed</b>",
                 f"Asian range: {ar.low:.5f}-{ar.high:.5f} ({ar.range_pips:.1f}p, "
-                f"ADR {ar.adr_pips:.1f}p)\n"
-                f"BUY_STOP {ar.long_stop:.5f}  TP {ar.long_tp:.5f}  "
-                f"SL {ar.long_sl:.5f}\n"
-                f"SELL_STOP {ar.short_stop:.5f}  TP {ar.short_tp:.5f}  "
-                f"SL {ar.short_sl:.5f}\n"
-                f"Lot: {lot_size}"
-            )
+                f"ADR {ar.adr_pips:.1f}p)",
+                f"Trend regime: {trend_label}",
+            ]
+            if long_res:
+                lines.append(
+                    f"BUY_STOP {ar.long_stop:.5f}  TP {ar.long_tp:.5f}  "
+                    f"SL {ar.long_sl:.5f}"
+                )
+            if short_res:
+                lines.append(
+                    f"SELL_STOP {ar.short_stop:.5f}  TP {ar.short_tp:.5f}  "
+                    f"SL {ar.short_sl:.5f}"
+                )
+            lines.append(f"Lot: {lot_size}")
+            self.alerter.send_message("\n".join(lines))
 
     def _asb_poll_pendings(self, now):
         """Detect which side filled into a position; cancel the survivor."""

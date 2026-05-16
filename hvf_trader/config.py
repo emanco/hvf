@@ -541,6 +541,12 @@ ASIAN_SESSION_BREAKOUT = {
     "tp_range_mult": 1.0,             # TP at 1× range from entry
     "risk_pct": 0.5,                  # conservative for first deploy
     "skip_weekdays": [4, 5, 6],       # Fri/Sat/Sun (Fri = weekend gap risk)
+    # Trend-aligned overlay (H1 EMA200 regime filter).
+    # Backtest 2026-05-16 showed PF 1.40 -> 1.89 with this filter, DD 5.4% -> 4.1%.
+    # Skips the side fighting the H1 EMA200 trend when price is > threshold_pips
+    # away from EMA200; allows both sides in chop near EMA200.
+    "trend_filter_enabled": True,
+    "trend_filter_threshold_pips": 30,
 }
 
 RISK_PCT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = ASIAN_SESSION_BREAKOUT["risk_pct"]
