@@ -1889,9 +1889,14 @@ class HVFTrader:
             equity=account["equity"], risk_pct=cfg["risk_pct"],
             stop_distance_price=stop_distance_price, symbol=sym,
             account_currency=account.get("currency", "USD"),
+            exchange_rate_to_account=fx_rate,
         )
         if lot_size <= 0:
-            logger.warning(f"[ASB] {sym}: lot_size 0, skipping")
+            logger.warning(
+                f"[ASB] {sym}: lot_size 0, skipping "
+                f"(equity={account['equity']:.2f} risk={cfg['risk_pct']}% "
+                f"sl_pips={sl_pips:.1f} fx_rate={fx_rate:.5f})"
+            )
             self._asb_state[sym] = {"date": today, "skipped": "lot_size"}
             return
 
@@ -2116,8 +2121,13 @@ class HVFTrader:
         """Get exchange rate to convert pip value from quote currency to account currency.
 
         Works with any account currency (USD, EUR, GBP, etc.) by dynamically
-        looking up the conversion pair in MT5.
+        looking up the conversion pair in MT5. FX-conversion pairs (e.g. USDJPY
+        when our trading universe doesn't include it) aren't auto-selected on
+        Market Watch, so symbol_info returns no tick — explicitly select them
+        before lookup.
         """
+        import MetaTrader5 as mt5
+
         quote_ccy = symbol[3:6]  # e.g. EURUSD -> USD, EURGBP -> GBP
         account_ccy = self._account_currency
         if quote_ccy == account_ccy:
@@ -2125,6 +2135,7 @@ class HVFTrader:
 
         # Try direct pair: {quote}{account} e.g. GBPUSD
         direct = quote_ccy + account_ccy
+        mt5.symbol_select(direct, True)
         fx_info = self.connector.get_symbol_info(direct, quiet=True)
         if fx_info and fx_info["bid"] > 0:
             logger.debug(f"FX rate {symbol}: {direct} bid={fx_info['bid']:.5f}")
@@ -2132,6 +2143,7 @@ class HVFTrader:
 
         # Try inverse pair: {account}{quote} e.g. USDCHF -> invert
         inverse = account_ccy + quote_ccy
+        mt5.symbol_select(inverse, True)
         fx_info = self.connector.get_symbol_info(inverse, quiet=True)
         if fx_info and fx_info["bid"] > 0:
             rate = 1.0 / fx_info["bid"]

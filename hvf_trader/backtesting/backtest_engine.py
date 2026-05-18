@@ -435,8 +435,17 @@ class BacktestEngine:
                     else:
                         if bar["close"] < pattern.entry_price and bar["tick_volume"] > vol_avg * config.VOLUME_SPIKE_MULT:
                             confirmed = True
+                elif arm.get("instant_fire"):
+                    # LIMIT at rejection close: fills as soon as price returns
+                    # to (or through) the rejection level. For SHORT we need
+                    # high >= entry (the limit fires when price rises to it);
+                    # for LONG we need low <= entry (price falls to it).
+                    if pattern.direction == "LONG":
+                        confirmed = bar["low"] <= pattern.entry_price
+                    else:
+                        confirmed = bar["high"] >= pattern.entry_price
                 else:
-                    # Viper, KZ Hunt, London Sweep: simple price confirmation
+                    # Viper, KZ Hunt (legacy), London Sweep: simple close-past
                     if pattern.direction == "LONG":
                         confirmed = bar["close"] > pattern.entry_price
                     else:
@@ -473,10 +482,14 @@ class BacktestEngine:
                         triggered.append(j)
                         continue
 
-                    raw_entry = bar["close"]
-                    # Apply entry-side slippage (adverse fill) before any
-                    # post-entry checks so target/stop math sees the real
-                    # fill price the broker would have given us.
+                    # Limit-fire fills at the LIMIT price; market/close-confirm
+                    # fills at the bar close. Apply slippage to both — even
+                    # limits get partial slippage in the form of broker
+                    # rejection / requote cost on the worst fills.
+                    if arm.get("instant_fire"):
+                        raw_entry = pattern.entry_price
+                    else:
+                        raw_entry = bar["close"]
                     bar_hour = bar["time"].hour if hasattr(bar["time"], "hour") else 12
                     pip_sz = config.PIP_VALUES.get(symbol, 0.0001)
                     slip_p = self._slippage_pips_for(symbol, bar_hour)
@@ -735,6 +748,10 @@ class BacktestEngine:
                     last_triggered_bar = recently_triggered.get(sym_dir, -9999)
                     if bar_idx - last_triggered_bar < TRIGGER_COOLDOWN_BARS:
                         continue
+                    instant_fire = (
+                        sig.pattern_type == "KZ_HUNT"
+                        and getattr(config, "KZ_HUNT_SKIP_CONFIRMATION", False)
+                    )
                     armed_patterns.append({
                         "pattern": sig.pattern,
                         "armed_bar": bar_idx,
@@ -744,6 +761,7 @@ class BacktestEngine:
                             (c["pat_key"] for c in all_candidates
                              if c["pattern"] is sig.pattern), None
                         ),
+                        "instant_fire": instant_fire,
                     })
                     # Record arm for cooldown (live treats ARMED same as TRIGGERED)
                     recently_triggered[sym_dir] = bar_idx
