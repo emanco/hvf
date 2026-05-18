@@ -79,51 +79,66 @@ def main():
     print(f"  Deadline: {deadline.isoformat()}", flush=True)
     print(f"  Output: {out_path}", flush=True)
 
-    write_header = not os.path.exists(out_path)
-    with open(out_path, "a", newline="") as f:
-        w = csv.writer(f)
-        if write_header:
-            w.writerow(
+    # Write header once if needed
+    if not os.path.exists(out_path):
+        with open(out_path, "w", newline="") as f:
+            csv.writer(f).writerow(
                 ["timestamp_utc", "symbol", "bid", "ask", "spread_pips"]
             )
 
-        last_status_hour = None
-        samples_this_hour = 0
-        while True:
-            now = datetime.now(timezone.utc)
-            if now >= deadline:
+    # Open-and-close per batch — Windows file-handle / AV / fs-cache quirks
+    # caused the long-lived handle pattern to silently lose writes after
+    # ~2h. Per-batch open is slower but durable; 1 second of overhead is
+    # nothing compared to the 60s sample interval.
+    last_status_hour = None
+    samples_this_hour = 0
+    while True:
+        now = datetime.now(timezone.utc)
+        if now >= deadline:
+            print(
+                f"Deadline reached @ {now.isoformat()}, exiting.",
+                flush=True,
+            )
+            break
+
+        rows = []
+        for sym in PAIRS:
+            tick = mt5.symbol_info_tick(sym)
+            if tick is None:
+                continue
+            pip = _pip_size(sym)
+            spread_pips = (tick.ask - tick.bid) / pip
+            rows.append([
+                now.isoformat(timespec="seconds"),
+                sym,
+                f"{tick.bid:.5f}",
+                f"{tick.ask:.5f}",
+                f"{spread_pips:.2f}",
+            ])
+        if rows:
+            try:
+                with open(out_path, "a", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerows(rows)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception as e:
                 print(
-                    f"Deadline reached @ {now.isoformat()}, exiting.",
+                    f"{now.isoformat()} CSV write failed: {e}",
                     flush=True,
                 )
-                break
+        samples_this_hour += 1
 
-            for sym in PAIRS:
-                tick = mt5.symbol_info_tick(sym)
-                if tick is None:
-                    continue
-                pip = _pip_size(sym)
-                spread_pips = (tick.ask - tick.bid) / pip
-                w.writerow([
-                    now.isoformat(timespec="seconds"),
-                    sym,
-                    f"{tick.bid:.5f}",
-                    f"{tick.ask:.5f}",
-                    f"{spread_pips:.2f}",
-                ])
-            f.flush()
-            samples_this_hour += 1
+        if last_status_hour != now.hour:
+            print(
+                f"{now.strftime('%Y-%m-%d %H:%M UTC')} status: "
+                f"prev hour samples per pair={samples_this_hour}",
+                flush=True,
+            )
+            last_status_hour = now.hour
+            samples_this_hour = 0
 
-            if last_status_hour != now.hour:
-                print(
-                    f"{now.strftime('%Y-%m-%d %H:%M UTC')} status: "
-                    f"prev hour samples per pair={samples_this_hour}",
-                    flush=True,
-                )
-                last_status_hour = now.hour
-                samples_this_hour = 0
-
-            time.sleep(SAMPLE_INTERVAL_SEC)
+        time.sleep(SAMPLE_INTERVAL_SEC)
 
     mt5.shutdown()
     print("Spread sampler done.", flush=True)
