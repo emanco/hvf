@@ -989,27 +989,44 @@ class QuantumLondonScanner:
             trade.mt5_ticket, trade.symbol, trade.direction, "QL force_exit",
         )
         pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
-        if result:
-            close_price = result["fill_price"] if isinstance(result, dict) else trade.entry_price
-            if trade.direction == "LONG":
-                pnl_pips = (close_price - trade.entry_price) / pip
-            else:
-                pnl_pips = (trade.entry_price - close_price) / pip
-            pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) if isinstance(result, dict) else (pnl_pips * 10.0 * trade.lot_size)
-            self._trade_logger.log_trade_close(
-                trade.id, close_price, pnl, pnl_pips, "TIME_EXIT",
-            )
-            logger.info(
-                "[QUANTUM_LONDON] Force-exit: %s %s @ %.5f, PnL=$%+.2f (%+.1fp)",
-                trade.symbol, trade.direction, close_price, pnl, pnl_pips,
+        if not result:
+            # Broker rejected the close (commonly retcode 10018 during the
+            # daily-rollover halt window). Keep _open_trade_id set so the next
+            # tick retries. The broker still has SL/TP active, so risk is
+            # bounded \u2014 but losing track silently would leave the position
+            # orphaned (see trade 181 incident on 2026-05-18).
+            logger.warning(
+                "[QUANTUM_LONDON] Force-exit FAILED for trade %d %s %s ticket=%d; "
+                "will retry next tick (broker SL/TP still active)",
+                trade.id, trade.symbol, trade.direction, trade.mt5_ticket,
             )
             if self._alerter:
-                emoji = "\u2705" if pnl > 0 else "\u274c"
                 self._alerter.send_message(
-                    f"<b>{emoji} [QUANTUM_LONDON] TIME_EXIT</b>\n"
-                    f"{trade.symbol} {trade.direction}\n"
-                    f"Close: {close_price:.5f}  PnL: ${pnl:+.2f} ({pnl_pips:+.1f}p)"
+                    f"<b>\u26a0 [QUANTUM_LONDON] Force-exit failed</b>\n"
+                    f"{trade.symbol} {trade.direction} ticket={trade.mt5_ticket}\n"
+                    f"Will retry. Broker SL/TP remain active."
                 )
+            return
+        close_price = result["fill_price"] if isinstance(result, dict) else trade.entry_price
+        if trade.direction == "LONG":
+            pnl_pips = (close_price - trade.entry_price) / pip
+        else:
+            pnl_pips = (trade.entry_price - close_price) / pip
+        pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) if isinstance(result, dict) else (pnl_pips * 10.0 * trade.lot_size)
+        self._trade_logger.log_trade_close(
+            trade.id, close_price, pnl, pnl_pips, "TIME_EXIT",
+        )
+        logger.info(
+            "[QUANTUM_LONDON] Force-exit: %s %s @ %.5f, PnL=$%+.2f (%+.1fp)",
+            trade.symbol, trade.direction, close_price, pnl, pnl_pips,
+        )
+        if self._alerter:
+            emoji = "\u2705" if pnl > 0 else "\u274c"
+            self._alerter.send_message(
+                f"<b>{emoji} [QUANTUM_LONDON] TIME_EXIT</b>\n"
+                f"{trade.symbol} {trade.direction}\n"
+                f"Close: {close_price:.5f}  PnL: ${pnl:+.2f} ({pnl_pips:+.1f}p)"
+            )
         self._open_trade_id = None
 
     def _emit_session_summary(self):
