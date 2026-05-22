@@ -953,13 +953,19 @@ class HVFTrader:
         equity = account["equity"]
         stop_distance = abs(signal.entry_price - signal.stop_loss)
 
+        fx_rate = self._get_quote_to_account_rate(sym)
         lot_size = calculate_lot_size(
             equity=equity, risk_pct=cfg["risk_pct"],
             stop_distance_price=stop_distance, symbol=sym,
             account_currency=account.get("currency", "USD"),
+            exchange_rate_to_account=fx_rate,
         )
         if lot_size <= 0:
-            logger.warning("[NIGHT_TIDE] Lot size zero for %s", sym)
+            logger.warning(
+                "[NIGHT_TIDE] Lot size zero for %s (equity=%.2f risk=%.2f%% "
+                "stop=%.5f fx_rate=%.5f)",
+                sym, equity, cfg["risk_pct"], stop_distance, fx_rate,
+            )
             return
 
         result = self.order_manager.place_market_order(

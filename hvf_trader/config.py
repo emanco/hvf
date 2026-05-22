@@ -456,7 +456,7 @@ QUANTUM_LONDON = {
     "poll_interval_sec": 1,
     "days": [6, 0, 1, 2, 3],            # Sun-Thu capture nights → Mon-Fri trading sessions
     "capture_utc_hour": 22,             # Daily open captured at 22:00 UTC (= 00:00 GMT+2)
-    "force_exit_utc_hour": 21,          # Force-close at 21:00 UTC next day (~22hr hold)
+    "force_exit_utc_hour": 20,          # Force-close at 20:00 UTC next day (~22hr hold). Avoids IC Markets' 21:00 UTC rollover halt where close orders return retcode 10018.
     "instances": [
         {   # EURGBP — IC Markets 8mo backtest PF 2.52
             "instrument": "EURGBP",
