@@ -27,10 +27,24 @@ except ImportError:
 
 class Reconciliator:
     # Delay schedule (seconds from fallback) for late-update retries.
-    # The broker can take several minutes to write the exit deal after the
-    # position disappears; we re-check until either real deal data is found
-    # or the schedule is exhausted.
-    LATE_UPDATE_SCHEDULE = (60, 180, 600, 1800)  # 1min, 3min, 10min, 30min
+    # The broker can take several minutes — sometimes hours, sometimes a day
+    # over weekends — to write the exit deal after the position disappears.
+    # We re-check until either real deal data is found or the schedule is
+    # exhausted. Extended 2026-05-26 after discovering 11 trades had
+    # estimated PnL that was wildly wrong (net $432 of swing) because the
+    # previous schedule gave up in 30min.
+    LATE_UPDATE_SCHEDULE = (
+        60,            # 1 min
+        180,           # 3 min
+        600,           # 10 min
+        1800,          # 30 min
+        3600,          # 1 hr
+        4 * 3600,      # 4 hr
+        12 * 3600,     # 12 hr
+        24 * 3600,     # 1 day
+        3 * 24 * 3600, # 3 days
+        7 * 24 * 3600, # 7 days
+    )
 
     def __init__(self, trade_logger, order_manager=None):
         """

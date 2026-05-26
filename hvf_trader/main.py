@@ -690,8 +690,13 @@ class HVFTrader:
         cfg = config.LONDON_BREAKOUT
         sym = signal.symbol
 
-        # Circuit breaker
+        # Circuit breaker (global + per-pattern)
         if self.circuit_breaker.is_tripped:
+            self._london_bo_tracker.mark_traded()
+            return
+        pattern_clear, pattern_reason = self.circuit_breaker.check_pattern("LONDON_BO", sym)
+        if not pattern_clear:
+            logger.info("[LONDON_BO] Pattern breaker tripped, skipping: %s", pattern_reason)
             self._london_bo_tracker.mark_traded()
             return
 
@@ -702,11 +707,13 @@ class HVFTrader:
         equity = account["equity"]
         stop_distance = abs(signal.entry_price - signal.stop_loss)
 
+        fx_rate = self._get_quote_to_account_rate(sym)
         from hvf_trader.risk.position_sizer import calculate_lot_size
         lot_size = calculate_lot_size(
             equity=equity, risk_pct=cfg["risk_pct"],
             stop_distance_price=stop_distance, symbol=sym,
             account_currency=account.get("currency", "USD"),
+            exchange_rate_to_account=fx_rate,
         )
         if lot_size <= 0:
             self._london_bo_tracker.mark_traded()
@@ -945,6 +952,10 @@ class HVFTrader:
 
         if self.circuit_breaker.is_tripped:
             logger.info("[NIGHT_TIDE] Circuit breaker tripped, skipping")
+            return
+        pattern_clear, pattern_reason = self.circuit_breaker.check_pattern("NIGHT_TIDE", sym)
+        if not pattern_clear:
+            logger.info("[NIGHT_TIDE] Pattern breaker tripped, skipping: %s", pattern_reason)
             return
 
         account = self.connector.get_account_info()
@@ -1845,6 +1856,19 @@ class HVFTrader:
         from hvf_trader.risk.position_sizer import calculate_lot_size
 
         cfg = config.ASIAN_SESSION_BREAKOUT
+        # Circuit breaker (global + per-pattern)
+        if self.circuit_breaker.is_tripped:
+            logger.info(f"[ASB] {sym}: global breaker tripped, skipping")
+            self._asb_state[sym] = {"date": today, "skipped": "circuit_breaker"}
+            return
+        pattern_clear, pattern_reason = self.circuit_breaker.check_pattern(
+            "ASIAN_SESSION_BREAKOUT", sym,
+        )
+        if not pattern_clear:
+            logger.info(f"[ASB] {sym}: pattern breaker tripped, skipping: {pattern_reason}")
+            self._asb_state[sym] = {"date": today, "skipped": "pattern_breaker"}
+            return
+
         df = fetch_and_prepare(sym, "H1", bars=720)  # 30 days of H1 covers ADR(14)
         if df is None or df.empty:
             logger.warning(f"[ASB] {sym}: no H1 data, skipping")
