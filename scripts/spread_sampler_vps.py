@@ -27,21 +27,22 @@ from dotenv import load_dotenv
 load_dotenv(r"C:/hvf_trader/.env")
 import MetaTrader5 as mt5
 
-# All KZ_HUNT pairs + QL + NIGHT_TIDE + LB pairs the bot might trade
+# All KZ_HUNT pairs + QL + NIGHT_TIDE + LB + ASB pairs the bot might trade
 PAIRS = [
-    # KZ_HUNT (recently disabled but back on)
-    "NZDUSD", "EURGBP", "EURJPY", "EURAUD",
-    # Quantum London
-    "EURCHF",
-    # Night Tide cross pairs
-    "AUDNZD", "AUDCAD", "NZDCAD",
-    # London Breakout
-    "GBPUSD",
+    "NZDUSD", "EURGBP", "EURJPY", "EURAUD",  # KZ_HUNT (disabled but historical)
+    "EURCHF",                                  # Quantum London
+    "AUDNZD", "AUDCAD", "NZDCAD",              # Night Tide
+    "GBPUSD",                                  # London Breakout
+    "GBPJPY",                                  # ASB
 ]
 SAMPLE_INTERVAL_SEC = int(os.environ.get("SAMPLE_INTERVAL_SEC", "60"))
 
 # Default 14 days = 336 hours; the spread_model.py code reads the result.
 HOURS = float(os.environ.get("SAMPLER_HOURS", "336"))
+
+# How many consecutive empty-tick batches before forcing an MT5 reconnect.
+# Each batch = 60s, so 3 = 3 minutes of dead ticks before we react.
+RECONNECT_AFTER_EMPTY_BATCHES = 3
 
 
 def _pip_size(symbol: str) -> float:
@@ -49,21 +50,27 @@ def _pip_size(symbol: str) -> float:
     return 0.01 if "JPY" in symbol else 0.0001
 
 
-def main():
+def _connect_mt5() -> bool:
+    """(Re)initialize and login. Returns True on success."""
+    mt5.shutdown()  # clean slate; no-op if not connected
     if not mt5.initialize(path=os.getenv("MT5_PATH")):
         print(f"MT5 init failed: {mt5.last_error()}", flush=True)
-        sys.exit(1)
-    if not mt5.login(int(os.getenv("MT5_LOGIN")),
-                    password=os.getenv("MT5_PASSWORD"),
-                    server=os.getenv("MT5_SERVER")):
+        return False
+    if not mt5.login(
+        int(os.getenv("MT5_LOGIN")),
+        password=os.getenv("MT5_PASSWORD"),
+        server=os.getenv("MT5_SERVER"),
+    ):
         print(f"MT5 login failed: {mt5.last_error()}", flush=True)
-        sys.exit(1)
-
+        return False
     for sym in PAIRS:
-        if not mt5.symbol_select(sym, True):
-            print(f"WARN: symbol_select failed for {sym}", flush=True)
-        else:
-            print(f"  subscribed {sym}", flush=True)
+        mt5.symbol_select(sym, True)
+    return True
+
+
+def main():
+    if not _connect_mt5():
+        sys.exit(1)
 
     out_path = r"C:/hvf_trader/logs/spread_samples.csv"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -86,25 +93,22 @@ def main():
                 ["timestamp_utc", "symbol", "bid", "ask", "spread_pips"]
             )
 
-    # Open-and-close per batch — Windows file-handle / AV / fs-cache quirks
-    # caused the long-lived handle pattern to silently lose writes after
-    # ~2h. Per-batch open is slower but durable; 1 second of overhead is
-    # nothing compared to the 60s sample interval.
     last_status_hour = None
     samples_this_hour = 0
+    empty_ticks_streak = 0
+    rows_written_total = 0
     while True:
         now = datetime.now(timezone.utc)
         if now >= deadline:
-            print(
-                f"Deadline reached @ {now.isoformat()}, exiting.",
-                flush=True,
-            )
+            print(f"Deadline reached @ {now.isoformat()}, exiting.", flush=True)
             break
 
         rows = []
+        none_pairs = []
         for sym in PAIRS:
             tick = mt5.symbol_info_tick(sym)
-            if tick is None:
+            if tick is None or (tick.bid <= 0 and tick.ask <= 0):
+                none_pairs.append(sym)
                 continue
             pip = _pip_size(sym)
             spread_pips = (tick.ask - tick.bid) / pip
@@ -115,13 +119,41 @@ def main():
                 f"{tick.ask:.5f}",
                 f"{spread_pips:.2f}",
             ])
-        if rows:
+
+        # Detect MT5 stale-connection class: every pair returned None/0 for
+        # 3 consecutive batches. Log loudly, then reconnect. This was the
+        # silent-failure mode that cost us 8 days of data 2026-05-18 → 26.
+        if not rows:
+            empty_ticks_streak += 1
+            print(
+                f"{now.isoformat()} EMPTY batch (none_pairs={len(none_pairs)}) "
+                f"streak={empty_ticks_streak}",
+                flush=True,
+            )
+            if empty_ticks_streak >= RECONNECT_AFTER_EMPTY_BATCHES:
+                print(
+                    f"{now.isoformat()} Reconnecting MT5 after "
+                    f"{empty_ticks_streak} empty batches...",
+                    flush=True,
+                )
+                if _connect_mt5():
+                    print(f"{now.isoformat()} MT5 reconnected.", flush=True)
+                    empty_ticks_streak = 0
+                else:
+                    print(
+                        f"{now.isoformat()} MT5 reconnect failed, "
+                        f"will retry next batch.",
+                        flush=True,
+                    )
+        else:
+            empty_ticks_streak = 0
             try:
                 with open(out_path, "a", newline="") as f:
                     w = csv.writer(f)
                     w.writerows(rows)
                     f.flush()
                     os.fsync(f.fileno())
+                rows_written_total += len(rows)
             except Exception as e:
                 print(
                     f"{now.isoformat()} CSV write failed: {e}",
@@ -130,9 +162,11 @@ def main():
         samples_this_hour += 1
 
         if last_status_hour != now.hour:
+            # Hourly heartbeat: report both attempts AND rows actually written
             print(
                 f"{now.strftime('%Y-%m-%d %H:%M UTC')} status: "
-                f"prev hour samples per pair={samples_this_hour}",
+                f"prev-hour attempts={samples_this_hour} "
+                f"rows_total={rows_written_total}",
                 flush=True,
             )
             last_status_hour = now.hour
