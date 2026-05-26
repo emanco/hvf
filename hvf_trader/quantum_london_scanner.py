@@ -293,6 +293,19 @@ class QuantumLondonScanner:
             self._tracker.mark_traded()
             return
 
+        pattern_clear, pattern_reason = self._circuit_breaker.check_pattern(
+            self.PATTERN_TYPE, sym,
+        )
+        if not pattern_clear:
+            logger.info(
+                "[QUANTUM_LONDON] Pattern breaker tripped, skipping pendings: %s",
+                pattern_reason,
+            )
+            if self._session_stats is not None:
+                self._session_stats["executions_failed"] += 1
+            self._tracker.mark_traded()
+            return
+
         account = self._connector.get_account_info()
         if not account:
             logger.error("[QUANTUM_LONDON] Cannot get account info — skipping pendings")

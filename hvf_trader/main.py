@@ -2126,11 +2126,11 @@ class HVFTrader:
     def _get_quote_to_account_rate(self, symbol: str) -> float:
         """Get exchange rate to convert pip value from quote currency to account currency.
 
-        Works with any account currency (USD, EUR, GBP, etc.) by dynamically
-        looking up the conversion pair in MT5. FX-conversion pairs (e.g. USDJPY
-        when our trading universe doesn't include it) aren't auto-selected on
-        Market Watch, so symbol_info returns no tick — explicitly select them
-        before lookup.
+        Primary path: derive directly from MT5's `trade_tick_value`, which is
+        already in account currency for the symbol we're trading. This is
+        bulletproof — no separate FX-pair lookup, no symbol_select dance.
+        Fallback: explicit FX-pair lookup (kept for safety if tick value is
+        missing for some reason).
         """
         import MetaTrader5 as mt5
 
@@ -2139,24 +2139,43 @@ class HVFTrader:
         if quote_ccy == account_ccy:
             return 1.0
 
-        # Try direct pair: {quote}{account} e.g. GBPUSD
+        # Primary: MT5's authoritative tick value for the traded symbol itself.
+        # pip_value_per_lot = tick_value * (pip_size / tick_size)
+        # exchange_rate_to_account = pip_value_per_lot / (contract_size * pip_size)
+        info = self.connector.get_symbol_info(symbol, quiet=True)
+        if info:
+            tick_value = info.get("trade_tick_value") or 0.0
+            tick_size = info.get("trade_tick_size") or 0.0
+            contract = info.get("trade_contract_size") or 0.0
+            pip_size = config.PIP_VALUES.get(symbol, 0.0001)
+            if tick_value > 0 and tick_size > 0 and contract > 0:
+                pip_value_per_lot = tick_value * (pip_size / tick_size)
+                rate = pip_value_per_lot / (contract * pip_size)
+                logger.debug(
+                    "FX rate %s via tick_value: tv=%.5f ts=%.5f contract=%.0f "
+                    "pip_value/lot=%.4f rate=%.5f",
+                    symbol, tick_value, tick_size, contract, pip_value_per_lot, rate,
+                )
+                return rate
+
+        # Fallback: direct pair {quote}{account} e.g. GBPUSD
         direct = quote_ccy + account_ccy
         mt5.symbol_select(direct, True)
         fx_info = self.connector.get_symbol_info(direct, quiet=True)
         if fx_info and fx_info["bid"] > 0:
-            logger.debug(f"FX rate {symbol}: {direct} bid={fx_info['bid']:.5f}")
+            logger.debug(f"FX rate {symbol} via direct: {direct} bid={fx_info['bid']:.5f}")
             return fx_info["bid"]
 
-        # Try inverse pair: {account}{quote} e.g. USDCHF -> invert
+        # Fallback: inverse pair {account}{quote} e.g. USDCHF -> invert
         inverse = account_ccy + quote_ccy
         mt5.symbol_select(inverse, True)
         fx_info = self.connector.get_symbol_info(inverse, quiet=True)
         if fx_info and fx_info["bid"] > 0:
             rate = 1.0 / fx_info["bid"]
-            logger.debug(f"FX rate {symbol}: 1/{inverse} bid={fx_info['bid']:.5f} = {rate:.5f}")
+            logger.debug(f"FX rate {symbol} via inverse: 1/{inverse} bid={fx_info['bid']:.5f} = {rate:.5f}")
             return rate
 
-        logger.warning(f"Cannot find FX pair for {quote_ccy}->{account_ccy}, defaulting to 1.0")
+        logger.warning(f"Cannot find FX rate for {symbol} ({quote_ccy}->{account_ccy}), defaulting to 1.0")
         return 1.0
 
     def _attempt_entry(self, pattern_record, pattern, df, pattern_type="HVF"):
