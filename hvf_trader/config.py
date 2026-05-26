@@ -534,7 +534,7 @@ ASIAN_SESSION_BREAKOUT = {
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
     "eod_force_close_hour": 20,       # UTC — force-close any open position
-    "min_range_pct_adr": 0.4,         # range >= 0.4 * ADR(14)
+    "min_range_pct_adr": 0.3,         # range >= 0.3 * ADR(14). Lowered 2026-05-26 from 0.4 — backtest 0.4 produced 38% live fire rate expectation but live JPY-vol regime since deploy has been quieter (8 of 14 attempts clocked 0.19-0.36 ratio, 2 cleared 0.4). 0.3 captures the borderline-tight days that almost qualified; needs live revalidation.
     "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
     "min_buffer_pips": 2.0,
     "buffer_pct_range": 0.10,         # buffer = max(min_buffer, 10% of range)
