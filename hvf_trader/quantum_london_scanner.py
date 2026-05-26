@@ -616,6 +616,11 @@ class QuantumLondonScanner:
         trade_record = self._trade_logger.log_trade_open(trade_data)
         self._open_trade_id = trade_record.id
         self._clear_pending_state()
+        # Belt-and-braces: ensure the state file reflects the new open trade.
+        # _clear_pending_state already calls _save_state, but make the intent
+        # explicit here so this code is robust to future refactors of the
+        # cleanup helper.
+        self._save_state()
 
         logger.info(
             "[QUANTUM_LONDON] %s %s LIMIT FILLED: pos=%d @ %.5f "
@@ -676,11 +681,12 @@ class QuantumLondonScanner:
         self._pending_short_signal = None
         self._pending_lot_size = None
         self._pending_placed_at = None
-        # Best-effort: remove the checkpoint file. If it's missing, fine.
-        try:
-            self._state_file.unlink(missing_ok=True)
-        except Exception as e:
-            logger.warning("[QUANTUM_LONDON] failed to clear state file: %s", e)
+        # Persist the cleared-pending state, preserving _open_trade_id so a
+        # restart between fill and force-exit can re-adopt the live position.
+        # (Pre-2026-05-26 this called .unlink() unconditionally, which
+        # destroyed our recovery checkpoint the moment a LIMIT filled — see
+        # trade 188 incident: open EURCHF position lost across deploys.)
+        self._save_state()
 
     # ─── State persistence ───────────────────────────────────────────
 
@@ -842,6 +848,51 @@ class QuantumLondonScanner:
         cancel path.
         """
         sym = self._cfg["instrument"]
+
+        # Step 0 — saved an OPEN trade? Re-adopt the active position directly.
+        # This branch is the recovery path for state files written after a
+        # LIMIT filled (post-2026-05-26 fix). The DB knows the trade record;
+        # the broker still has the position; we just need to wire up
+        # _open_trade_id again so _check_if_closed and _force_exit_open_trade
+        # can act on it.
+        saved_open_id = saved.get("open_trade_id")
+        if saved_open_id is not None:
+            from hvf_trader.database.models import TradeRecord
+            trade = self._trade_logger._session.get(TradeRecord, saved_open_id)
+            if trade and trade.status == "OPEN" and trade.symbol == sym:
+                positions = mt5.positions_get(ticket=trade.mt5_ticket) or []
+                if positions:
+                    self._open_trade_id = saved_open_id
+                    # The tracker needs to be in DONE so future capture hours
+                    # don't trigger a brand-new session while a trade is alive.
+                    try:
+                        self._tracker.start_session(trade.entry_price, str(trade.opened_at.date()))
+                        self._tracker.mark_traded()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "[QUANTUM_LONDON] startup re-adopt: open trade recovered "
+                        "id=%d ticket=%d %s %s @ %.5f",
+                        trade.id, trade.mt5_ticket, trade.symbol, trade.direction,
+                        trade.entry_price,
+                    )
+                    if self._alerter:
+                        self._alerter.send_message(
+                            f"<b>[QUANTUM_LONDON] {sym} re-adopted open trade</b>\n"
+                            f"Ticket {trade.mt5_ticket} ({trade.direction}) "
+                            f"@ {trade.entry_price:.5f}; force-exit timer restored."
+                        )
+                    return True
+                else:
+                    # DB says open, broker says gone — leave _open_trade_id None
+                    # and let normal reconciliation pick it up (it'll find the
+                    # close deal eventually via the 7-day late-update queue).
+                    logger.warning(
+                        "[QUANTUM_LONDON] startup re-adopt: saved open trade %d "
+                        "(ticket %d) no longer at broker; reconciliation will handle.",
+                        saved_open_id, trade.mt5_ticket,
+                    )
+
         long_ticket = saved.get("pending_long_ticket")
         short_ticket = saved.get("pending_short_ticket")
         long_sig = saved.get("pending_long_signal")
