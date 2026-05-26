@@ -98,7 +98,11 @@ def compute_asian_range(
     adr_pips = adr_price / pip
 
     cfg = config.ASIAN_SESSION_BREAKOUT
-    if range_pips < cfg["min_range_pct_adr"] * adr_pips:
+    # Per-symbol threshold override (e.g. EURJPY at 0.3 while GBPJPY stays at 0.4).
+    min_pct = cfg.get("min_range_pct_adr_by_symbol", {}).get(
+        symbol, cfg["min_range_pct_adr"]
+    )
+    if range_pips < min_pct * adr_pips:
         return None
     if range_pips > cfg["max_range_pct_adr"] * adr_pips:
         return None

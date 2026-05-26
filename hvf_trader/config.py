@@ -534,7 +534,11 @@ ASIAN_SESSION_BREAKOUT = {
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
     "eod_force_close_hour": 20,       # UTC — force-close any open position
-    "min_range_pct_adr": 0.3,         # range >= 0.3 * ADR(14). Lowered 2026-05-26 from 0.4 — backtest 0.4 produced 38% live fire rate expectation but live JPY-vol regime since deploy has been quieter (8 of 14 attempts clocked 0.19-0.36 ratio, 2 cleared 0.4). 0.3 captures the borderline-tight days that almost qualified; needs live revalidation.
+    "min_range_pct_adr": 0.4,         # default min: range >= 0.4 * ADR(14). Per-pair backtest 2026-05-26 showed 0.4 PF=1.97 vs 0.3 PF=1.50 — extra trades from 0.3 dilute edge. GBPJPY edge is narrow (PF 3.66 at 0.4 -> 1.62 at 0.3); EURJPY flat (PF 1.33 vs 1.38). Per-pair override below for EURJPY.
+    "min_range_pct_adr_by_symbol": {
+        "EURJPY": 0.3,                 # EURJPY edge survives the lower gate per backtest.
+        # GBPJPY uses default 0.4 (don't dilute its narrow edge).
+    },
     "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
     "min_buffer_pips": 2.0,
     "buffer_pct_range": 0.10,         # buffer = max(min_buffer, 10% of range)
