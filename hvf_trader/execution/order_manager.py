@@ -625,10 +625,21 @@ class OrderManager:
             logger.error(f"Pending stop send failed: {err}")
             return None
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.error(
-                f"Pending stop failed: retcode={result.retcode}, "
-                f"comment={result.comment}"
-            )
+            # 10015 = TRADE_RETCODE_INVALID_PRICE — for breakout STOP orders
+            # this almost always means price has already moved through the
+            # level we're trying to set, so the order can't be a "stop". Not
+            # an error condition; the strategy just missed this entry. Log at
+            # INFO so it doesn't flood errors.log.
+            if result.retcode == 10015:
+                logger.info(
+                    f"Pending stop skipped: {direction}_STOP {symbol} @ {stop_price} — "
+                    f"price already through level (retcode 10015 invalid price)"
+                )
+            else:
+                logger.error(
+                    f"Pending stop failed: retcode={result.retcode}, "
+                    f"comment={result.comment}"
+                )
             return None
 
         logger.info(

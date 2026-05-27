@@ -1950,15 +1950,21 @@ class HVFTrader:
         long_ok = (not place_long) or bool(long_res)
         short_ok = (not place_short) or bool(short_res)
         if not (long_ok and short_ok):
-            # Asymmetric failure on the side(s) we tried to place.
+            # Asymmetric failure on the side(s) we tried to place. The most
+            # common cause is "price already through the level" (broker
+            # retcode 10015) — a missed entry rather than a system error.
+            # order_manager has already logged the retcode-specific detail
+            # at the appropriate severity, so this is INFO not ERROR.
             if long_res:
                 self.order_manager.cancel_pending_order(long_res["order_ticket"])
             if short_res:
                 self.order_manager.cancel_pending_order(short_res["order_ticket"])
-            logger.error(
-                f"[ASB] {sym}: placement failed "
-                f"(place_long={place_long} long_ok={long_ok}, "
-                f"place_short={place_short} short_ok={short_ok})"
+            sides_attempted = []
+            if place_long and not long_ok: sides_attempted.append("LONG")
+            if place_short and not short_ok: sides_attempted.append("SHORT")
+            logger.info(
+                f"[ASB] {sym}: pending placement failed on {'+'.join(sides_attempted)} "
+                f"(see prior order-manager line for retcode). Skipping today."
             )
             self._asb_state[sym] = {"date": today, "skipped": "placement_fail"}
             return
