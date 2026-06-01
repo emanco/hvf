@@ -186,6 +186,18 @@ class HVFTrader:
                 )
                 self.quantum_london_scanners.append(scanner)
 
+        # ─── BTC Daily Donchian (Turtle System 2 variant) ─────────────
+        self.btc_donchian_scanner = None
+        if config.BTC_DONCHIAN.get("enabled"):
+            from hvf_trader.btc_donchian_scanner import BtcDonchianScanner
+            self.btc_donchian_scanner = BtcDonchianScanner(
+                order_manager=self.order_manager,
+                trade_logger=self.trade_logger,
+                connector=self.connector,
+                circuit_breaker=self.circuit_breaker,
+                alerter=self.alerter,
+            )
+
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
         for sym in config.INSTRUMENTS:
@@ -343,6 +355,16 @@ class HVFTrader:
             t.start()
             self._quantum_london_threads.append(t)
             logger.info(f"Quantum London scanner started: {sym}")
+
+        # Start BTC Daily Donchian scanner (daemon thread)
+        self._btc_donchian_thread = None
+        if self.btc_donchian_scanner:
+            self._btc_donchian_thread = threading.Thread(
+                target=self.btc_donchian_scanner.start,
+                daemon=True, name="BtcDonchian",
+            )
+            self._btc_donchian_thread.start()
+            logger.info("BTC Daily Donchian scanner started")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -2623,6 +2645,10 @@ class HVFTrader:
         self.telegram_commands.stop()
         self.trade_monitor.stop()
         self.health_checker.stop()
+        for scanner in self.quantum_london_scanners:
+            scanner.stop()
+        if self.btc_donchian_scanner:
+            self.btc_donchian_scanner.stop()
 
         # Flush DB
         self.trade_logger.log_event("SHUTDOWN", details="Graceful shutdown")

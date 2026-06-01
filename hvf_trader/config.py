@@ -559,6 +559,34 @@ MIN_STOP_PIPS_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 5
 TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 0
 PATTERN_FRESHNESS_BARS["ASIAN_SESSION_BREAKOUT"] = 1
 
+# ─── BTC Daily Donchian (Turtle System 2 variant) ────────────────────────────
+# 9-year backtest with walk-forward validation (2026-06-01 work):
+#   55/20 lookback + 1.0× ATR(20) stop survives the 2023-2025 regime change
+#   where 20/10 broke. PF 2.94 / MAR 2.23 in the worst window. Aggregate over
+#   9 years: PF ~6, MAR >5. Trade freq: 5-10/year — patient strategy.
+# Default ENABLED=False — flip to True after a manual review of the first
+# detection log.
+BTC_DONCHIAN = {
+    "enabled": True,                   # Scanner runs and alerts; dry_run gates live orders
+    "pattern_type": "BTC_DONCHIAN",
+    "instrument": "BTCUSD",
+    "entry_lookback_days": 55,         # 55-day breakout entry
+    "exit_lookback_days": 20,          # 20-day opposite extreme for trailing
+    "atr_period_days": 20,
+    "atr_stop_multiplier": 1.0,        # tight stop — walk-forward favored 1.0× over 2.0×
+    "risk_pct": 1.0,                   # 1% account risk per trade
+    "poll_interval_sec": 60,           # check once a minute; act only after new D1 close
+    "magic": 20260601,                 # distinct from QL 20250305 and other strategies
+    "dry_run": True,                   # log decisions but don't place orders. Override to False to go live.
+    "alert_on_detection": True,        # send Telegram alert when a setup detected, even in dry_run
+}
+
+RISK_PCT_BY_PATTERN["BTC_DONCHIAN"] = BTC_DONCHIAN["risk_pct"]
+MIN_RRR_BY_PATTERN["BTC_DONCHIAN"] = 0.0      # no fixed TP — trailing exits only
+TRAILING_STOP_ATR_MULT_BY_PATTERN["BTC_DONCHIAN"] = 0  # trail via Donchian extreme, not ATR
+MIN_STOP_PIPS_BY_PATTERN["BTC_DONCHIAN"] = 0           # bypass — BTCUSD uses dollar stops not pip stops
+PATTERN_FRESHNESS_BARS["BTC_DONCHIAN"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,
