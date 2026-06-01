@@ -577,7 +577,7 @@ BTC_DONCHIAN = {
     "risk_pct": 1.0,                   # 1% account risk per trade
     "poll_interval_sec": 60,           # check once a minute; act only after new D1 close
     "magic": 20260601,                 # distinct from QL 20250305 and other strategies
-    "dry_run": True,                   # log decisions but don't place orders. Override to False to go live.
+    "dry_run": False,                  # LIVE — order primitives verified via btc_force_test.py 2026-06-01
     "alert_on_detection": True,        # send Telegram alert when a setup detected, even in dry_run
 }
 
