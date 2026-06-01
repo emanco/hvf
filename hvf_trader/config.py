@@ -559,26 +559,32 @@ MIN_STOP_PIPS_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 5
 TRAILING_STOP_ATR_MULT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = 0
 PATTERN_FRESHNESS_BARS["ASIAN_SESSION_BREAKOUT"] = 1
 
-# ─── BTC Daily Donchian (Turtle System 2 variant) ────────────────────────────
+# ─── Daily Donchian on crypto (Turtle System 2 variant) ──────────────────────
 # 9-year backtest with walk-forward validation (2026-06-01 work):
 #   55/20 lookback + 1.0× ATR(20) stop survives the 2023-2025 regime change
-#   where 20/10 broke. PF 2.94 / MAR 2.23 in the worst window. Aggregate over
-#   9 years: PF ~6, MAR >5. Trade freq: 5-10/year — patient strategy.
-# Default ENABLED=False — flip to True after a manual review of the first
-# detection log.
+#   where the 20/10 default broke. Aggregate PF ~5; worst regime PF 2.94.
+#   Per-asset (2026-06-01 multi-crypto sweep):
+#     BTCUSD 9y: PF 5.09 / MAR 5.93. Walk-forward 2023-25: PF 2.94.
+#     ETHUSD 10y: PF 3.22 / MAR 1.37. Walk-forward 2023-25: PF 4.69.
+#     Signal overlap between BTC and ETH: 9.8% (low — real diversification).
+# Each instance in `instances` becomes its own scanner thread with the
+# parent config merged with per-instrument overrides (mirroring QL's setup).
 BTC_DONCHIAN = {
     "enabled": True,                   # Scanner runs and alerts; dry_run gates live orders
     "pattern_type": "BTC_DONCHIAN",
-    "instrument": "BTCUSD",
-    "entry_lookback_days": 55,         # 55-day breakout entry
-    "exit_lookback_days": 20,          # 20-day opposite extreme for trailing
+    "entry_lookback_days": 55,
+    "exit_lookback_days": 20,
     "atr_period_days": 20,
-    "atr_stop_multiplier": 1.0,        # tight stop — walk-forward favored 1.0× over 2.0×
-    "risk_pct": 1.0,                   # 1% account risk per trade
-    "poll_interval_sec": 60,           # check once a minute; act only after new D1 close
-    "magic": 20260601,                 # distinct from QL 20250305 and other strategies
-    "dry_run": False,                  # LIVE — order primitives verified via btc_force_test.py 2026-06-01
-    "alert_on_detection": True,        # send Telegram alert when a setup detected, even in dry_run
+    "atr_stop_multiplier": 1.0,
+    "risk_pct": 1.0,
+    "poll_interval_sec": 60,
+    "magic": 20260601,
+    "dry_run": False,                  # LIVE — primitives verified 2026-06-01
+    "alert_on_detection": True,
+    "instances": [
+        {"instrument": "BTCUSD"},      # 9-year PF 5.09, walk-forward 2.94
+        {"instrument": "ETHUSD"},      # 10-year PF 3.22, walk-forward 4.69
+    ],
 }
 
 RISK_PCT_BY_PATTERN["BTC_DONCHIAN"] = BTC_DONCHIAN["risk_pct"]

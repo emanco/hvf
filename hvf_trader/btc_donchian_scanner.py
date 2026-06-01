@@ -49,7 +49,14 @@ class BtcDonchianScanner:
 
     def __init__(self, order_manager, trade_logger, connector,
                  circuit_breaker, alerter=None, cfg=None):
-        self._cfg = cfg or config.BTC_DONCHIAN
+        # cfg should be the merged parent+instance dict from main.py. The
+        # top-level config.BTC_DONCHIAN has `instances` not `instrument`, so
+        # callers must pass the merged dict explicitly.
+        if cfg is None:
+            raise ValueError(
+                "BtcDonchianScanner requires explicit cfg (merged parent + instance)"
+            )
+        self._cfg = cfg
         self._order_manager = order_manager
         self._trade_logger = trade_logger
         self._connector = connector

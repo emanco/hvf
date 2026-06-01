@@ -186,17 +186,25 @@ class HVFTrader:
                 )
                 self.quantum_london_scanners.append(scanner)
 
-        # ─── BTC Daily Donchian (Turtle System 2 variant) ─────────────
-        self.btc_donchian_scanner = None
+        # ─── Daily Donchian on crypto (Turtle System 2 variant) ───────
+        # One scanner thread per BTC_DONCHIAN["instances"] entry, mirroring
+        # the QL multi-instance pattern. Parent config + per-instrument
+        # overrides merged.
+        self.btc_donchian_scanners = []
         if config.BTC_DONCHIAN.get("enabled"):
             from hvf_trader.btc_donchian_scanner import BtcDonchianScanner
-            self.btc_donchian_scanner = BtcDonchianScanner(
-                order_manager=self.order_manager,
-                trade_logger=self.trade_logger,
-                connector=self.connector,
-                circuit_breaker=self.circuit_breaker,
-                alerter=self.alerter,
-            )
+            for instance_cfg in config.BTC_DONCHIAN.get("instances", []):
+                merged_cfg = {**config.BTC_DONCHIAN, **instance_cfg}
+                merged_cfg.pop("instances", None)
+                scanner = BtcDonchianScanner(
+                    order_manager=self.order_manager,
+                    trade_logger=self.trade_logger,
+                    connector=self.connector,
+                    circuit_breaker=self.circuit_breaker,
+                    alerter=self.alerter,
+                    cfg=merged_cfg,
+                )
+                self.btc_donchian_scanners.append(scanner)
 
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
@@ -356,15 +364,17 @@ class HVFTrader:
             self._quantum_london_threads.append(t)
             logger.info(f"Quantum London scanner started: {sym}")
 
-        # Start BTC Daily Donchian scanner (daemon thread)
-        self._btc_donchian_thread = None
-        if self.btc_donchian_scanner:
-            self._btc_donchian_thread = threading.Thread(
-                target=self.btc_donchian_scanner.start,
-                daemon=True, name="BtcDonchian",
+        # Start BTC Daily Donchian scanners (one daemon thread per instance)
+        self._btc_donchian_threads = []
+        for scanner in self.btc_donchian_scanners:
+            sym = scanner._cfg.get("instrument", "?")
+            t = threading.Thread(
+                target=scanner.start,
+                daemon=True, name=f"BtcDonchian-{sym}",
             )
-            self._btc_donchian_thread.start()
-            logger.info("BTC Daily Donchian scanner started")
+            t.start()
+            self._btc_donchian_threads.append(t)
+            logger.info(f"BTC Daily Donchian scanner started: {sym}")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -2647,8 +2657,8 @@ class HVFTrader:
         self.health_checker.stop()
         for scanner in self.quantum_london_scanners:
             scanner.stop()
-        if self.btc_donchian_scanner:
-            self.btc_donchian_scanner.stop()
+        for scanner in self.btc_donchian_scanners:
+            scanner.stop()
 
         # Flush DB
         self.trade_logger.log_event("SHUTDOWN", details="Graceful shutdown")
