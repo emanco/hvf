@@ -1,9 +1,87 @@
 # HVF Auto-Trader
 
-Automated forex trading bot running on a Windows VPS via MetaTrader 5.
-Active strategies: **KZ_HUNT**, **Quantum London**, **London Breakout**, **Night Tide**.
+Automated forex (+ crypto) trading bot running on a Windows VPS via MetaTrader 5.
+
+**Active strategies (as of 2026-06-02):**
+
+| Strategy | Pattern type | Instruments | Timeframe | Edge profile |
+|---|---|---|---|---|
+| Quantum London | `QUANTUM_LONDON` | EURGBP, EURCHF | M5 (capture at 22:00 UTC) | Mean reversion |
+| London Breakout | `LONDON_BO` | GBPUSD | H1 (Asian range, London open) | Breakout |
+| Night Tide | `NIGHT_TIDE` | AUDNZD, AUDCAD, NZDCAD, EURCHF | M15 (22-01 UTC) | BB+RSI scalper |
+| Asian Session Breakout | `ASIAN_SESSION_BREAKOUT` | GBPJPY, EURJPY | H1 (range at 07:00 UTC) | Breakout |
+| BTC Daily Donchian | `BTC_DONCHIAN` | BTCUSD, ETHUSD | D1 (55/20 lookback) | Trend following |
+
+**Disabled** (kept in repo, not running live): KZ_HUNT, HVF.
 
 For deeper architecture, strategy details, and pipeline internals see [CLAUDE.md](./CLAUDE.md).
+
+---
+
+## Continuing on another machine (handoff checklist)
+
+If you're picking up this project on a fresh laptop, work through this in order. Pre-reqs assume macOS but the steps map cleanly to Linux.
+
+```bash
+# 1. Clone
+git clone https://github.com/emanco/hvf.git ~/dev/hvf
+cd ~/dev/hvf
+
+# 2. Python env + deps
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Local env file (for ad-hoc scripts that hit MT5 — not strictly needed for backtests)
+cp .env.example .env
+# edit .env with the real credentials (kept in your password manager; never committed)
+
+# 4. SSH alias for the VPS — add to ~/.ssh/config:
+cat >> ~/.ssh/config <<'EOF'
+Host hvf-vps
+    HostName <VPS_IP>
+    User Administrator
+    IdentityFile ~/.ssh/id_ed25519
+EOF
+# Copy your existing SSH private key into ~/.ssh/id_ed25519 (or generate a
+# new one and add the public key to C:\Users\Administrator\.ssh\authorized_keys
+# on the VPS — see "Initial VPS access" below).
+
+# 5. Verify VPS is reachable
+ssh hvf-vps "C:\nssm\nssm.exe status HVF_Bot"
+# Expect: SERVICE_RUNNING
+
+# 6. Restore Claude Code memory (so the next AI session has prior context)
+mkdir -p ~/.claude/projects/-Users-$(whoami)-dev-hvf/memory
+cp docs/claude-memory/*.md \
+   ~/.claude/projects/-Users-$(whoami)-dev-hvf/memory/
+# The directory name encodes the dev path — if your repo lives somewhere
+# other than ~/dev/hvf, adjust accordingly (replace dashes with hyphens in
+# the path).
+
+# 7. Verify backtests run locally (no MT5 needed)
+python3 backtests/run_crypto_donchian.py | tail -20
+# Should print the multi-crypto Donchian results table.
+```
+
+If all six steps pass, you're set up to continue work. The bot is the source of truth — your dev machine just edits code, runs backtests, and pushes via `./deploy.sh`.
+
+**What to bring with you (not in the repo):**
+
+| Asset | Where it lives | How to recover |
+|---|---|---|
+| MT5 broker credentials | Your password manager | Re-issue from broker portal if lost |
+| Telegram bot token | Your password manager | Re-create via @BotFather if lost |
+| SSH private key for VPS | `~/.ssh/id_ed25519` on old machine | Generate new keypair, add pub to VPS `authorized_keys` |
+| VPS Administrator password | Your password manager | Reset via VPS provider console |
+
+**First thing to do on the new machine:**
+
+Read the [CLAUDE.md](./CLAUDE.md) "Current State" section to get up to speed on what the bot is currently doing. Then check the live bot:
+
+```bash
+ssh hvf-vps "C:\nssm\nssm.exe status HVF_Bot; Get-Content 'C:/hvf_trader/logs/main.log' -Tail 20"
+```
 
 ---
 
@@ -308,10 +386,20 @@ hvf_trader/             # Bot package
 └── data/               # OHLC fetcher, indicators, news filter
 
 backtests/              # Local backtest data + chart outputs
-├── data/               # H1/M30/M15/M5 CSVs per pair
-└── charts/             # PNG outputs from backtest scripts
+├── data/               # H1/M30/M15/M5 CSVs per pair (incl. BTCUSD, ETHUSD, US500)
+├── charts/             # PNG outputs from backtest scripts
+├── run_daily_donchian*.py   # Donchian backtests (FX, BTC+US500, walk-forward)
+├── run_crypto_donchian.py   # Multi-crypto Donchian sweep
+├── run_ql_news_filter.py    # News filter overlay test on QL EURCHF
+└── run_asb_threshold_compare.py  # ASB 0.4 vs 0.3 threshold test
 
-scripts/                # Backtest + analysis scripts
+docs/                   # Project documentation
+└── claude-memory/      # Snapshot of Claude Code auto-memory (see README inside)
+
+scripts/                # Operational + analysis scripts
+├── spread_snapshot.py        # On-demand broker spread capture (replaces old continuous sampler)
+└── (various deploy/inspect helpers run from VPS)
+
 deploy.sh               # Stop bot, upload, clear cache, restart
 CLAUDE.md               # Detailed project guide for AI / new contributors
 ```
