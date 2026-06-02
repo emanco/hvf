@@ -20,64 +20,89 @@ For deeper architecture, strategy details, and pipeline internals see [CLAUDE.md
 
 ## Continuing on another machine (handoff checklist)
 
-If you're picking up this project on a fresh laptop, work through this in order. Pre-reqs assume macOS but the steps map cleanly to Linux.
+The bot is the source of truth — it runs on the VPS, holds its own credentials there, and keeps its own DB. Your dev laptop only edits code, runs backtests, and pushes via `./deploy.sh`. That means **a fresh laptop needs almost nothing from the old one**.
+
+### The single must-bring: SSH access to the VPS
+
+Without SSH, you can't operate the bot. Everything else can be recovered from the repo or the VPS.
+
+You need:
+
+1. The **VPS IP address** (stick it in `~/.ssh/config`)
+2. An **SSH key pair** that's authorised on the VPS
+
+Two ways to set that up on the new laptop:
+
+**Easy:** copy your existing private key over from the old machine.
+```bash
+scp old-laptop:~/.ssh/id_ed25519 ~/.ssh/id_ed25519
+scp old-laptop:~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519.pub
+chmod 600 ~/.ssh/id_ed25519
+```
+
+**Clean:** generate a new keypair on the new laptop and add its public key to the VPS via RDP.
+```bash
+ssh-keygen -t ed25519               # on the new laptop
+# Then RDP to the VPS once (you'll need the VPS Administrator password)
+# and paste the new ~/.ssh/id_ed25519.pub contents into
+# C:\Users\Administrator\.ssh\authorized_keys
+```
+
+### Step-by-step
 
 ```bash
-# 1. Clone
+# 1. Clone the repo
 git clone https://github.com/emanco/hvf.git ~/dev/hvf
 cd ~/dev/hvf
 
-# 2. Python env + deps
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Local env file (for ad-hoc scripts that hit MT5 — not strictly needed for backtests)
-cp .env.example .env
-# edit .env with the real credentials (kept in your password manager; never committed)
-
-# 4. SSH alias for the VPS — add to ~/.ssh/config:
+# 2. SSH alias — replace <VPS_IP> with the actual IP
 cat >> ~/.ssh/config <<'EOF'
 Host hvf-vps
     HostName <VPS_IP>
     User Administrator
     IdentityFile ~/.ssh/id_ed25519
 EOF
-# Copy your existing SSH private key into ~/.ssh/id_ed25519 (or generate a
-# new one and add the public key to C:\Users\Administrator\.ssh\authorized_keys
-# on the VPS — see "Initial VPS access" below).
 
-# 5. Verify VPS is reachable
+# 3. Verify VPS access — this is the only hard prerequisite
 ssh hvf-vps "C:\nssm\nssm.exe status HVF_Bot"
 # Expect: SERVICE_RUNNING
 
-# 6. Restore Claude Code memory (so the next AI session has prior context)
+# 4. Python env + deps (for backtests + ad-hoc scripts)
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 5. Restore Claude Code memory (so AI picks up prior context)
 mkdir -p ~/.claude/projects/-Users-$(whoami)-dev-hvf/memory
 cp docs/claude-memory/*.md \
    ~/.claude/projects/-Users-$(whoami)-dev-hvf/memory/
-# The directory name encodes the dev path — if your repo lives somewhere
-# other than ~/dev/hvf, adjust accordingly (replace dashes with hyphens in
-# the path).
+# The directory name encodes the dev path: -Users-<username>-dev-hvf for
+# a repo at ~/dev/hvf. Adjust if your username or location differs.
 
-# 7. Verify backtests run locally (no MT5 needed)
+# 6. (Optional) Local .env — only needed if you run scripts that hit MT5
+#    or Telegram FROM YOUR LAPTOP. Backtests don't need it.
+scp hvf-vps:C:/hvf_trader/.env ./.env
+chmod 600 ./.env
+
+# 7. Smoke-test
 python3 backtests/run_crypto_donchian.py | tail -20
-# Should print the multi-crypto Donchian results table.
+ssh hvf-vps "Get-Content 'C:/hvf_trader/logs/main.log' -Tail 20"
 ```
 
-If all six steps pass, you're set up to continue work. The bot is the source of truth — your dev machine just edits code, runs backtests, and pushes via `./deploy.sh`.
+### Recovery cheat sheet
 
-**What to bring with you (not in the repo):**
+| Asset | Where it lives | Need it locally? | How to recover |
+|---|---|---|---|
+| **SSH private key** | `~/.ssh/id_ed25519` on old laptop | **Yes** (or generate new + RDP-add pub) | Copy or new keypair |
+| **VPS IP** | Your VPS provider's portal | **Yes** | Provider dashboard |
+| VPS Administrator password | Your password manager | Only for RDP (rarely needed) | Reset via provider console |
+| MT5 broker credentials | `C:/hvf_trader/.env` on VPS | No — `scp` if you want a local copy | Broker portal or signup email |
+| Telegram bot token | `C:/hvf_trader/.env` on VPS | No — same | `@BotFather` → `/mybots` |
+| GitHub auth | Your `gh` login on new laptop | **Yes** for `git push` | `gh auth login` |
 
-| Asset | Where it lives | How to recover |
-|---|---|---|
-| MT5 broker credentials | Your password manager | Re-issue from broker portal if lost |
-| Telegram bot token | Your password manager | Re-create via @BotFather if lost |
-| SSH private key for VPS | `~/.ssh/id_ed25519` on old machine | Generate new keypair, add pub to VPS `authorized_keys` |
-| VPS Administrator password | Your password manager | Reset via VPS provider console |
+### First thing to do once set up
 
-**First thing to do on the new machine:**
-
-Read the [CLAUDE.md](./CLAUDE.md) "Current State" section to get up to speed on what the bot is currently doing. Then check the live bot:
+Read [CLAUDE.md](./CLAUDE.md) "Current State" for the bot's current configuration, then check live status:
 
 ```bash
 ssh hvf-vps "C:\nssm\nssm.exe status HVF_Bot; Get-Content 'C:/hvf_trader/logs/main.log' -Tail 20"
