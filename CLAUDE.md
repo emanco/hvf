@@ -5,14 +5,14 @@ Automated forex trading bot running KZ Hunt (Kill Zone Hunt) strategy on 5 pairs
 
 ## Current State (as of 2026-04-01)
 - **Active strategy**: KZ_HUNT only (all 8 pairs)
-- **Disabled**: HVF (PF=0.06 live after 27 trades), Viper (net negative 10yr), London Sweep (net negative)
+- **Disabled / retired**: HVF (PF=0.06 live after 27 trades; **formally retired 2026-06-02** after backtests on gold (28y), silver (24y), and crypto (9-10y) confirmed the detector finds essentially zero patterns across all timeframes — strategy is non-viable regardless of asset class. See `backtests/run_hvf_crypto.py` and `backtests/run_hvf_gold.py`), Viper (net negative 10yr), London Sweep (net negative)
 - **Account**: IC Markets Demo, ~$10.5k balance, 1% risk per trade
 - **Account history**: Started $700 (2026-03-06), $10k deposit added 2026-03-31
 - **Phase**: Data collection — need 50+ clean trades before changing any parameters
 - **Go-live date**: 2026-03-25 (performance stats ignore trades before this)
 
 ## DO NOT
-- Enable HVF or Viper patterns — both are proven unprofitable live
+- Enable HVF or Viper patterns — both are proven unprofitable live (HVF detector also fails to find patterns on its supposed native asset class gold; the detection algorithm is broken, not the market)
 - Change KZ_HUNT parameters (RRR threshold, risk %, trailing ATR mult) until 50+ clean trades collected
 - Skip `./deploy.sh` and manually copy files — it handles cache clearing and service restart
 - Use `&&` in PowerShell commands on the VPS — use `;` instead
