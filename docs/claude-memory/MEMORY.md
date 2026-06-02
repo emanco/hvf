@@ -1,0 +1,26 @@
+- [Bot status](project_bot_status.md) — As of 2026-05-05. KZ_HUNT 4 pairs / score>=60 / flat 12p TP. QL rebuilt as FF mean-reversion (40/12.5/40 EURGBP). NIGHT_TIDE/LB unchanged. Orphan-partial bug class structurally eliminated.
+- [KZ Hunt overhaul](project_kz_hunt_live_performance.md) — 7 fixes + M30 switch. Drift gate widened 3→6p (12p JPY) on 2026-04-30 after rejecting 100% of M30 signals.
+- [KZ_HUNT exit optimum](project_kz_hunt_exit_optimum.md) — TP sweep on 117 trades: +12p PF 1.03 (best), +20p PF 0.99 (chosen, more durable). Blended/trail policies all underperform flat TP. ACTUAL was -197p / PF 0.79.
+- [KZ_HUNT filter set 2026-05-05](project_kz_hunt_filter_set_2026_05_05.md) — Live: 4 pairs (NZDUSD/EURGBP/EURJPY/EURAUD), score>=60, flat TP 12p. Backtest PF 1.33, +117p, DD 65p, MAR 1.80 vs baseline 0.21.
+- [Quantum London](project_quantum_london.md) — Rebuilt 2026-05-05 as faithful FF mean-reversion (#743125). EURGBP 40/12.5/40, capture 22:00 UTC, ~22hr hold. M5 backtest PF 2.52 (8mo, N=26). M5 fidelity confirmed vs M1.
+- [Night Tide scalper](project_quiet_hours_bbrsi.md) — Deployed 2026-04-28. 4 cross pairs, M15, 22-01 UTC (DST-aware). Backtest PF 3.03/75% WR.
+- [London Breakout](project_london_breakout.md) — 12-20p range validated optimal. Pinned to H1 (PRIMARY_TIMEFRAME is now M30 for KZ).
+- [Assessment 2026-04-15](project_assessment_2026_04_15.md) — 17 fixes shipped, dead code cleaned
+- [Never deploy at night](feedback_no_night_deploys.md) — Deploys kill QL in-flight sessions and disrupt NIGHT_TIDE. Restrict to daytime windows (~07:00–20:00 UTC). Batch changes.
+- [Telegram must match MT5](feedback_telegram_vs_mt5.md) — All PnL/balance from MT5/snapshots. /status and /balance fixed.
+- [DB PnL can be wrong](feedback_pnl_reconcile.md) — trade_records.pnl silently 0 when deal lookup fails; reconcile via equity_snapshots
+- [NSSM stuck PAUSED](feedback_nssm_paused.md) — startup crash loops leave service in PAUSED; use sc.exe stop/start to recover
+- [Update _detach_record](feedback_detach_record.md) — New PatternRecord fields must be added there
+- [Timezone is critical](feedback_timezone_critical.md) — 22:00 UTC (GMT+2) vs 00:00 UTC changes everything
+- [Midnight-crossing sessions](feedback_midnight_crossing.md) — hour >= X checks break across midnight
+- [Run backtests locally](feedback_local_backtest.md) — CSV data at backtests/data/, VPS for live only
+- [Memory monitor works](feedback_memory_monitor_works.md) — VPS memory alert (500MB threshold) caught a real leak day-1. Reboot doubled free RAM. Don't remove the heartbeat memory line.
+- [MT5 Session 0 IPC trap](feedback_mt5_session0_ipc.md) — NSSM-launched bot in Session 0 needs credentials baked into mt5.initialize() (not separate login). Fixes post-reboot crash loops.
+- [NSSM must run as user](feedback_nssm_user_account.md) — LocalSystem service spawns MT5 with system profile (AutoTrading off, retcode 10027). Run as user account so MT5 inherits saved AutoTrading=on setting.
+- [Split-order orphan fix](feedback_split_order_orphan.md) — When KZ_HUNT main ticket closes before partial (BE SL after BE_PROGRESS), partial used to orphan and lose money silently. Fixed: defer trade-close while partial is alive.
+- [QL force-exit orphan trap](feedback_ql_orphan_force_exit.md) — `_force_exit_open_trade` must `return` on close failure, never clear `_open_trade_id`. Orphaned trade 181 for 4 days; fixed 2026-05-22 (commit adcf46e). Rollover-halt cause solved: force_exit moved 21→20 UTC.
+- [Log timestamps are local](feedback_log_timezone_local.md) — VPS logs use BST (UTC+1), but config hours are UTC. Subtract 1 when correlating. Burned an hour on this 2026-05-22.
+- [FX rate via tick_value](feedback_fx_rate_via_tick_value.md) — Derive fx_rate from `trade_tick_value` on the traded symbol; IC Markets won't tick non-traded conversion pairs even after symbol_select. Fixed 2026-05-26.
+- [Estimated PnL sweep 2026-05-26](feedback_pnl_estimate_sweep.md) — All 11 estimated-PnL trades were wrong (net $432 swing). Late-update retry extended to 7 days. Don't trust trade_records.pnl when pnl_estimated=1.
+- [Spread sampler retired](feedback_sampler_mt5_stale.md) — Continuous sampler decommissioned 2026-06-01. Use `scripts/spread_snapshot.py --minutes N --pairs X Y` on demand instead.
+- [Instruments](project_instruments_update.md) — Now 6 KZ_HUNT pairs (dropped GBPJPY, CHFJPY)
