@@ -428,6 +428,12 @@ class OrderManager:
 
         result = []
         for pos in positions:
+            # Cheap per-position symbol_info lookup so reconciliation can use
+            # broker-actual tick size for SL-mismatch tolerance instead of a
+            # PIP_VALUES guess that's wrong for crypto/indices/metals.
+            sinfo = mt5.symbol_info(pos.symbol)
+            point = sinfo.point if sinfo else 0.0
+            digits = sinfo.digits if sinfo else 5
             result.append({
                 "ticket": pos.ticket,
                 "symbol": pos.symbol,
@@ -440,6 +446,8 @@ class OrderManager:
                 "time": datetime.fromtimestamp(pos.time, tz=timezone.utc),
                 "magic": pos.magic,
                 "comment": pos.comment,
+                "point": point,
+                "digits": digits,
             })
 
         return result

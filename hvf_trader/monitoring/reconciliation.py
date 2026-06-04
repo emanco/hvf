@@ -275,16 +275,32 @@ class Reconciliator:
             actual_sl = pos.get("sl", 0)
 
             if expected_sl and actual_sl:
-                pip_value = config.PIP_VALUES.get(trade.symbol, 0.0001)
-                diff_pips = abs(expected_sl - actual_sl) / pip_value
+                # Tolerance: 5 broker ticks. This correctly handles all
+                # symbol classes (forex / crypto / metals / indices) without
+                # depending on PIP_VALUES being maintained for every symbol.
+                # PIP_VALUES default of 0.0001 was wrong for crypto (caused
+                # spurious 44-"pip" warnings on ETHUSD when diff was actually
+                # half a cent of price).
+                tick_size = pos.get("point") or config.PIP_VALUES.get(trade.symbol, 0.0001)
+                tolerance = 5 * tick_size
+                diff_price = abs(expected_sl - actual_sl)
 
-                if diff_pips > 1:  # More than 1 pip difference
+                if diff_price > tolerance:
+                    # Report in pips if forex (PIP_VALUES has an entry < 0.01);
+                    # otherwise in raw price units for crypto/metals/indices.
+                    pip = config.PIP_VALUES.get(trade.symbol)
+                    if pip and pip <= 0.01 and "JPY" not in trade.symbol:
+                        diff_disp = f"diff={diff_price/pip:.1f} pips"
+                    elif pip == 0.01 and "JPY" in trade.symbol:
+                        diff_disp = f"diff={diff_price/pip:.1f} pips"
+                    else:
+                        diff_disp = f"diff={diff_price:.4f} price"
                     discrepancy = {
                         "type": "SL_MISMATCH",
                         "details": (
-                            f"Trade {trade.id} SL mismatch: "
-                            f"expected={expected_sl:.5f}, actual={actual_sl:.5f} "
-                            f"(diff={diff_pips:.1f} pips)"
+                            f"Trade {trade.id} {trade.symbol} SL mismatch: "
+                            f"expected={expected_sl} actual={actual_sl} "
+                            f"({diff_disp}, tol={tolerance:.4f})"
                         ),
                         "trade_id": trade.id,
                         "ticket": ticket,
