@@ -464,12 +464,21 @@ QUANTUM_LONDON = {
             "target_pips": 12.5,
             "stop_pips": 40,
         },
-        {   # EURCHF — IC Markets 4yr backtest PF 1.23, 90% fire rate, 85% WR
-            "instrument": "EURCHF",
-            "trigger_pips": 20,
-            "target_pips": 5,
-            "stop_pips": 20,
-        },
+        # EURCHF — DISABLED 2026-06-04 after 9 live trades, 4W 5L, net -$266.
+        # Structural problems:
+        #   - 5p TP / 1.3p spread = 26% friction per win
+        #   - 20p SL gives 1:4 R:R; needs ~85% WR after friction
+        #   - No news filter; 2 of 9 trades hit full SL on scheduled news
+        #     (CHF GDP 06-01, USD ISM Services 06-03)
+        # Backtest PF 1.23 over 4 years didn't survive live broker tax and
+        # news exposure. EURGBP instance below uses wider 40/12.5/40 params
+        # and is kept for now (limited live data).
+        # {
+        #     "instrument": "EURCHF",
+        #     "trigger_pips": 20,
+        #     "target_pips": 5,
+        #     "stop_pips": 20,
+        # },
     ],
 }
 
