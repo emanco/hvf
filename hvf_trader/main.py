@@ -206,6 +206,23 @@ class HVFTrader:
                 )
                 self.btc_donchian_scanners.append(scanner)
 
+        # ─── NR7 breakout on equity indices ──────────────────────────
+        self.nr7_scanners = []
+        if config.NR7_BREAKOUT.get("enabled"):
+            from hvf_trader.nr7_scanner import Nr7Scanner
+            for instance_cfg in config.NR7_BREAKOUT.get("instances", []):
+                merged_cfg = {**config.NR7_BREAKOUT, **instance_cfg}
+                merged_cfg.pop("instances", None)
+                scanner = Nr7Scanner(
+                    order_manager=self.order_manager,
+                    trade_logger=self.trade_logger,
+                    connector=self.connector,
+                    circuit_breaker=self.circuit_breaker,
+                    alerter=self.alerter,
+                    cfg=merged_cfg,
+                )
+                self.nr7_scanners.append(scanner)
+
         # ─── Multi-Pattern Detectors ───────────────────────────────────
         self._kz_trackers: dict[str, KillZoneTracker] = {}
         for sym in config.INSTRUMENTS:
@@ -375,6 +392,18 @@ class HVFTrader:
             t.start()
             self._btc_donchian_threads.append(t)
             logger.info(f"BTC Daily Donchian scanner started: {sym}")
+
+        # Start NR7 breakout scanners (one daemon thread per index)
+        self._nr7_threads = []
+        for scanner in self.nr7_scanners:
+            sym = scanner._cfg.get("instrument", "?")
+            t = threading.Thread(
+                target=scanner.start,
+                daemon=True, name=f"NR7-{sym}",
+            )
+            t.start()
+            self._nr7_threads.append(t)
+            logger.info(f"NR7 breakout scanner started: {sym}")
 
         # Start Telegram command listener (daemon thread)
         self.telegram_commands.start()
@@ -2658,6 +2687,8 @@ class HVFTrader:
         for scanner in self.quantum_london_scanners:
             scanner.stop()
         for scanner in self.btc_donchian_scanners:
+            scanner.stop()
+        for scanner in self.nr7_scanners:
             scanner.stop()
 
         # Flush DB

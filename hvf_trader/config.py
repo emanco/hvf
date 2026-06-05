@@ -602,6 +602,45 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["BTC_DONCHIAN"] = 0  # trail via Donchian extr
 MIN_STOP_PIPS_BY_PATTERN["BTC_DONCHIAN"] = 0           # bypass — BTCUSD uses dollar stops not pip stops
 PATTERN_FRESHNESS_BARS["BTC_DONCHIAN"] = 1
 
+# ─── NR7 Breakout on equity indices ──────────────────────────────────────────
+# Volatility-compression-then-expansion strategy on D1. If today's range is the
+# narrowest of the last 7 days (NR7), place BUY_STOP at today's high and
+# SELL_STOP at today's low for tomorrow. Whichever fires becomes the trade;
+# the other is cancelled. Trail SL via 10-day opposite extreme.
+#
+# Backtest cross-validation 2026-06-05 — all four indices, 14 years each:
+#   US500: PF 5.46  CAGR 18.7%  MAR 15.6
+#   DE40:  PF 5.74  CAGR 17.9%  MAR 10.4
+#   JP225: PF 4.04  CAGR 18.2%  MAR  5.5
+#   UK100: PF 5.55  CAGR 16.6%  MAR 14.2
+# Walk-forward: every 3-year window since 2013 positive on every index.
+# Friction-robust: PF still 3.92 at 10x assumed round-trip cost.
+#
+# Deployed at 0.5% risk per trade for first month to bound surprise downside.
+# Scale to 1% after 30 live trades if performance tracks backtest expectation.
+NR7_BREAKOUT = {
+    "enabled": True,
+    "pattern_type": "NR7_BREAKOUT",
+    "nr_lookback": 7,                  # today's range = min of past N
+    "atr_period": 14,
+    "atr_stop_multiplier": 1.0,        # initial stop = 1x ATR
+    "exit_lookback_days": 10,          # trailing extreme
+    "risk_pct": 0.5,                   # half-size first month
+    "poll_interval_sec": 60,
+    "magic": 20260605,                 # distinct from other strategies
+    "alert_on_detection": True,
+    "instances": [
+        {"instrument": "US500"},
+        {"instrument": "DE40"},
+    ],
+}
+
+RISK_PCT_BY_PATTERN["NR7_BREAKOUT"] = NR7_BREAKOUT["risk_pct"]
+MIN_RRR_BY_PATTERN["NR7_BREAKOUT"] = 0.0
+TRAILING_STOP_ATR_MULT_BY_PATTERN["NR7_BREAKOUT"] = 0
+MIN_STOP_PIPS_BY_PATTERN["NR7_BREAKOUT"] = 0
+PATTERN_FRESHNESS_BARS["NR7_BREAKOUT"] = 1
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,

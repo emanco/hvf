@@ -142,7 +142,7 @@ class TradeMonitor:
         # own scanners
         if trade_record.pattern_type in (
             "ASIAN_GRAVITY", "LONDON_BO", "QUANTUM_LONDON", "NIGHT_TIDE",
-            "ASIAN_SESSION_BREAKOUT", "BTC_DONCHIAN",
+            "ASIAN_SESSION_BREAKOUT", "BTC_DONCHIAN", "NR7_BREAKOUT",
         ):
             return
         ticket = trade_record.mt5_ticket
