@@ -2199,19 +2199,24 @@ class HVFTrader:
                 pos.ticket, sym, trade.direction, "ASB_TIME_STOP"
             )
             if res:
+                # close_position returns {"fill_price": ...} — never "close_price"
+                # or "profit". Take the fill from the close result and the dollar
+                # PnL from the position's floating profit captured before close
+                # (matches trade_monitor._close_trade).
+                close_price = res["fill_price"] if isinstance(res, dict) else pos.price_current
+                pnl = pos.profit
                 pip = 0.01 if "JPY" in sym else 0.0001
                 if trade.direction == "LONG":
-                    pnl_pips = (res["close_price"] - trade.entry_price) / pip
+                    pnl_pips = (close_price - trade.entry_price) / pip
                 else:
-                    pnl_pips = (trade.entry_price - res["close_price"]) / pip
+                    pnl_pips = (trade.entry_price - close_price) / pip
                 self.trade_logger.log_trade_close(
-                    trade.id, res["close_price"],
-                    res.get("profit", 0.0), pnl_pips, "TIME_STOP",
+                    trade.id, close_price, pnl, pnl_pips, "TIME_STOP",
                 )
                 st["open_trade_id"] = None
                 logger.info(
                     f"[ASB] {sym} EOD time-stop: closed @ "
-                    f"{res['close_price']:.5f}, pnl {pnl_pips:+.1f}p"
+                    f"{close_price:.5f}, pnl {pnl_pips:+.1f}p (${pnl:+.2f})"
                 )
 
     def _get_quote_to_account_rate(self, symbol: str) -> float:

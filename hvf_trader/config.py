@@ -449,7 +449,11 @@ PATTERN_FRESHNESS_BARS["ASIAN_GRAVITY"] = 1
 # tight reverts often → tight params win. EURGBP has bigger ranges → wide
 # params catch real reversals, tight ones get noise-shaken.
 QUANTUM_LONDON = {
-    "enabled": True,
+    # RETIRED 2026-06-22: EURCHF instance disabled 2026-06-04 (-$225, low-R:R fade
+    # needing ~85% WR). Remaining EURGBP instance (R:R 0.31, needs ~76% WR) was 0/4 on
+    # clean live trades and dormant since 2026-05-18. Same fragile design that killed
+    # EURCHF. Config kept intact for backtest history.
+    "enabled": False,
     "pattern_type": "QUANTUM_LONDON",
     "risk_pct": 1.0,
     "capture_timeframe": "M5",
