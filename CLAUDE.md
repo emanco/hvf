@@ -1,19 +1,28 @@
 # HVF Auto-Trader — Project Guide
 
 ## What This Is
-Automated forex trading bot running KZ Hunt (Kill Zone Hunt) strategy on 5 pairs via MetaTrader 5. Deployed to a Windows VPS, managed as an NSSM service. Python, SQLAlchemy, Telegram alerts.
+Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, and equity indices. Started as a single KZ Hunt forex bot; now runs a portfolio of independent strategies, each on its own scanner thread. Deployed to a Windows VPS, managed as an NSSM service. Python, SQLAlchemy, Telegram alerts.
 
-## Current State (as of 2026-04-01)
-- **Active strategy**: KZ_HUNT only (all 8 pairs)
-- **Disabled / retired**: HVF (PF=0.06 live after 27 trades; **formally retired 2026-06-02** after backtests on gold (28y), silver (24y), and crypto (9-10y) confirmed the detector finds essentially zero patterns across all timeframes — strategy is non-viable regardless of asset class. See `backtests/run_hvf_crypto.py` and `backtests/run_hvf_gold.py`), Viper (net negative 10yr), London Sweep (net negative)
-- **Account**: IC Markets Demo, ~$10.5k balance, 1% risk per trade
+## Current State (as of 2026-06-22)
+- **Active strategies** (each its own scanner thread; `ENABLED_PATTERNS` for the main loop is now `[]`):
+  - **NIGHT_TIDE** — M15 BB+RSI mean reversion on 4 cross pairs (AUDNZD, NZDCAD, AUDCAD, EURCHF), 22:00–01:00 UTC (DST-aware). **Best live performer** (PF ~2.15, +$316 last 30d). 1% risk.
+  - **ASIAN_SESSION_BREAKOUT (ASB)** — Asian-range breakout on GBPJPY + EURJPY, pending stop orders, EOD force-close 20:00 UTC. Research mode at 0.5% risk (collecting 30–50 fills).
+  - **LONDON_BREAKOUT (LONDON_BO)** — GBPUSD Asian-range breakout, Mon/Tue only, H1. 1% risk.
+  - **BTC_DONCHIAN** — daily Donchian (55/20, Turtle S2 variant) on BTCUSD + ETHUSD, trailing exits. 1% risk, LIVE.
+  - **NR7_BREAKOUT** — daily NR7 compression breakout on US500 + DE40 indices, stop orders + trailing. Research mode at 0.5% risk.
+- **Disabled / retired**:
+  - **KZ_HUNT** — disabled 2026-05-15. Geometric-validity ablation showed honest PF 0.44 (the apparent edge was fake quick wins from SL-on-profit-side mechanics). Detector/scorer code retained as reference (see KZ Hunt section below).
+  - **QUANTUM_LONDON** — retired 2026-06-22 after −$631 lifetime live (PF 0.28). Low-R:R mean-reversion fade needing ~76–85% WR; never survived broker friction. EURCHF instance died 2026-06-04. Config kept for backtest history.
+  - **HVF** — retired 2026-06-02 (detector finds ~zero patterns across gold/silver/crypto; algorithm is broken). **Viper**, **London Sweep** — net negative.
+- **Account**: IC Markets Demo, ~$7.9k balance, risk per trade varies by strategy (0.5–1%)
 - **Account history**: Started $700 (2026-03-06), $10k deposit added 2026-03-31
-- **Phase**: Data collection — need 50+ clean trades before changing any parameters
 - **Go-live date**: 2026-03-25 (performance stats ignore trades before this)
+- **DB caveat**: `trade_records.pnl` is unreliable when `pnl_estimated=1` (deal lookup failed). Exclude estimated trades when ranking strategy performance.
 
 ## DO NOT
-- Enable HVF or Viper patterns — both are proven unprofitable live (HVF detector also fails to find patterns on its supposed native asset class gold; the detection algorithm is broken, not the market)
-- Change KZ_HUNT parameters (RRR threshold, risk %, trailing ATR mult) until 50+ clean trades collected
+- Re-enable retired strategies — HVF, Viper, QUANTUM_LONDON, KZ_HUNT are all proven unprofitable live (see Current State for each)
+- Change params on research-mode strategies (ASB, NR7_BREAKOUT) until 30–50 clean live fills collected — they're at half-size (0.5%) for exactly this reason
+- Retire a limit-order strategy by only flipping `enabled: False` — that orphans any filled limit order (not in DB; reconciliation won't adopt it) and leaves resting pending orders. Manually flatten positions + cancel pendings via MT5 after disabling (see QL retirement, 2026-06-22)
 - Skip `./deploy.sh` and manually copy files — it handles cache clearing and service restart
 - Use `&&` in PowerShell commands on the VPS — use `;` instead
 - Call `session.close()` anywhere — thread-local scoped sessions manage their own lifecycle
@@ -24,15 +33,20 @@ Automated forex trading bot running KZ Hunt (Kill Zone Hunt) strategy on 5 pairs
 
 ## Architecture
 
-### 4 Threads
+### Threads
+The main scanner loop hosts **NIGHT_TIDE, ASB, and LONDON_BO inline** (`_scan_night_tide`, `_scan_asb`, plus the disabled KZ_HUNT pipeline). **BTC_DONCHIAN and NR7_BREAKOUT each run their own scanner thread.** QUANTUM_LONDON (`quantum_london_scanner.py`) and ASIAN_GRAVITY (`asian_gravity_scanner.py`) also have dedicated-thread machinery but are both currently disabled.
+
 | Thread | File | Interval | Purpose |
 |--------|------|----------|---------|
-| Scanner (main) | `main.py:_scanner_loop` | 60s | Detect patterns, arm, confirm entries, execute |
+| Scanner (main) | `main.py:_scanner_loop` | 60s | KZ_HUNT pipeline (disabled) + NIGHT_TIDE / ASB / LONDON_BO scan/arm/execute, all inline |
+| BTC_DONCHIAN | `btc_donchian_scanner.py` | 60s | Daily Donchian on BTCUSD/ETHUSD |
+| NR7_BREAKOUT | `nr7_scanner.py` | 60s | Daily NR7 breakout on US500/DE40 |
 | Trade Monitor | `trade_monitor.py` | 30s | Partials at T1, trailing stops, invalidation, server-close detection |
 | Health Check | `health_check.py` | 60s | MT5 heartbeat, reconnection with exponential backoff |
 | Telegram Commands | `telegram_commands.py` | polling | /status, /health, /trades, /equity, /balance, /closeall |
 
 ### Pipeline: Detection to Execution
+*(KZ_HUNT-specific — disabled since 2026-05-15. Active strategies have their own simpler detect→arm→execute flows in their respective scanners.)*
 ```
 fetch_and_prepare (H1 OHLCV + ATR/EMA/ADX)
   → KillZoneTracker.update (track session highs/lows)
@@ -75,6 +89,8 @@ Every 30s (trade_monitor):
 ---
 
 ## KZ Hunt Strategy
+
+> **⚠️ DISABLED since 2026-05-15** (honest PF 0.44 — see Current State). The detector/scorer/tracker code and this section are retained as reference and for backtesting, but KZ_HUNT does not trade live. The backtest figures below predate the geometric-validity fix that exposed the real edge as ~zero.
 
 ### What It Is
 Session-reversal strategy. Price reaches a Kill Zone extreme (session high/low), prints a rejection candle (wick > 2x body), and reverses. Not a Francis Hunt original — it's a composite of his KZ timing concepts, ICT/Smart Money session theory, and TradingView community work. Trade management (partial close + trail) borrowed from Hunt's HVF approach.
@@ -190,18 +206,24 @@ C:\hvf_trader\venv\Scripts\python.exe -c "import sqlite3; conn = sqlite3.connect
 
 ## Configuration Quick Reference (config.py)
 
+Each strategy is its own dict in `config.py` with an `enabled` flag and its own params. The main-loop pattern list and per-pattern dicts are now keyed by many strategies; the snapshot below reflects the current state:
+
 ```
-ENABLED_PATTERNS = ["KZ_HUNT"]
-INSTRUMENTS = ["EURUSD", "NZDUSD", "EURGBP", "USDCHF", "EURAUD", "GBPJPY", "EURJPY", "CHFJPY"]
-RISK_PCT_BY_PATTERN = {"KZ_HUNT": 1.0}          # 1% equity per trade
-MIN_RRR_BY_PATTERN = {"KZ_HUNT": 1.0}            # minimum reward:risk
-SCORE_THRESHOLD_BY_PATTERN = {"KZ_HUNT": 50}     # minimum score to arm
-PARTIAL_CLOSE_PCT = 0.60                          # close 60% at T1
-TRAILING_STOP_ATR_MULT_BY_PATTERN = {"KZ_HUNT": 1.0}  # trail at 1x ATR
-MIN_STOP_PIPS_BY_PATTERN = {"KZ_HUNT": 8}        # reject < 8 pip stops
-PATTERN_FRESHNESS_BARS = {"KZ_HUNT": 24}          # expires after 24 H1 bars
+ENABLED_PATTERNS = []                # main-loop patterns (KZ_HUNT) all disabled 2026-05-15
+INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # KZ_HUNT universe (only used if KZ re-enabled)
+
+# Per-strategy dicts (each with "enabled"):
+QUANTUM_LONDON       = {"enabled": False, ...}            # retired 2026-06-22
+ASIAN_GRAVITY        = {"enabled": False, ...}            # superseded by QL (also retired)
+NIGHT_TIDE           = {"enabled": True,  "instruments": ["AUDNZD","NZDCAD","AUDCAD","EURCHF"], "timeframe": "M15", "stop_pips": 12, "risk_pct": 1.0}
+ASIAN_SESSION_BREAKOUT = {"enabled": True, "instruments": ["GBPJPY","EURJPY"], "risk_pct": 0.5, "eod_force_close_hour": 20}
+LONDON_BREAKOUT      = {"enabled": True,  "instrument": "GBPUSD", "days": [0,1], "risk_pct": 1.0}
+BTC_DONCHIAN         = {"enabled": True,  "instances": ["BTCUSD","ETHUSD"], "entry_lookback_days": 55, "exit_lookback_days": 20, "risk_pct": 1.0}
+NR7_BREAKOUT         = {"enabled": True,  "instances": ["US500","DE40"], "nr_lookback": 7, "risk_pct": 0.5}
+
+# Global risk caps (apply across all strategies):
 MAX_CONCURRENT_TRADES = 6
-MAX_SPREAD_PCT_OF_STOP = 0.10                     # 10% of stop distance
+MAX_SPREAD_PCT_OF_STOP = 0.10
 DAILY_LOSS_LIMIT_PCT = 5.0
 WEEKLY_LOSS_LIMIT_PCT = 8.0
 MONTHLY_LOSS_LIMIT_PCT = 15.0
