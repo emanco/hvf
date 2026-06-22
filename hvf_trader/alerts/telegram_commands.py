@@ -124,6 +124,7 @@ class TelegramCommandHandler:
             "/trades": self._cmd_trades,
             "/equity": self._cmd_equity,
             "/balance": self._cmd_balance,
+            "/memory": self._cmd_memory,
             "/review": self._cmd_review,
             "/closeall": self._cmd_closeall,
             "/help": self._cmd_help,
@@ -145,6 +146,7 @@ class TelegramCommandHandler:
             "/trades - Open trades\n"
             "/equity - Equity chart since go-live\n"
             "/balance - Current balance + PnL\n"
+            "/memory - VPS physical memory health\n"
             "/review - Daily execution review (ops + perf)\n"
             "/closeall - Close all trades + expire armed patterns\n"
             "/help - This message"
@@ -379,6 +381,31 @@ class TelegramCommandHandler:
             f"Equity: <b>{cs}{equity:,.2f}</b>\n"
             f"Total PnL: <b>{cs}{total_pnl:+.2f}</b>\n"
             f"Trades: {trade_count} (WR: {wr:.0f}%)"
+        )
+        self.alerter.send_message(text)
+
+    def _cmd_memory(self):
+        """Report VPS physical memory health (same source as heartbeat + low-mem alert)."""
+        from hvf_trader.monitoring.memory_monitor import read_memory_mb
+
+        mem = read_memory_mb()
+        if not mem:
+            self.alerter.send_message(
+                "<b>\U0001F9E0 VPS Memory</b>\n\nUnavailable (non-Windows host)"
+            )
+            return
+
+        threshold = config.MEMORY_ALERT_THRESHOLD_MB
+        avail = mem["avail_mb"]
+        healthy = avail >= threshold
+        emoji = "✅" if healthy else "⚠️"
+        used_mb = mem["total_mb"] - avail
+        text = (
+            f"<b>\U0001F9E0 VPS Memory</b>\n\n"
+            f"Status: {emoji} <b>{'OK' if healthy else 'LOW'}</b>\n"
+            f"Used: <b>{used_mb:.0f}</b> / {mem['total_mb']:.0f} MB ({mem['percent_used']}%)\n"
+            f"Free: <b>{avail:.0f} MB</b>\n"
+            f"Alert threshold: {threshold} MB free"
         )
         self.alerter.send_message(text)
 
