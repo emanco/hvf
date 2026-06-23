@@ -180,13 +180,19 @@ class BacktestEngine:
         enabled_patterns: list[str] = None,
         simulate_news_blocks: bool = False,
         simulate_circuit_breaker: bool = False,
-        # Friction realism — defaults restore the legacy flat-1.5p behavior
-        # for backward compat. Set use_realistic_spread=True to enable the
-        # per-symbol+hour model (recommended for any honest validation).
-        use_realistic_spread: bool = False,
+        # Friction realism. Defaults are now HONEST (2026-06-23 harness
+        # hardening): per-symbol+hour spread model ON, and per-round-trip
+        # commission charged. Pass use_realistic_spread=False /
+        # commission_per_lot_roundtrip=0.0 to reproduce the old optimistic
+        # flat-1.5p, zero-commission behavior for A/B comparison.
+        use_realistic_spread: bool = True,
         slippage_pips: float | None = None,
         slippage_random: bool = False,
         spread_percentile: str = "median",
+        # Round-trip commission in account currency per 1.0 lot. IC Markets
+        # Raw Spread ≈ $3.50/side → $7.00 round-trip. Subtracted from each
+        # closed trade's PnL (both currency and pip-equivalent).
+        commission_per_lot_roundtrip: float = 7.0,
     ):
         self.starting_equity = starting_equity
         self.risk_pct = risk_pct or config.RISK_PCT
@@ -203,6 +209,7 @@ class BacktestEngine:
         self.slippage_pips = slippage_pips
         self.slippage_random = slippage_random
         self.spread_percentile = spread_percentile
+        self.commission_per_lot_roundtrip = commission_per_lot_roundtrip
 
     def _spread_pips_for(self, symbol: str, hour_utc: int) -> float:
         """Return the entry-side spread in pips at the given symbol/hour."""
@@ -944,3 +951,15 @@ class BacktestEngine:
         # Approximate currency PnL (simplified)
         contract_size = 100000
         trade.pnl_currency = trade.pnl_pips * pip_value * trade.lot_size * contract_size
+
+        # Round-trip commission. Subtract from both the currency PnL (which
+        # drives profit factor) and the pip PnL (which drives win/loss
+        # classification, so a marginal +TP trade that commission turns
+        # negative is correctly counted as a loser). The pip-equivalent is
+        # lot-independent: commission_usd / value-per-pip-per-lot.
+        if self.commission_per_lot_roundtrip:
+            commission_usd = self.commission_per_lot_roundtrip * trade.lot_size
+            trade.pnl_currency -= commission_usd
+            value_per_pip_per_lot = pip_value * contract_size
+            if value_per_pip_per_lot > 0:
+                trade.pnl_pips -= self.commission_per_lot_roundtrip / value_per_pip_per_lot

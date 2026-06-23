@@ -213,6 +213,7 @@ def run_walk_forward(
     slippage_random: bool = True,
     slippage_pips: float | None = None,
     spread_percentile: str = "median",
+    commission_per_lot_roundtrip: float = 7.0,
     enforce_locked_params: bool = True,
 ) -> WalkForwardResult:
     """
@@ -265,6 +266,7 @@ def run_walk_forward(
             slippage_random=slippage_random,
             slippage_pips=slippage_pips,
             spread_percentile=spread_percentile,
+            commission_per_lot_roundtrip=commission_per_lot_roundtrip,
         )
 
     # Generate windows
