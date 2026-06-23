@@ -60,7 +60,12 @@ def compute_atr(df, period=14):
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
 
-def nr7_breakout(d1: pd.DataFrame, rt_cost: float):
+def nr7_breakout(d1: pd.DataFrame, rt_cost: float, gap_fill: bool = True):
+    """gap_fill=True models realistic stop-order fills: if the next bar gaps
+    OPEN through the breakout level, the fill is at the open (worse), not the
+    exact stop level. This is the main optimism in the original sim — index
+    futures gap overnight, so a buy-stop at yesterday's high often fills above
+    it. gap_fill=False reproduces the old exact-stop-fill assumption."""
     df = d1.copy()
     df["range"] = df["high"] - df["low"]
     df["atr"] = compute_atr(df).shift(1)
@@ -109,15 +114,21 @@ def nr7_breakout(d1: pd.DataFrame, rt_cost: float):
             buy_stop = row["high"]
             sell_stop = row["low"]
             atr = row["atr"]
+            n_open = next_row["open"]
+            # Realistic stop-order fill: a buy-stop fills at max(level, open)
+            # (gap-up opens above the level → fill at the worse open price);
+            # a sell-stop fills at min(level, open).
+            long_fill = max(buy_stop, n_open) if gap_fill else buy_stop
+            short_fill = min(sell_stop, n_open) if gap_fill else sell_stop
             if next_row["high"] >= buy_stop and next_row["low"] <= sell_stop:
                 if next_row["close"] > next_row["open"]:
-                    direction, entry, stop = "LONG", buy_stop, buy_stop - atr
+                    direction, entry, stop = "LONG", long_fill, buy_stop - atr
                 else:
-                    direction, entry, stop = "SHORT", sell_stop, sell_stop + atr
+                    direction, entry, stop = "SHORT", short_fill, sell_stop + atr
             elif next_row["high"] >= buy_stop:
-                direction, entry, stop = "LONG", buy_stop, buy_stop - atr
+                direction, entry, stop = "LONG", long_fill, buy_stop - atr
             elif next_row["low"] <= sell_stop:
-                direction, entry, stop = "SHORT", sell_stop, sell_stop + atr
+                direction, entry, stop = "SHORT", short_fill, sell_stop + atr
             else:
                 continue
             open_trade = Trade(
