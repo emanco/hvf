@@ -72,46 +72,58 @@ def build_strategy_scorecard(trade_logger) -> str:
         agg.setdefault(pt, {"n": 0, "w": 0, "gw": 0.0, "gl": 0.0,
                             "est": 0, "open": 0})["open"] += 1
 
-    def live_pf(d):
+    def live_str_and_val(d):
         if d["n"] == 0:
-            return "—"
+            return "—", None
         if d["gl"] == 0:
-            return "∞"
-        return f"{d['gw'] / d['gl']:.2f}"
+            return "∞", float("inf")
+        v = d["gw"] / d["gl"]
+        return f"{v:.2f}", v
 
-    # order: active first (by reference order), then others present
-    order = [k for k in _REFERENCE if k in agg or _REFERENCE[k][1] == "active"]
-    for k in agg:
-        if k not in order:
-            order.append(k)
+    def status_dot(live_val, bkt_val):
+        """⚪ no data · 🟢 tracking · 🟡 soft · 🔴 well below backtest."""
+        if live_val is None:
+            return "⚪"
+        if bkt_val is None:
+            return "🟢"
+        ratio = live_val / bkt_val
+        if ratio >= 0.7:
+            return "🟢"
+        if ratio >= 0.4:
+            return "🟡"
+        return "🔴"
 
+    # Active strategies only, in reference order — retired/off are dropped.
     lines = [
         "<b>📋 Strategy Scorecard</b>",
         f"<i>live (since {go_live}) vs honest backtest</i>",
-        "<pre>",
-        f"{'strat':<10}{'livePF':>7}{'bktPF':>7}{'N':>4}{'WR':>5}{'open':>5}",
-        "-" * 38,
+        "",
     ]
-    for pt in order:
-        d = agg.get(pt)
-        if not d:
+    total_est = 0
+    for pt, (bkt_s, status) in _REFERENCE.items():
+        if status != "active":
             continue
-        bkt, status = _REFERENCE.get(pt, ("?", "other"))
-        name = _SHORT.get(pt, pt[:9])
-        wr = f"{100 * d['w'] / d['n']:.0f}%" if d["n"] else "—"
-        tag = f" ({status})" if status and status != "active" else ""
-        lines.append(
-            f"{name:<10}{live_pf(d):>7}{bkt:>7}{d['n']:>4}{wr:>5}{d['open']:>5}{tag}"
-        )
-    lines.append("</pre>")
+        d = agg.get(pt, {"n": 0, "w": 0, "gw": 0.0, "gl": 0.0, "est": 0, "open": 0})
+        total_est += d["est"]
+        live_str, live_val = live_str_and_val(d)
+        try:
+            bkt_val = float(bkt_s.replace("~", ""))
+        except ValueError:
+            bkt_val = None
+        name = _SHORT.get(pt, pt)
+        if d["n"]:
+            detail = f"{d['n']}T · {100 * d['w'] / d['n']:.0f}% WR"
+        else:
+            detail = "no closed trades"
+        if d["open"]:
+            detail += f" · {d['open']} open"
+        lines.append(f"{status_dot(live_val, bkt_val)} <b>{name}</b>")
+        lines.append(f"   live <b>{live_str}</b>  vs  backtest {bkt_s}   ({detail})")
 
-    total_est = sum(d["est"] for d in agg.values())
+    lines.append("")
     lines.append(
-        "livePF excludes estimated-PnL trades"
+        "<i>livePF excludes estimated-PnL trades"
         + (f" ({total_est} excluded)" if total_est else "")
-        + ". — = no clean closed trades yet."
-    )
-    lines.append(
-        "<i>Samples are tiny — read as a watch, not a verdict.</i>"
+        + ". Samples are tiny — a watch, not a verdict.</i>"
     )
     return "\n".join(lines)
