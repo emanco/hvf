@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 DISPLAY_TZ = ZoneInfo("Europe/London")  # GMT/BST — used for Telegram display + scheduling
 
 # ─── Instruments ─────────────────────────────────────────────────────────────
-INSTRUMENTS = ["NZDUSD", "EURGBP", "EURJPY", "EURAUD"]   # 2026-05-05: 4-pair subset. EURAUD added back after what-if showed score>=60 filter rescues it (PF 0.96→1.12, biggest total-pip contribution at +117p combined, vs 3-pair +97p). Trade-off: PF 1.51→1.33, DD 38p→65p, MAR 2.54→1.80. More volume for compounding. Dropped EURUSD (still PF 0.82 even with score filter), USDCHF, GBPJPY, CHFJPY.
+INSTRUMENTS = ["NZDUSD", "EURGBP", "EURAUD"]   # 3-pair (EURJPY removed 2026-06-26, KZ disabled). 2026-05-05: was 4-pair subset. EURAUD added back after what-if showed score>=60 filter rescues it (PF 0.96→1.12, biggest total-pip contribution at +117p combined, vs 3-pair +97p). Trade-off: PF 1.51→1.33, DD 38p→65p, MAR 2.54→1.80. More volume for compounding. Dropped EURUSD (still PF 0.82 even with score filter), USDCHF, GBPJPY, CHFJPY.
 # XAUUSD: add to INSTRUMENTS when WEDGE or gold-specific KZ_HUNT goes live.
 # Currently available for backtesting only.
 # Which pattern detectors to run live. Others remain available for backtesting.
@@ -551,8 +551,8 @@ ASIAN_SESSION_BREAKOUT = {
     "eod_force_close_hour": 20,       # UTC — force-close any open position
     "min_range_pct_adr": 0.4,         # default min: range >= 0.4 * ADR(14). Per-pair backtest 2026-05-26 showed 0.4 PF=1.97 vs 0.3 PF=1.50 — extra trades from 0.3 dilute edge. GBPJPY edge is narrow (PF 3.66 at 0.4 -> 1.62 at 0.3); EURJPY flat (PF 1.33 vs 1.38). Per-pair override below for EURJPY.
     "min_range_pct_adr_by_symbol": {
-        "EURJPY": 0.3,                 # EURJPY edge survives the lower gate per backtest.
-        # GBPJPY uses default 0.4 (don't dilute its narrow edge).
+        # GBPJPY uses the default 0.4 (don't dilute its narrow edge).
+        # (EURJPY override removed 2026-06-26 when EURJPY was dropped.)
     },
     "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
     "min_buffer_pips": 2.0,
