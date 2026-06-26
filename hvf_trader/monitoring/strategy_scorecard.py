@@ -18,10 +18,10 @@ from hvf_trader.database.models import TradeRecord
 # (honest backtest PF as string, status tag). Validated 2026-06-23.
 _REFERENCE = {
     "NR7_BREAKOUT":           ("~5.0", "active"),
-    "NIGHT_TIDE":             ("2.39", "active"),
+    "NIGHT_TIDE":             ("2.13", "active"),   # spread-correct (was 2.39)
     "BTC_DONCHIAN":           ("~5.0", "active"),
     "LONDON_BO":              ("1.37", "active"),
-    "ASIAN_SESSION_BREAKOUT": ("1.20", "active"),
+    "ASIAN_SESSION_BREAKOUT": ("1.79", "active"),   # GBPJPY-only (EURJPY dropped 06-26)
     "QUANTUM_LONDON":         ("0.44", "RETIRED"),
     "KZ_HUNT":                ("0.38", "off"),
 }

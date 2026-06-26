@@ -542,7 +542,9 @@ PATTERN_FRESHNESS_BARS["NIGHT_TIDE"] = 1
 # research-mode data collection; re-evaluate after 30-50 live fills.
 ASIAN_SESSION_BREAKOUT = {
     "enabled": True,
-    "instruments": ["GBPJPY", "EURJPY"],
+    # EURJPY dropped 2026-06-26: spread-correct backtest PF 1.06 (~1.0 after
+    # commission) — no reliable edge. GBPJPY (PF 1.79) carries the strategy.
+    "instruments": ["GBPJPY"],
     "asian_start_hour": 0,            # UTC
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour

@@ -88,11 +88,17 @@ def simulate(df, spread_pips):
                     trades.append({"d": b["utc_t"], "pnl": pnl, "x": "TP"})
                     done = True
             else:
-                if hi >= sl:
+                # SHORT exits BUY at the ask (=bid+spread): SL triggers at
+                # ask>=SL (bid>=SL-spread), TP at ask<=TP (bid<=TP-spread).
+                # Raw-bid triggers booked near-miss short TPs as wins (the same
+                # spread-blind bug fixed in ASB). pnl already nets spread_pips,
+                # so this is a selection-only fix (no double counting).
+                spread_price = spread_pips * PIP
+                if hi >= sl - spread_price:
                     pnl = (entry - sl) / PIP - spread_pips
                     trades.append({"d": b["utc_t"], "pnl": pnl, "x": "SL"})
                     done = True
-                elif lo <= tp:
+                elif lo <= tp - spread_price:
                     pnl = (entry - tp) / PIP - spread_pips
                     trades.append({"d": b["utc_t"], "pnl": pnl, "x": "TP"})
                     done = True
