@@ -1,9 +1,17 @@
 ---
-name: Quantum London — current state 2026-05-05
-description: Rebuilt as faithful FF mean-reversion (#743125). EURGBP 40/12.5/40, capture 22:00 UTC, force-exit 21:00 UTC next day. Validated PF 2.52 on M5 8mo. M5 fidelity confirmed against M1.
+name: Quantum London — RETIRED 2026-06-22
+description: RETIRED 2026-06-22 (enabled=False). Lifetime -$631 / -123p, 6/17 winners. EURCHF instance died first (disabled 2026-06-04, -$225); EURGBP instance 0/4 clean live trades, dormant since 2026-05-18. Backtest PF 2.52 did not survive live. Config kept for history.
 type: project
 originSessionId: b47e514d-24ea-44bd-82fc-3d220690e0f2
 ---
+**RETIRED 2026-06-22:** `QUANTUM_LONDON["enabled"] = False` in `hvf_trader/config.py` (master switch ~line 451). The whole family is a low-R:R mean-reversion fade that needs very high win rates to survive broker friction, and it never delivered live.
+- **EURCHF instance** disabled 2026-06-04 after 9 trades (4W/5L, -$225–266): 5p TP vs 1.3p spread = 26% friction/win; 20p SL → 1:4 R:R needing ~85% WR; no news filter (2 trades hit full SL on scheduled news). Backtest PF 1.23 didn't survive live tax.
+- **EURGBP instance** (40/12.5/40, R:R 0.31, needs ~76% WR) was the only one left enabled. Clean live record: 0/4 winners, -$99, all pip-negative; no fill since 2026-05-18 (40p trigger rarely arms). Backtest PF 2.52 (N=26) did not survive — same structural fragility that killed EURCHF.
+- Lifetime CLOSED: 17 trades, 6 winners (35% WR), -$631, -123p (includes 2 unreliable `pnl_estimated` trades; excluding them: 15 trades, -$324, 5 winners).
+- Config block, instance params, and EURCHF notes left INTACT for backtest history (same treatment EURCHF got). Disabling freed the QL scanner thread; verified no `[QUANTUM_LONDON]` heartbeat after deploy.
+
+---
+**(Historical, pre-retirement) — Rebuild 2026-05-05:**
 **Identity (2026-05-05 rebuild):** Quantum London is now the FF Simple Mean Reversion strategy (thread #743125 by Alphaomega). The prior 7p/5p/18p grid-EA-derivative version is gone — disabled then replaced wholesale. Code lives in `hvf_trader/quantum_london_scanner.py` (class `QuantumLondonScanner`) and `hvf_trader/detector/quantum_london.py` (`QLTracker`, `QLSignal`). DB pattern_type stays `QUANTUM_LONDON`.
 
 **Why the rename:** the original FF strategy is *called* "Simple Mean Reversion" but the project's naming/DB history was already `QUANTUM_LONDON`. Kept the project name; the mechanics are the canonical FF mean-reversion ones.
