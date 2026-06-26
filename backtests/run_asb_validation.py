@@ -245,8 +245,14 @@ def simulate_pair(symbol: str, df: pd.DataFrame, equity_ref: list[float]) -> lis
                     exit_time, exit_price, exit_reason = t, tp, "TP"
                     break
             else:
-                hit_sl = bar["high"] >= sl
-                hit_tp = bar["low"] <= tp
+                # SHORT exits fill at the ASK (= bid + spread). TP is a buy →
+                # needs ask<=TP, i.e. bid<=TP-spread. SL is a buy → triggers at
+                # ask>=SL, i.e. bid>=SL-spread. Using raw bid was the spread-blind
+                # bug that booked near-miss shorts (e.g. live trade 217) as wins
+                # and delayed short stop-outs.
+                spread_price = get_spread_pips(symbol, t.hour) * pip
+                hit_sl = bar["high"] >= sl - spread_price
+                hit_tp = bar["low"] <= tp - spread_price
                 if hit_sl and hit_tp:
                     exit_time, exit_price, exit_reason = t, sl, "SL"
                     break
