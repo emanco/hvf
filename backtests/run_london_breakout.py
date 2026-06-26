@@ -26,6 +26,7 @@ import pandas as pd
 
 from hvf_trader import config
 from hvf_trader.detector.london_breakout import LondonBreakoutTracker, PIP
+from hvf_trader.backtesting.spread_model import get_spread_pips
 
 CFG = config.LONDON_BREAKOUT
 SYM = CFG["instrument"]
@@ -43,7 +44,8 @@ def load_h1() -> pd.DataFrame:
     return df.sort_values("time").reset_index(drop=True)
 
 
-def simulate(df: pd.DataFrame, extra_cost_pips: float, entry_slip_pips: float):
+def simulate(df: pd.DataFrame, extra_cost_pips: float, entry_slip_pips: float,
+             spread_aware: bool = True):
     """Drive the live tracker bar-by-bar; simulate fills/exits with costs.
 
     Returns list of trade dicts.
@@ -68,10 +70,14 @@ def simulate(df: pd.DataFrame, extra_cost_pips: float, entry_slip_pips: float):
                     exit_px, exit_reason = open_t["sl"], "SL"
                 elif bar["high"] >= open_t["tp"]:
                     exit_px, exit_reason = open_t["tp"], "TP"
-            else:  # SHORT
-                if bar["high"] >= open_t["sl"]:
+            else:  # SHORT — closes by BUYING at the ask (=bid+spread):
+                # SL triggers at ask>=SL (bid>=SL-spread), TP at ask<=TP
+                # (bid<=TP-spread). spread_aware=False keeps raw-bid triggers
+                # to reproduce the original (spread-blind) claim for the A/B.
+                sp = get_spread_pips(SYM, t.hour) * PIP if spread_aware else 0.0
+                if bar["high"] >= open_t["sl"] - sp:
                     exit_px, exit_reason = open_t["sl"], "SL"
-                elif bar["low"] <= open_t["tp"]:
+                elif bar["low"] <= open_t["tp"] - sp:
                     exit_px, exit_reason = open_t["tp"], "TP"
             if exit_px is not None:
                 if d == "LONG":
@@ -146,13 +152,14 @@ def main():
     print(f"{'arm':<42}{'N':>4}{'WR':>6}{'PF':>6}{'pips':>9}{'USD':>9}{'DD%':>7}{'MAR':>6}")
     print("-" * 89)
     arms = [
-        ("baseline (1p spread only, as-claimed)", 0.0, 0.0),
-        ("+ exit spread + $7 commission (~1.7p)", 1.7, 0.0),
-        ("+ entry slippage 0.5p (honest)",        1.7, 0.5),
-        ("stress: 3p round-trip + 1p entry slip", 3.0, 1.0),
+        ("baseline (raw-bid, as-claimed)",        0.0, 0.0, False),
+        ("+ spread-aware short exits",            0.0, 0.0, True),
+        ("+ exit spread + $7 commission (~1.7p)", 1.7, 0.0, True),
+        ("+ entry slippage 0.5p (honest)",        1.7, 0.5, True),
+        ("stress: 3p round-trip + 1p entry slip", 3.0, 1.0, True),
     ]
-    for label, cost, slip in arms:
-        s = stats(simulate(df, cost, slip), years)
+    for label, cost, slip, sa in arms:
+        s = stats(simulate(df, cost, slip, spread_aware=sa), years)
         if s:
             print(f"{label:<42}{s['n']:>4}{s['wr']:>5.0f}%{s['pf']:>6.2f}"
                   f"{s['pips']:>+9.0f}{s['usd']:>+9.0f}{s['dd_pct']:>6.1f}%{s['mar']:>6.2f}")

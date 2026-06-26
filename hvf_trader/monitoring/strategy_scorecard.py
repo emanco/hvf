@@ -20,7 +20,7 @@ _REFERENCE = {
     "NR7_BREAKOUT":           ("~5.0", "active"),
     "NIGHT_TIDE":             ("2.13", "active"),   # spread-correct (was 2.39)
     "BTC_DONCHIAN":           ("~5.0", "active"),
-    "LONDON_BO":              ("1.37", "active"),
+    "LONDON_BO":              ("1.32", "active"),   # spread-correct (was 1.37)
     "ASIAN_SESSION_BREAKOUT": ("1.79", "active"),   # GBPJPY-only (EURJPY dropped 06-26)
     "QUANTUM_LONDON":         ("0.44", "RETIRED"),
     "KZ_HUNT":                ("0.38", "off"),
