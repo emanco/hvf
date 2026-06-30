@@ -5,6 +5,7 @@
 - [KZ_HUNT filter set 2026-05-05](project_kz_hunt_filter_set_2026_05_05.md) — Live: 4 pairs (NZDUSD/EURGBP/EURJPY/EURAUD), score>=60, flat TP 12p. Backtest PF 1.33, +117p, DD 65p, MAR 1.80 vs baseline 0.21.
 - [Quantum London](project_quantum_london.md) — RETIRED 2026-06-22 (enabled=False). Lifetime -$631, 6/17 winners. EURCHF died 2026-06-04, EURGBP 0/4 clean + dormant. Low-R:R fade; backtest PF 2.52 never survived live.
 - [Disabling limit strategy orphans orders](feedback_disable_limit_strategy_orphans.md) — Flipping a QL-style scanner to enabled=False orphans its filled limit fills (not in DB, reconciliation won't adopt) + resting pending orders. Flatten manually after retiring.
+- [Order placement false-failure orphan](feedback_order_placement_false_failure.md) — place_market_order returned None on timeout/ambiguous retcode while the broker filled it → orphan (LONDON_BO 2026-06-29, +$85.56 untracked). Now self-recovers via before/after position diff (commit 1f934a4).
 - [Night Tide scalper](project_quiet_hours_bbrsi.md) — Deployed 2026-04-28. 4 cross pairs, M15, 22-01 UTC (DST-aware). Backtest PF 3.03/75% WR.
 - [London Breakout](project_london_breakout.md) — 12-20p range validated optimal. Pinned to H1 (PRIMARY_TIMEFRAME is now M30 for KZ).
 - [Assessment 2026-04-15](project_assessment_2026_04_15.md) — 17 fixes shipped, dead code cleaned
