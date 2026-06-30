@@ -132,15 +132,26 @@ class OrderManager:
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
+        # Snapshot matching open positions BEFORE sending. If the placement
+        # then reports a failure, we check whether the order actually executed
+        # (response lost / TIMEOUT / ambiguous retcode) and adopt the position
+        # rather than orphaning it — what happened to LONDON_BO on 2026-06-29.
+        pre_tickets = {
+            p.ticket for p in (mt5.positions_get(symbol=symbol) or [])
+            if p.magic == magic
+        }
+
         result = mt5.order_send(request)
         if result is None:
             error = mt5.last_error()
             logger.error(f"Order send failed: {error}")
-            return None
+            return self._recover_orphan_fill(
+                symbol, direction, magic, pre_tickets, f"order_send=None {error}")
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             # Limit-style fills surface as REQUOTE/REJECT when price drifted
-            # past the cap — that's the intended behavior, not an error.
+            # past the cap — that's the intended behavior, not an error, and
+            # genuinely means no fill (don't run orphan recovery).
             if limit_price and result.retcode in (
                 mt5.TRADE_RETCODE_REQUOTE, mt5.TRADE_RETCODE_REJECT,
                 mt5.TRADE_RETCODE_PRICE_OFF,
@@ -149,17 +160,46 @@ class OrderManager:
                     f"Limit-style entry skipped: price drifted past cap "
                     f"{limit_price} (retcode={result.retcode})"
                 )
-            else:
-                logger.error(
-                    f"Order failed: retcode={result.retcode}, comment={result.comment}"
-                )
-            return None
+                return None
+            logger.error(
+                f"Order failed: retcode={result.retcode}, comment={result.comment}"
+            )
+            return self._recover_orphan_fill(
+                symbol, direction, magic, pre_tickets, f"retcode={result.retcode}")
 
         logger.info(
             f"Order placed: ticket={result.order}, {direction} {lot_size} {symbol} "
             f"@ {result.price}, SL={stop_loss}"
         )
         return {"ticket": result.order, "fill_price": result.price}
+
+    def _recover_orphan_fill(self, symbol, direction, magic, pre_tickets, context=""):
+        """After a reported placement failure, detect whether MT5 actually
+        opened a matching position (the order went through but the response was
+        lost/timed out) and adopt it so the caller can track it.
+
+        Returns a success-style dict (ticket + fill_price) if a NEW matching
+        position appeared, else None. Polls briefly because the position can
+        take a moment to register after an ambiguous send.
+        """
+        if not MT5_AVAILABLE:
+            return None
+        import time
+        want_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
+        for _ in range(3):
+            time.sleep(0.5)
+            for p in (mt5.positions_get(symbol=symbol) or []):
+                if (p.magic == magic and p.type == want_type
+                        and p.ticket not in pre_tickets):
+                    logger.warning(
+                        "[ORDER] Recovered orphan fill: %s %s ticket=%s @ %.5f — "
+                        "placement reported failure (%s) but the order executed; "
+                        "adopting so it gets tracked.",
+                        direction, symbol, p.ticket, p.price_open, context,
+                    )
+                    return {"ticket": p.ticket, "fill_price": p.price_open,
+                            "recovered": True}
+        return None
 
     def modify_stop_loss(self, ticket: int, symbol: str, new_sl: float) -> bool:
         """
