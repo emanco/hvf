@@ -341,6 +341,11 @@ PERF_MIN_PF_THRESHOLD = 1.0           # Alert if rolling PF < 1.0
 PERF_WIN_RATE_DROP_PCT = 10            # Alert if WR drops >10% from baseline
 PERF_MAX_CONSECUTIVE_LOSSES = 5        # Alert at 5+ consecutive losses
 PERF_ALERT_COOLDOWN_HOURS = 24         # Don't re-alert same issue for 24h
+PERF_ROUTINE_ALERTS_ENABLED = False    # 2026-07-01: silence routine perf/health
+                                       # Telegram alerts (PF/WR/Sharpe/loss-streak/
+                                       # WR-decay) — noise for strategies already
+                                       # being managed. Kill switch is exempt: it
+                                       # still runs, trips the breaker, and alerts.
 PERF_SHARPE_WINDOW_DAYS = 60           # Rolling Sharpe ratio window
 PERF_SHARPE_WARN_THRESHOLD = 0.5       # Sharpe < 0.5 → alert: reduce size
 PERF_SHARPE_HALT_THRESHOLD = 0.0       # Sharpe < 0.0 → alert: halt trading

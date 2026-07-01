@@ -62,6 +62,13 @@ class PerformanceMonitor:
 
         # Send alerts (with cooldown) — batch into a single message
         pending = [(k, t) for k, t in alerts if self._should_alert(k)]
+        # 2026-07-01: routine perf/health alerts silenced on Telegram (noise for
+        # strategies already being managed). All checks still RUN — including the
+        # kill switch, which trips the breaker in _check_kill_switch regardless —
+        # but only the kill-switch alert is sent, since it's a real trading-halt
+        # event, not routine nagging. Flip PERF_ROUTINE_ALERTS_ENABLED to restore.
+        if not getattr(config, "PERF_ROUTINE_ALERTS_ENABLED", True):
+            pending = [(k, t) for k, t in pending if k == "kill_switch"]
         if pending and self.alerter:
             combined = "\n\n".join(t for _, t in pending)
             self.alerter.send_message(combined)
