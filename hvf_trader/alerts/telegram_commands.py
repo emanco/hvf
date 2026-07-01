@@ -149,16 +149,16 @@ class TelegramCommandHandler:
             "/balance - Current balance + PnL\n"
             "/memory - VPS physical memory health\n"
             "/strategies - Live PF vs honest backtest per strategy\n"
-            "/review - Daily execution review (ops + perf)\n"
+            "/review - Send the daily summary now (ops + performance)\n"
             "/closeall - Close all trades + expire armed patterns\n"
             "/help - This message"
         )
         self.alerter.send_message(text)
 
     def _cmd_review(self):
-        from hvf_trader.monitoring.daily_review import build_execution_report
-        report = build_execution_report(self.trade_logger, self.connector, since_hours=24)
-        self.alerter.send_message(report)
+        # Daily Review merged into the Daily Summary (2026-07-01); /review now
+        # sends the combined report (ops health + performance) on demand.
+        self.alerter.send_daily_summary(self.trade_logger, connector=self.connector)
 
     def _cmd_strategies(self):
         from hvf_trader.monitoring.strategy_scorecard import build_strategy_scorecard

@@ -259,13 +259,36 @@ class TelegramAlerter:
             )
         pair_text = "\n".join(pair_lines) if pair_lines else "No trades yet"
 
+        # Ops health (merged from the retired standalone Daily Review) — the
+        # "did the bot behave?" signals, rendered as one compact line + headline.
+        from hvf_trader.monitoring.daily_review import build_ops_health
+        ops = build_ops_health(trade_logger, since_hours=24)
+        ops_bits = [f"Errors {ops['errors']}", f"Reconnects {ops['reconnects']}"]
+        if ops["rejections"]:
+            rj = ",".join(f"{k}={v}" for k, v in ops["reject_reasons"].most_common())
+            ops_bits.append(f"Rejects {ops['rejections']} ({rj})")
+        else:
+            ops_bits.append("Rejects 0")
+        if ops["pnl_estimated"]:
+            ops_bits.append(f"PnL-est {ops['pnl_estimated']}")
+        if ops["cb_events"]:
+            ops_bits.append(f"CB {ops['cb_events']}")
+        ops_line = " · ".join(ops_bits)
+        if ops["paused"]:
+            paused_str = ", ".join(
+                f"{r.pattern_type}/{r.symbol}({r.consecutive_losses}L)"
+                for r in ops["paused"]
+            )
+            ops_line += f"\nPaused: {paused_str}"
+
         text = (
             f"<b>\U0001F4CA Daily Summary</b>\n"
-            f"Date: {datetime.now(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}\n\n"
+            f"Date: {datetime.now(config.DISPLAY_TZ).strftime('%Y-%m-%d %H:%M %Z')}\n"
+            f"<b>{ops['headline']}</b>\n\n"
             f"PnL today: <b>{emoji} {cs}{daily_pnl:+.2f}</b>\n"
             f"Trades closed: {total} (W:{wins} L:{losses})\n"
-            f"Open trades: {len(open_trades)}\n"
-            f"Armed patterns: {len(armed_patterns)}\n\n"
+            f"Open: {len(open_trades)} · Armed: {len(armed_patterns)}\n\n"
+            f"<b>\U0001f527 Ops (24h):</b> {ops_line}\n\n"
             f"<b>Per pair (since go-live):</b>\n{pair_text}\n\n"
             f"Balance: <b>{cs}{balance:,.2f}</b> ({total_pnl:+.2f})"
         )

@@ -250,7 +250,6 @@ class HVFTrader:
         self._last_scan_bar = {}   # symbol -> last bar timestamp scanned
         self._last_reconcile = None
         self._last_daily_summary = None
-        self._last_daily_review = None
         self._last_cache_alert = None
         self._last_memory_alert = None
 
@@ -539,23 +538,8 @@ class HVFTrader:
             except Exception as e:
                 logger.error(f"Daily summary failed: {e}", exc_info=True)
 
-            # Daily execution review at 21:30 UTC, weekdays only
-            try:
-                if (
-                    now.hour == 21 and now.minute >= 30 and now.weekday() <= 4
-                    and (
-                        self._last_daily_review is None
-                        or self._last_daily_review.date() < now.date()
-                    )
-                ):
-                    from hvf_trader.monitoring.daily_review import build_execution_report
-                    report = build_execution_report(
-                        self.trade_logger, self.connector, since_hours=24
-                    )
-                    self.alerter.send_message(report)
-                    self._last_daily_review = now
-            except Exception as e:
-                logger.error(f"Daily review failed: {e}", exc_info=True)
+            # (Daily execution review merged into the 21:00 daily summary on
+            # 2026-07-01 — one report covers ops health + performance.)
 
             # Heartbeat log every cycle (~1 minute) — confirms scanner thread is alive
             cycle_count += 1
