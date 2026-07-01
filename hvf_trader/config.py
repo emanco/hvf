@@ -675,3 +675,28 @@ PIP_VALUES = {
     "BTCUSD": 1.0,
     "US30": 1.0,
 }
+
+
+def active_traded_symbols() -> set:
+    """Symbols currently traded by an ENABLED strategy.
+
+    Single source of truth for filtering Telegram reports so abandoned pairs
+    (e.g. EURJPY after 2026-06-26) drop out automatically as the config changes.
+    Respects each strategy's `enabled` flag and its instrument-list shape
+    ("instruments" list / "instrument" single / "instances" list-of-dicts).
+    """
+    syms: set = set()
+    # Main-loop patterns (KZ_HUNT) use the INSTRUMENTS universe — only live
+    # when ENABLED_PATTERNS is non-empty (KZ is currently disabled).
+    if ENABLED_PATTERNS:
+        syms.update(INSTRUMENTS)
+    for cfg in (NIGHT_TIDE, ASIAN_SESSION_BREAKOUT):          # "instruments" list
+        if cfg.get("enabled"):
+            syms.update(cfg.get("instruments", []))
+    for cfg in (LONDON_BREAKOUT, ASIAN_GRAVITY):             # single "instrument"
+        if cfg.get("enabled") and cfg.get("instrument"):
+            syms.add(cfg["instrument"])
+    for cfg in (BTC_DONCHIAN, NR7_BREAKOUT, QUANTUM_LONDON):  # "instances" dicts
+        if cfg.get("enabled"):
+            syms.update(i["instrument"] for i in cfg.get("instances", []) if i.get("instrument"))
+    return syms

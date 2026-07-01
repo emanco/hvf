@@ -243,8 +243,14 @@ class TelegramAlerter:
             pair_stats[sym]["pnl"] += t.pnl or 0
             pair_stats[sym]["pips"] += t.pnl_pips or 0
 
+        # Only show pairs we still trade (an enabled strategy) or that have an
+        # open position \u2014 abandoned pairs (e.g. EURJPY, and the retired KZ/QL
+        # universe) drop out so the report reflects the current book.
+        show_syms = config.active_traded_symbols() | {t.symbol for t in open_trades}
         pair_lines = []
         for sym in sorted(pair_stats, key=lambda s: pair_stats[s]["pips"], reverse=True):
+            if sym not in show_syms:
+                continue
             s = pair_stats[sym]
             wr = s["wins"] / s["count"] * 100 if s["count"] else 0
             pair_emoji = "\u2705" if s["pips"] > 0 else "\u274C"
