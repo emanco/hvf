@@ -219,8 +219,10 @@ class PerformanceMonitor:
 
     def _check_kill_switch(self):
         """Auto-halt trading if live PF < threshold after enough trades."""
+        # Counts trades since PERF_KILL_SWITCH_SINCE (decoupled from the reporting
+        # baseline) so pre-cleanup retired-strategy losses don't trip the halt.
         all_trades = self.trade_logger.get_all_closed_trades(
-            since_date=config.PERF_GO_LIVE_DATE
+            since_date=getattr(config, "PERF_KILL_SWITCH_SINCE", config.PERF_GO_LIVE_DATE)
         )
         if len(all_trades) < config.PERF_KILL_SWITCH_MIN_TRADES:
             return []

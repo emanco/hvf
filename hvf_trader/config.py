@@ -352,6 +352,13 @@ PERF_SHARPE_HALT_THRESHOLD = 0.0       # Sharpe < 0.0 → alert: halt trading
 PERF_WR_DECAY_THRESHOLD = 15           # Alert if recent WR drops >15% below all-time WR
 PERF_KILL_SWITCH_MIN_TRADES = 200      # Min trades before kill switch can activate
 PERF_KILL_SWITCH_MIN_PF = 1.2          # Auto-halt if live PF < this after min trades
+PERF_KILL_SWITCH_SINCE = "2026-07-01"  # Kill switch counts trades since THIS date
+                                       # only (decoupled from PERF_GO_LIVE_DATE).
+                                       # Reset 2026-07-01 after retiring KZ/QL/HVF
+                                       # + EURJPY so their pre-cleanup losses can't
+                                       # trip the auto-halt on the clean forward
+                                       # book. Reporting still uses PERF_GO_LIVE_DATE
+                                       # so full history is preserved.
 PERF_GO_LIVE_DATE = "2026-03-25"       # Ignore trades before this date for performance stats (reset after bug fixes)
 STARTING_EQUITY = 10000.0              # Fallback when MT5 unavailable (current demo account balance)
 ACCOUNT_CURRENCY_SYMBOL = "$"          # Fallback display symbol when MT5 unavailable
