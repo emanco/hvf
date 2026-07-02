@@ -686,7 +686,10 @@ PIP_VALUES = {
     "XAUUSD": 0.01,
     "XAGUSD": 0.001,
     "BTCUSD": 1.0,
+    "ETHUSD": 1.0,
     "US30": 1.0,
+    "US500": 1.0,   # added 2026-07-02: absence made estimate_fallback_pnl use
+    "DE40": 1.0,    # the 0.0001 forex default -> trade 207 booked -$1.056M
 }
 
 

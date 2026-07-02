@@ -143,6 +143,29 @@ def find_close_deal(deals, ticket: int, symbol: str, direction: str,
     return close_deal
 
 
+def _dollar_per_pip_per_lot(symbol: str, pip_value: float) -> float:
+    """Account-currency value of one pip for one lot of `symbol`.
+
+    Derived from the broker's own tick specs (trade_tick_value is the
+    account-currency value of a trade_tick_size move for 1 lot) — correct
+    for forex, crypto CFDs, and index CFDs alike. Falls back to the
+    forex-only $10/pip approximation when MT5/specs are unavailable.
+
+    Added 2026-07-02 after trade 207 (US500): the flat $10/pip + default
+    0.0001 pip estimated a 26.4-point index loss as -$1,056,000 and
+    tripped all three circuit breakers.
+    """
+    if MT5_AVAILABLE:
+        try:
+            si = mt5.symbol_info(symbol)
+            if si and si.trade_tick_size > 0 and si.trade_tick_value > 0:
+                return si.trade_tick_value / si.trade_tick_size * pip_value
+        except Exception:
+            logger.warning("symbol_info failed for %s; using $10/pip fallback",
+                           symbol, exc_info=True)
+    return 10.0
+
+
 def estimate_fallback_pnl(trade_record, close_price: float) -> tuple[float, float]:
     """Estimate PnL when no deal history is available.
 
@@ -156,10 +179,17 @@ def estimate_fallback_pnl(trade_record, close_price: float) -> tuple[float, floa
     Returns:
         Tuple of (pnl_dollars, pnl_pips).
     """
-    pip_value = config.PIP_VALUES.get(trade_record.symbol, 0.0001)
+    pip_value = config.PIP_VALUES.get(trade_record.symbol)
+    if pip_value is None:
+        # Unknown symbol: treat 1.0 price unit as the reporting "pip"
+        # (sane for indices/crypto; a forex symbol missing from
+        # PIP_VALUES would be a config bug — log it loudly).
+        logger.warning("%s missing from config.PIP_VALUES; assuming pip=1.0 "
+                       "point for PnL estimate", trade_record.symbol)
+        pip_value = 1.0
     direction = trade_record.direction
     original_lots = trade_record.lot_size or 0.01
-    dollar_per_pip = 10.0  # approximate $10/pip/standard lot
+    dollar_per_pip = _dollar_per_pip_per_lot(trade_record.symbol, pip_value)
 
     # Remainder pips (close_price vs entry)
     if direction == "LONG":
