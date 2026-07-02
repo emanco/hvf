@@ -66,7 +66,7 @@ class BtcDonchianScanner:
 
         self._open_trade_id: int | None = None
         self._current_stop: float | None = None
-        self._last_processed_date: str | None = None  # YYYY-MM-DD UTC
+        self._last_processed_date: str | None = None  # broker date of last processed CLOSED D1 bar
 
         instrument = self._cfg["instrument"]
         self._state_file = config.LOG_DIR / f"btc_donchian_state_{instrument}.json"
@@ -109,14 +109,6 @@ class BtcDonchianScanner:
     def _tick(self):
         if not MT5_AVAILABLE:
             return
-        now = datetime.now(timezone.utc)
-        today_str = now.date().isoformat()
-
-        # Wait until at least 00:01 UTC (1 min after D1 close) to act
-        if now.hour == 0 and now.minute < 1:
-            return
-        if self._last_processed_date == today_str:
-            return  # already processed today's D1
 
         sym = self._cfg["instrument"]
         d1 = self._fetch_d1_bars(sym, count=self._cfg["entry_lookback_days"] + 30)
@@ -124,22 +116,29 @@ class BtcDonchianScanner:
             logger.warning("[BTC_DONCHIAN] Insufficient D1 data; waiting")
             return
 
-        # The most recent CLOSED candle (broker D1 includes today's developing
-        # bar; we want yesterday's). Pandas resample handles UTC; the broker's
-        # D1 alignment may differ — we use today's bar only if hour ≥ 1 UTC
-        # (already enforced above) and treat d1.iloc[-1] as the just-closed
-        # bar if its date < today, else d1.iloc[-2].
+        # Process each broker D1 bar as soon as it CLOSES — i.e. within one
+        # poll of broker midnight (21:00/22:00 UTC by DST), not at 00:01 UTC.
+        # The old 00:01-UTC gate entered 2-3h after the close the signal was
+        # computed on; the 2026-07-02 honest re-backtest showed that lag cost
+        # a third to half the edge (BTC 2023+: PF 2.59 at the close vs 1.76
+        # lagged — scripts/btc_donchian_honest_bt.py).
+        #
+        # Bar timestamps are broker-time mislabeled as UTC, so the forming
+        # bar is the one dated broker-"today"; the newest bar older than that
+        # is the just-closed one (also correct across weekend gaps, where the
+        # newest bar IS a closed Friday bar).
         last_bar = d1.iloc[-1]
-        last_bar_date = last_bar.name.date()
-        if last_bar_date >= now.date():
-            # Today's developing bar is in the slice — use the prior one
+        if last_bar.name.date() >= self._broker_today():
             if len(d1) < 2:
                 return
             last_bar = d1.iloc[-2]
-            last_bar_date = last_bar.name.date()
             prior_history = d1.iloc[:-2]
         else:
             prior_history = d1.iloc[:-1]
+        last_bar_date = last_bar.name.date()
+        closed_date_str = last_bar_date.isoformat()
+        if self._last_processed_date == closed_date_str:
+            return  # this closed bar already processed
 
         # Compute rolling extremes from the bars BEFORE the last closed bar
         entry_lb = self._cfg["entry_lookback_days"]
@@ -178,8 +177,22 @@ class BtcDonchianScanner:
                     sym, last_close, entry_high, entry_low, atr_val,
                 )
 
-        self._last_processed_date = today_str
+        self._last_processed_date = closed_date_str
         self._save_state()
+
+    @staticmethod
+    def _broker_today():
+        """Current broker-clock date. IC Markets runs UTC+2, UTC+3 during EU
+        DST (last Sunday of March 01:00 UTC to last Sunday of October 01:00
+        UTC). Wall-clock based — a stale weekend tick can't skew it."""
+        now = datetime.now(timezone.utc)
+        y = now.year
+        mar = datetime(y, 3, 31, 1, tzinfo=timezone.utc)
+        mar_last_sun = mar - timedelta(days=(mar.weekday() + 1) % 7)
+        oct_ = datetime(y, 10, 31, 1, tzinfo=timezone.utc)
+        oct_last_sun = oct_ - timedelta(days=(oct_.weekday() + 1) % 7)
+        offset = 3 if mar_last_sun <= now < oct_last_sun else 2
+        return (now + timedelta(hours=offset)).date()
 
     def _wilder_atr(self, df: pd.DataFrame, period: int) -> float:
         h, l, c = df["high"], df["low"], df["close"]
@@ -384,6 +397,9 @@ class BtcDonchianScanner:
             "open_trade_id": self._open_trade_id,
             "current_stop": self._current_stop,
             "last_processed_date": self._last_processed_date,
+            # Marker: last_processed_date holds the CLOSED BAR's broker date
+            # (new gate semantics, 2026-07-02). Absent = legacy wall-date.
+            "gate_semantics": "bar_date",
             "instrument": self._cfg["instrument"],
         }
         try:
@@ -411,6 +427,21 @@ class BtcDonchianScanner:
         if not saved:
             return
         self._last_processed_date = saved.get("last_processed_date")
+        # Migrate legacy state: the old gate stored the WALL date on which it
+        # ran (00:01 UTC), i.e. the bar it processed was dated one day
+        # earlier. Without this shift the first post-deploy rollover would be
+        # silently skipped.
+        if (self._last_processed_date
+                and saved.get("gate_semantics") != "bar_date"):
+            try:
+                d = datetime.fromisoformat(self._last_processed_date).date()
+                self._last_processed_date = (d - timedelta(days=1)).isoformat()
+                logger.info(
+                    "[BTC_DONCHIAN] migrated legacy gate state -> "
+                    "last processed bar %s", self._last_processed_date,
+                )
+            except ValueError:
+                self._last_processed_date = None
         self._current_stop = saved.get("current_stop")
         saved_id = saved.get("open_trade_id")
         if saved_id is None:

@@ -614,8 +614,9 @@ PATTERN_FRESHNESS_BARS["ASIAN_SESSION_BREAKOUT"] = 1
 # hour vs the conservative $12/$5 assumed). Judge live against (2023+):
 #   BTCUSD: PF 1.76  CAGR +5.1%  maxDD 11%   (was claimed 2.94 WF)
 #   ETHUSD: PF 3.92  CAGR +8.9%  maxDD  7%
-# Possible recovery: gate daily processing at the broker-day rollover
-# (21:00/22:00 UTC) instead of 00:01 UTC — re-run the script before changing.
+# 2026-07-02: entry lag FIXED — the scanner gate now fires on the closed
+# broker D1 bar (~21:00/22:00 UTC); expect live to track the entry-at-close
+# rows instead (BTC PF ~2.6 / ETH ~4.9, 2023+ sim).
 # Each instance in `instances` becomes its own scanner thread with the
 # parent config merged with per-instrument overrides (mirroring QL's setup).
 BTC_DONCHIAN = {
