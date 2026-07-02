@@ -634,16 +634,22 @@ class TradeLogger:
             .all()
         )
 
-    def get_all_closed_trades(self, since_date: str = None) -> list[TradeRecord]:
+    def get_all_closed_trades(self, since_date: str = None,
+                              exclude_estimated: bool = False) -> list[TradeRecord]:
         """Return all closed trades, oldest first.
 
         Args:
             since_date: Optional ISO date string (YYYY-MM-DD) to filter trades after.
+            exclude_estimated: Drop pnl_estimated=1 rows — their pnl is
+                known-unreliable (deal lookup failed). Use for anything that
+                makes decisions from PnL (e.g. the kill switch).
         """
         query = self._session.query(TradeRecord).filter(
             TradeRecord.status == "CLOSED",
             TradeRecord.pnl.isnot(None),
         )
+        if exclude_estimated:
+            query = query.filter(TradeRecord.pnl_estimated.isnot(True))
         if since_date:
             cutoff = datetime.fromisoformat(since_date).replace(tzinfo=timezone.utc)
             query = query.filter(TradeRecord.closed_at >= cutoff)

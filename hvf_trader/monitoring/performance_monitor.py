@@ -221,8 +221,12 @@ class PerformanceMonitor:
         """Auto-halt trading if live PF < threshold after enough trades."""
         # Counts trades since PERF_KILL_SWITCH_SINCE (decoupled from the reporting
         # baseline) so pre-cleanup retired-strategy losses don't trip the halt.
+        # exclude_estimated: a cluster of bogus estimated PnLs must not be
+        # able to push the kill-switch PF across the trip line (audit
+        # 2026-07-02; the scorecard already excludes them).
         all_trades = self.trade_logger.get_all_closed_trades(
-            since_date=getattr(config, "PERF_KILL_SWITCH_SINCE", config.PERF_GO_LIVE_DATE)
+            since_date=getattr(config, "PERF_KILL_SWITCH_SINCE", config.PERF_GO_LIVE_DATE),
+            exclude_estimated=True,
         )
         if len(all_trades) < config.PERF_KILL_SWITCH_MIN_TRADES:
             return []

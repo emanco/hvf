@@ -17,6 +17,7 @@ bracket management (similar to ASB).
 from __future__ import annotations
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -232,10 +233,19 @@ class Nr7Scanner:
         vol_step = sinfo.volume_step
         vol_min = sinfo.volume_min
         vol_max = sinfo.volume_max
-        lots = round(raw_lots / vol_step) * vol_step
-        lots = max(vol_min, min(vol_max, lots))
+        # FLOOR to the broker step — round() could size over intended risk,
+        # and clamping up to vol_min could multiply it (audit 2026-07-02).
+        # Below-minimum sizing skips the bracket instead.
+        lots = min(vol_max, math.floor(raw_lots / vol_step + 1e-9) * vol_step)
         # Round to handle floating-point step jitter
         lots = round(lots, 4)
+        if lots < vol_min:
+            logger.warning(
+                "[NR7] %s raw lots %.4f below broker min %s — skipping "
+                "bracket (sizing up would exceed intended risk)",
+                sym, raw_lots, vol_min,
+            )
+            return
 
         logger.info(
             "[NR7] %s SIGNAL: NR_day H=%.2f L=%.2f range=%.2f ATR=%.2f "

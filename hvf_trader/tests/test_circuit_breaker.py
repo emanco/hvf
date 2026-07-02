@@ -7,13 +7,38 @@ from unittest.mock import MagicMock
 from hvf_trader.risk.circuit_breaker import CircuitBreaker
 
 
+class _QueryStub:
+    """Chain-proof no-result query: any attribute/call returns self, except
+    .all which yields an empty list. Keeps the mock immune to changes in the
+    seeding path's filter/order_by/limit chain."""
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __getattr__(self, name):
+        if name == "all":
+            return list
+        return self
+
+
 class MockTradeLogger:
     def __init__(self):
         self._cb_states = {}
+        self._pattern_states = []
         self._pnl = 0.0
+        # _load_state seeds pattern counters from trade history via
+        # trade_logger._session when the pattern-state table is empty
+        self._session = MagicMock()
+        self._session.query = _QueryStub()
 
     def get_circuit_breaker_state(self, level):
         return self._cb_states.get(level)
+
+    def get_all_pattern_cb_states(self):
+        return self._pattern_states
+
+    def upsert_pattern_cb_state(self, pattern_type, symbol,
+                                consecutive_losses, paused_until):
+        pass
 
     def update_circuit_breaker(self, level, tripped, **kwargs):
         state = MagicMock()

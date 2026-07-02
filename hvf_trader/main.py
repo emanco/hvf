@@ -878,6 +878,18 @@ class HVFTrader:
             if trade.pattern_type != "LONDON_BO":
                 continue
             ticket = trade.mt5_ticket
+            # Snapshot the real floating PnL before closing — close_position's
+            # result never carries "profit", so the old .get() fallback always
+            # booked the $10/pip approximation (audit 2026-07-02). Mirrors
+            # _asb_force_close_eod's pos.profit approach.
+            pos_profit = None
+            try:
+                import MetaTrader5 as mt5
+                positions = mt5.positions_get(ticket=ticket)
+                if positions:
+                    pos_profit = positions[0].profit
+            except ImportError:
+                pass
             result = self.order_manager.close_position(
                 ticket, trade.symbol, trade.direction, "LONDON_BO time_exit"
             )
@@ -888,7 +900,8 @@ class HVFTrader:
                     pnl_pips = (close_price - trade.entry_price) / pip_value
                 else:
                     pnl_pips = (trade.entry_price - close_price) / pip_value
-                pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) if isinstance(result, dict) else 0
+                pnl = (pos_profit if pos_profit is not None
+                       else pnl_pips * 10.0 * trade.lot_size)
                 self.trade_logger.log_trade_close(
                     trade.id, close_price, pnl, pnl_pips, "TIME_EXIT"
                 )

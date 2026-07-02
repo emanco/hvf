@@ -27,6 +27,7 @@ Safety:
 from __future__ import annotations
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -269,9 +270,19 @@ class BtcDonchianScanner:
         vol_step = info.volume_step if info else 0.01
         vol_min = info.volume_min if info else 0.01
         vol_max = info.volume_max if info else 10.0
-        lots = max(vol_min, min(vol_max, round(raw_lots / vol_step) * vol_step))
-        # Round to 2 dp safety
+        # FLOOR to the broker step — round() could size up to +20% over
+        # intended risk, and clamping up to vol_min could 2x+ it (audit
+        # 2026-07-02). Below-minimum sizing skips the trade, matching the
+        # forex sizer's behavior. Epsilon guards float jitter at exact steps.
+        lots = min(vol_max, math.floor(raw_lots / vol_step + 1e-9) * vol_step)
         lots = round(lots, 2)
+        if lots < vol_min:
+            logger.warning(
+                "[BTC_DONCHIAN] %s raw lots %.4f below broker min %s — "
+                "skipping entry (sizing up would exceed intended risk)",
+                symbol, raw_lots, vol_min,
+            )
+            return
 
         # Get current ask/bid for entry estimate (market order)
         tick = mt5.symbol_info_tick(symbol)
