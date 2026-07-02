@@ -605,6 +605,17 @@ PATTERN_FRESHNESS_BARS["ASIAN_SESSION_BREAKOUT"] = 1
 #     BTCUSD 9y: PF 5.09 / MAR 5.93. Walk-forward 2023-25: PF 2.94.
 #     ETHUSD 10y: PF 3.22 / MAR 1.37. Walk-forward 2023-25: PF 4.69.
 #     Signal overlap between BTC and ETH: 9.8% (low — real diversification).
+#
+# HONEST RE-BACKTEST 2026-07-02 (scripts/btc_donchian_honest_bt.py, IC's own
+# H1 history, per-bar IC spread, live entry timing): the numbers above are
+# inflated by one unmodeled cost — live enters at 00:01 UTC, 2-3h AFTER the
+# broker D1 close the signal is computed on. That lag costs a third to half
+# the edge. Spread was NOT the issue (real ~$0.7 BTC / $2.9 ETH at the entry
+# hour vs the conservative $12/$5 assumed). Judge live against (2023+):
+#   BTCUSD: PF 1.76  CAGR +5.1%  maxDD 11%   (was claimed 2.94 WF)
+#   ETHUSD: PF 3.92  CAGR +8.9%  maxDD  7%
+# Possible recovery: gate daily processing at the broker-day rollover
+# (21:00/22:00 UTC) instead of 00:01 UTC — re-run the script before changing.
 # Each instance in `instances` becomes its own scanner thread with the
 # parent config merged with per-instrument overrides (mirroring QL's setup).
 BTC_DONCHIAN = {
