@@ -5,7 +5,7 @@ Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, a
 
 ## Current State (as of 2026-06-22)
 - **Active strategies** (each its own scanner thread; `ENABLED_PATTERNS` for the main loop is now `[]`):
-  - **NIGHT_TIDE** — M15 BB+RSI mean reversion on 4 cross pairs (AUDNZD, NZDCAD, AUDCAD, EURCHF), 22:00–01:00 UTC (DST-aware). **Best live performer** (PF ~2.15, +$316 last 30d). 1% risk.
+  - **NIGHT_TIDE** — M15 BB+RSI mean reversion on 4 cross pairs (AUDNZD, NZDCAD, AUDCAD, EURCHF), 22:00–01:00 UTC (DST-aware). Best live performer, but judge it against the **IC-native baseline: PF ~1.3–1.5, ~60% WR, ~6–11 fills/mo, max DD ~80p** (2026-07-02 diagnostic) — NOT the Dukascopy backtest PF 2–3 (IC's feed produces ~4x fewer signals; see `scripts/nt_ic_feed_diag.py`). EURCHF: near-zero setups on IC feed since 2025-10 (expected silence, not a bug). 1% risk.
   - **ASIAN_SESSION_BREAKOUT (ASB)** — Asian-range breakout on GBPJPY + EURJPY, pending stop orders, EOD force-close 20:00 UTC. Research mode at 0.5% risk (collecting 30–50 fills).
   - **LONDON_BREAKOUT (LONDON_BO)** — GBPUSD Asian-range breakout, Mon/Tue only, H1. 1% risk.
   - **BTC_DONCHIAN** — daily Donchian (55/20, Turtle S2 variant) on BTCUSD + ETHUSD, trailing exits. 1% risk, LIVE.
@@ -28,6 +28,7 @@ Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, a
 - Call `session.close()` anywhere — thread-local scoped sessions manage their own lifecycle
 - Store SQLAlchemy ORM objects in long-lived state — use `_detach_record()` to snapshot into SimpleNamespace
 - Trust `mt5.history_deals_get(position=ticket)` on IC Markets — it returns empty. Always fall back to broad search
+- "Fix" NIGHT_TIDE to evaluate completed bar closes — evaluating the forming bar at open is load-bearing (IC-native sim: stub-eval PF 1.42 vs completed-close PF 0.80). See comments in `data_fetcher.py:fetch_ohlcv` and `main.py:_scan_night_tide_instrument`
 
 ---
 

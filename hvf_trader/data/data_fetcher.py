@@ -68,6 +68,12 @@ def fetch_ohlcv(
             from_date = from_date.replace(tzinfo=timezone.utc)
         rates = mt5.copy_rates_from(symbol, tf_mt5, from_date, bars)
     else:
+        # Position 0 = the CURRENT, still-forming bar, so the last row of the
+        # returned frame is an incomplete stub (close = latest tick). Do NOT
+        # drop it: NIGHT_TIDE deliberately evaluates this stub at bar open —
+        # on IC's feed that one-bar-late persistence filter is what keeps the
+        # strategy profitable (IC-native sim 2026-07-02: stub-eval PF 1.42 vs
+        # completed-close PF 0.80). See _scan_night_tide_instrument.
         rates = mt5.copy_rates_from_pos(symbol, tf_mt5, 0, bars)
 
     if rates is None or len(rates) == 0:

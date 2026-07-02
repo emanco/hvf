@@ -528,6 +528,12 @@ PATTERN_FRESHNESS_BARS["LONDON_BO"] = 1
 # Quiet-Hours BB+RSI mean reversion on cross pairs.
 # Window: 22-01 UTC summer (DST), 23-01 UTC winter (skip NY-rollover spike).
 # Backtest 2022-04 → 2026-04: PF 3.17, 76% WR, +7782p, DD 79p (1253 trades).
+# IC-native baseline (2026-07-02 diagnostic, scripts/nt_ic_feed_diag.py):
+# IC's feed produces ~4x fewer signals than the Dukascopy data the backtests
+# ran on (~13.5/mo vs ~50/mo, same detector/months, stable since 2022). Tune
+# and judge this strategy against the IC-native expectation — PF ~1.3-1.5,
+# ~60% WR, ~6-11 fills/mo across the 4 pairs, max DD ~80p — NOT the Dukascopy
+# backtest PF 2-3. EURCHF: near-zero setups on IC feed since 2025-10.
 NIGHT_TIDE = {
     "enabled": True,
     "instruments": ["AUDNZD", "NZDCAD", "AUDCAD", "EURCHF"],
@@ -535,7 +541,7 @@ NIGHT_TIDE = {
     "stop_pips": 12,
     "max_hold_hours": 4,            # 16 M15 bars
     "spread_buffer_pips": 2.0,       # min TP-distance overhead vs spread
-    "max_spread_pips": 7.0,          # 2026-05-06: 5→7. Live got 4 fills/30d vs backtest expectation of ~25/mo. Realistic-spread sweep showed PF 1.65 at 5p spread, PF 1.10 at 7p — strategy still profitable at 7p but captures more rollover-spike signals previously rejected.
+    "max_spread_pips": 7.0,          # 2026-05-06: 5→7. Live got 4 fills/30d vs backtest expectation of ~25/mo. Realistic-spread sweep showed PF 1.65 at 5p spread, PF 1.10 at 7p — strategy still profitable at 7p but captures more rollover-spike signals previously rejected. 2026-07-02: that fill-rate gap is now explained — dominant cause is the IC-vs-Dukascopy feed difference (~4x, see header comment), not this gate; don't widen further chasing backtest fill rates.
     "risk_pct": 1.0,                 # 1% per trade — 4 pairs can fire concurrently
     "max_concurrent": 4,
 }

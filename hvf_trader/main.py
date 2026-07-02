@@ -937,10 +937,19 @@ class HVFTrader:
             logger.warning("[NIGHT_TIDE] %s skip: no M15 data fetched", symbol)
             return
 
+        # iloc[-1] is the FORMING bar (copy_rates_from_pos position 0), so each
+        # bar is evaluated exactly once, seconds after it OPENS — stub close ≈
+        # prior bar's close — and never revisited at its actual close. This is
+        # load-bearing, not a bug: the one-bar-late persistence filter it
+        # creates is what makes NIGHT_TIDE profitable on IC's feed (IC-native
+        # sim 2026-07-02, 18mo, N=199: stub-eval PF 1.42 / +377p / 81p DD vs
+        # completed-close PF 0.80 / -271p / 401p DD). Do NOT switch this to
+        # completed-bar evaluation without re-running that comparison
+        # (scripts/nt_ic_feed_diag.py).
         latest_time = df["time"].iloc[-1]
         last_seen = self._night_tide_last_bar.get(symbol)
         if last_seen is not None and latest_time <= last_seen:
-            return  # No new closed bar since last scan
+            return  # This bar already evaluated (at its open)
         self._night_tide_last_bar[symbol] = latest_time
 
         df = compute_fn(df)

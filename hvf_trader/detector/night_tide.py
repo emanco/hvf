@@ -14,6 +14,16 @@ Exit:  Broker-side TP/SL, or force-close after 4 hours (16 M15 bars).
 Backtest 2022-04 → 2026-04 (4 yrs): n=1253 WR=76% PF=3.17 +7782p DD=79p.
 Window-handling comparison validated `dynamic` (skip rollover hour by season)
 as best of 4 alternatives (baseline / dynamic / skip30 / spread_filter).
+
+IC-native reality check (2026-07-02): the backtest above ran on Dukascopy
+data, whose feed produces ~4x more signals than IC Markets' own M15 feed
+(~50/mo vs ~13.5/mo across the 4 pairs, same detector, same months — stable
+since 2022, not a regime effect). Realistic live expectation on IC: PF
+~1.3-1.5, ~60% WR, ~6-11 fills/mo portfolio-wide, max DD ~80p. Note also
+that live evaluates each bar once at its OPEN (forming stub), not at close —
+that variant is the profitable one on IC's feed; see
+_scan_night_tide_instrument and scripts/nt_ic_feed_diag.py. EURCHF produces
+near-zero setups on IC's feed since 2025-10 — keep it, but expect silence.
 """
 import json
 import logging
