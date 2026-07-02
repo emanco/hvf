@@ -624,11 +624,19 @@ class OrderManager:
         take_profit: float = 0.0,
         comment: str = "AUTO",
         magic: int = 20250305,
+        expiration_utc: Optional[datetime] = None,
     ) -> Optional[dict]:
         """Place a pending STOP order for breakout entries.
 
-        BUY_STOP fills when bid reaches stop_price (placed ABOVE current price).
-        SELL_STOP fills when ask reaches stop_price (placed BELOW current price).
+        BUY_STOP triggers when the ASK reaches stop_price (placed ABOVE
+        current price). SELL_STOP triggers when the BID reaches stop_price
+        (placed BELOW current price).
+
+        expiration_utc: if given, the order is placed ORDER_TIME_SPECIFIED
+        so it self-destructs broker-side at that UTC time even if the bot
+        dies — closes the orphaned-GTC-pending hole (2026-07-02 audit).
+        Falls back to GTC when the symbol doesn't support SPECIFIED or the
+        broker rejects the expiration.
 
         Returns dict with 'order_ticket' on success, None on failure.
         """
@@ -667,7 +675,43 @@ class OrderManager:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_RETURN,
         }
+
+        # Broker-side expiry. MT5 expiration is in SERVER (broker) time —
+        # derive the broker-vs-UTC offset from a live tick rather than
+        # assuming a fixed timezone (IC is UTC+2/+3 by DST).
+        if expiration_utc is not None:
+            supports_specified = bool(
+                getattr(symbol_info, "expiration_mode", 0)
+                & mt5.SYMBOL_EXPIRATION_SPECIFIED
+            )
+            tick = mt5.symbol_info_tick(symbol)
+            if supports_specified and tick and tick.time:
+                import time as _time
+                broker_offset = tick.time - _time.time()
+                request["type_time"] = mt5.ORDER_TIME_SPECIFIED
+                request["expiration"] = int(
+                    expiration_utc.timestamp() + broker_offset
+                )
+            else:
+                logger.warning(
+                    f"{symbol}: SPECIFIED expiration unsupported/no tick — "
+                    f"placing GTC instead"
+                )
+
         result = mt5.order_send(request)
+        # Some servers reject SPECIFIED expirations (retcode 10022) — retry
+        # once as GTC rather than losing the day's setup.
+        if (result is not None
+                and result.retcode == mt5.TRADE_RETCODE_INVALID_EXPIRATION
+                and request.get("type_time") == mt5.ORDER_TIME_SPECIFIED):
+            logger.warning(
+                f"{symbol}: broker rejected expiration "
+                f"(retcode {result.retcode}); retrying GTC"
+            )
+            request["type_time"] = mt5.ORDER_TIME_GTC
+            request.pop("expiration", None)
+            result = mt5.order_send(request)
+
         if result is None:
             err = mt5.last_error()
             logger.error(f"Pending stop send failed: {err}")

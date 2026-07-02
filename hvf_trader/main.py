@@ -343,6 +343,14 @@ class HVFTrader:
         except Exception as e:
             logger.warning(f"[KZ_HUNT_LIMIT] startup cleanup failed: {e}")
 
+        # Re-adopt or clean up ASB orders/positions left at the broker by a
+        # prior process (in-memory _asb_state is gone after restart).
+        if config.ASIAN_SESSION_BREAKOUT.get("enabled"):
+            try:
+                self._recover_asb_broker_state_on_startup()
+            except Exception as e:
+                logger.warning(f"[ASB] startup recovery failed: {e}")
+
         # Start threads
         self._running = True
 
@@ -1855,6 +1863,114 @@ class HVFTrader:
                 f"orphan KZ_HUNT pending order(s)"
             )
 
+    def _recover_asb_broker_state_on_startup(self) -> None:
+        """Re-adopt or clean up ASB orders/positions after a restart.
+
+        _asb_state is in-memory only, so a restart during the ASB session
+        used to orphan everything at the broker (2026-07-02 audit): resting
+        pendings were never cancelled at 11:00, and filled positions were
+        never EOD-closed. Recovery rules:
+
+        - ASB POSITION at broker: adopt it (link to the existing DB trade if
+          one matches the ticket, else log a new one) so EOD force-close and
+          reconciliation work again. Cancel any sibling pending.
+        - ASB PENDINGS, restart inside the active window (07:00-11:00 UTC):
+          re-adopt tickets into _asb_state so fill-polling and the 11:00
+          cancel continue normally.
+        - ASB PENDINGS outside the window: stale — cancel them.
+        """
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        cfg = config.ASIAN_SESSION_BREAKOUT
+        now = datetime.now(timezone.utc)
+        today = str(now.date())
+        in_window = cfg["asian_end_hour"] <= now.hour < cfg["active_end_hour"]
+
+        for sym in cfg["instruments"]:
+            try:
+                positions = [
+                    p for p in (mt5.positions_get(symbol=sym) or ())
+                    if p.magic == 20250305 and p.comment == "ASB"
+                ]
+                orders = [
+                    o for o in (mt5.orders_get(symbol=sym) or ())
+                    if o.magic == 20250305 and o.comment == "ASB"
+                ]
+            except Exception as e:
+                logger.warning(f"[ASB] {sym} startup recovery query failed: {e}")
+                continue
+
+            if positions:
+                pos = positions[0]
+                for o in orders:  # sibling pendings are stale once filled
+                    self.order_manager.cancel_pending_order(o.ticket)
+                direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
+                trade_id = None
+                for t in self.trade_logger.get_open_trades():
+                    if t.mt5_ticket == pos.ticket:
+                        trade_id = t.id
+                        break
+                self._asb_state[sym] = {
+                    "date": today, "long_ticket": None, "short_ticket": None,
+                    "lot_size": pos.volume,
+                    "long_stop": pos.price_open, "short_stop": pos.price_open,
+                    "long_sl": pos.sl, "short_sl": pos.sl,
+                    "long_tp": pos.tp, "short_tp": pos.tp,
+                    "placed_at": now, "open_trade_id": trade_id,
+                }
+                if trade_id is None:
+                    self._asb_on_fill(sym, pos, direction, self._asb_state[sym])
+                    logger.warning(
+                        f"[ASB] {sym} startup: adopted UNTRACKED position "
+                        f"ticket={pos.ticket} {direction} @ {pos.price_open}"
+                    )
+                else:
+                    logger.warning(
+                        f"[ASB] {sym} startup: re-adopted open trade "
+                        f"id={trade_id} ticket={pos.ticket} {direction}"
+                    )
+                continue
+
+            if not orders:
+                continue
+
+            if in_window:
+                long_t = next((o.ticket for o in orders
+                               if o.type == mt5.ORDER_TYPE_BUY_STOP), None)
+                short_t = next((o.ticket for o in orders
+                                if o.type == mt5.ORDER_TYPE_SELL_STOP), None)
+                ref = orders[0]
+                self._asb_state[sym] = {
+                    "date": today, "long_ticket": long_t, "short_ticket": short_t,
+                    "lot_size": ref.volume_current,
+                    "long_stop": next((o.price_open for o in orders
+                                       if o.type == mt5.ORDER_TYPE_BUY_STOP), 0.0),
+                    "short_stop": next((o.price_open for o in orders
+                                        if o.type == mt5.ORDER_TYPE_SELL_STOP), 0.0),
+                    "long_sl": next((o.sl for o in orders
+                                     if o.type == mt5.ORDER_TYPE_BUY_STOP), 0.0),
+                    "short_sl": next((o.sl for o in orders
+                                      if o.type == mt5.ORDER_TYPE_SELL_STOP), 0.0),
+                    "long_tp": next((o.tp for o in orders
+                                     if o.type == mt5.ORDER_TYPE_BUY_STOP), 0.0),
+                    "short_tp": next((o.tp for o in orders
+                                      if o.type == mt5.ORDER_TYPE_SELL_STOP), 0.0),
+                    "placed_at": now, "open_trade_id": None,
+                }
+                logger.warning(
+                    f"[ASB] {sym} startup: re-adopted pending tickets "
+                    f"B={long_t} S={short_t}"
+                )
+            else:
+                for o in orders:
+                    if self.order_manager.cancel_pending_order(o.ticket):
+                        logger.warning(
+                            f"[ASB] {sym} startup: cancelled stale pending "
+                            f"ticket={o.ticket} @ {o.price_open}"
+                        )
+
     # ─── Asian Session Breakout ──────────────────────────────────────
 
     def _scan_asb(self, now):
@@ -1923,6 +2039,31 @@ class HVFTrader:
             self._asb_state[sym] = {"date": today, "skipped": "pattern_breaker"}
             return
 
+        # Dedup vs broker book: a restart during the placement hour loses
+        # _asb_state, and re-placing over live ASB orders/positions would
+        # double the day's risk (2026-07-02 audit). Startup adoption should
+        # have rebuilt state already — this is the belt-and-braces check.
+        try:
+            import MetaTrader5 as mt5
+            existing_orders = [
+                o for o in (mt5.orders_get(symbol=sym) or ())
+                if o.magic == 20250305 and o.comment == "ASB"
+            ]
+            existing_pos = [
+                p for p in (mt5.positions_get(symbol=sym) or ())
+                if p.magic == 20250305 and p.comment == "ASB"
+            ]
+            if existing_orders or existing_pos:
+                logger.warning(
+                    f"[ASB] {sym}: {len(existing_orders)} order(s) / "
+                    f"{len(existing_pos)} position(s) already at broker — "
+                    f"skipping placement (dedup)"
+                )
+                self._asb_state[sym] = {"date": today, "skipped": "dedup_existing"}
+                return
+        except ImportError:
+            pass
+
         df = fetch_and_prepare(sym, "H1", bars=720)  # 30 days of H1 covers ADR(14)
         if df is None or df.empty:
             logger.warning(f"[ASB] {sym}: no H1 data, skipping")
@@ -1984,6 +2125,13 @@ class HVFTrader:
             self._asb_state[sym] = {"date": today, "skipped": "lot_size"}
             return
 
+        # Broker-side expiry at the cancel hour: even if the bot dies with
+        # pendings resting, they self-destruct at 11:00 UTC instead of
+        # resting GTC forever (2026-07-02 audit).
+        expiry_utc = now.replace(
+            hour=cfg["active_end_hour"], minute=0, second=0, microsecond=0,
+        )
+
         long_res = None
         short_res = None
         if place_long:
@@ -1991,14 +2139,14 @@ class HVFTrader:
                 symbol=sym, direction="LONG", lot_size=lot_size,
                 stop_price=ar.long_stop,
                 stop_loss=ar.long_sl, take_profit=ar.long_tp,
-                comment="ASB",
+                comment="ASB", expiration_utc=expiry_utc,
             )
         if place_short:
             short_res = self.order_manager.place_pending_stop_order(
                 symbol=sym, direction="SHORT", lot_size=lot_size,
                 stop_price=ar.short_stop,
                 stop_loss=ar.short_sl, take_profit=ar.short_tp,
-                comment="ASB",
+                comment="ASB", expiration_utc=expiry_utc,
             )
 
         long_ok = (not place_long) or bool(long_res)
@@ -2130,10 +2278,11 @@ class HVFTrader:
         }
         trade = self.trade_logger.log_trade_open(trade_data)
         state["open_trade_id"] = trade.id
+        pip = 0.01 if "JPY" in sym else 0.0001
         logger.info(
             f"[ASB] {sym} {direction} FILLED: ticket={position.ticket} "
             f"@ {position.price_open:.5f} (intended {trade_data['intended_entry']:.5f}, "
-            f"slip {trade_data['slippage']*10000:+.2f}p)  trade={trade.id}"
+            f"slip {trade_data['slippage'] / pip:+.2f}p)  trade={trade.id}"
         )
         if self.alerter:
             pip = 0.01 if "JPY" in sym else 0.0001
@@ -2159,9 +2308,19 @@ class HVFTrader:
                 tic = st.get(key)
                 if not tic:
                     continue
-                # If still in orders, cancel
+                # If still in orders, cancel — and only forget the ticket
+                # once it's actually gone. Unconditionally clearing it on a
+                # failed cancel left live GTC orders the bot no longer knew
+                # about (2026-07-02 audit); keep the ticket so the next
+                # cycle retries.
                 if mt5.orders_get(ticket=tic):
-                    self.order_manager.cancel_pending_order(tic)
+                    ok = self.order_manager.cancel_pending_order(tic)
+                    if not ok and mt5.orders_get(ticket=tic):
+                        logger.warning(
+                            f"[ASB] {sym} cancel {key}={tic} failed and order "
+                            f"still live — will retry next cycle"
+                        )
+                        continue
                     logger.info(
                         f"[ASB] {sym} cancel unfilled {key}={tic} past "
                         f"{config.ASIAN_SESSION_BREAKOUT['active_end_hour']:02d}:00 UTC"
