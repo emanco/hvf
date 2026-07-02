@@ -1,11 +1,23 @@
 """
 London Breakout — Asian range breakout detector for GBPUSD.
 
-Measures the Asian session range (00:00-07:00 UTC) and detects
-breakouts above/below at London open (08:00+). Exits by 13:00 UTC.
+What it ACTUALLY measures (validated 2026-07-02, keep as-is): bars arrive
+broker-time-labeled, so `update_asian_bar`'s `hour < 7` gate combined with
+the main loop's real-UTC 00-07 feed window accumulates the range over
+broker hours 03-06 = roughly UTC 00:00-04:00 (4 bars in summer, 5 in
+winter) — NOT the "00:00-07:00 UTC" originally intended. Breakouts are
+then detected during real UTC 08:00-13:00.
 
-Backtest: PF 1.77, 66% WR, +575 pips over 8 years (142 trades).
-Best on Monday + Tuesday with range 12-20 pips.
+This accidental geometry was re-validated against three alternatives on
+IC H1 data with commission (scripts/lbo_geometry_validation.py, 8.3y):
+it is the BEST variant — N=260, PF 1.63, +929p, dd 108p (stable 2023+:
+PF 1.62) — while the documented 7-bar UTC range variant is breakeven
+(PF 0.99 in 2023+). Do not "fix" the clock handling to match the old
+docstring without re-running that comparison.
+
+Original (superseded) claim: PF 1.77, 66% WR, +575p / 8y, 142 trades —
+that described broker-hour geometry incl. the Sunday-open gap.
+Best on Monday + Tuesday with range 12-20 pips (holds in re-validation).
 """
 
 import json

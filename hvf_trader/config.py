@@ -506,6 +506,11 @@ PATTERN_FRESHNESS_BARS["QUANTUM_LONDON"] = 1
 INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 
 # ─── London Breakout Strategy ───────────────────────────────────────────────
+# Geometry note (2026-07-02 audit + re-validation): due to broker-time bar
+# labels the live range is actually ~UTC 00-04 (4-5 bars), traded UTC 08-13.
+# Re-validated as the BEST of 4 geometry variants on IC H1 with commission:
+# N=260 PF 1.63 +929p dd 108p over 8.3y (2023+: PF 1.62). Keep as deployed;
+# see scripts/lbo_geometry_validation.py before changing any clock handling.
 LONDON_BREAKOUT = {
     "enabled": True,
     "instrument": "GBPUSD",
