@@ -676,16 +676,20 @@ PATTERN_FRESHNESS_BARS["BTC_DONCHIAN"] = 1
 # Deployed at 0.5% risk per trade for first month to bound surprise downside.
 # Scale to 1% after 30 live trades if performance tracks backtest expectation.
 #
-# PAUSED 2026-07-02 (audit): the deployed trailing exit does NOT match the
-# backtested one. Backtest (run_nr7_indices.py:91) trails to the 10-day
-# HIGHEST LOW (tight); the scanner (nr7_scanner.py:384-396) trails to the
-# 10-day LOWEST LOW (loose). Re-running both variants on the same data:
-# backtested variant reproduces PF 5.46/5.74; deployed variant scores
-# PF ~1.04-1.12 (no edge). Also: GTC brackets never expire (backtest gave
-# 1-day validity), vanished-pending deadlock, gap-through fills missed.
-# Resting DE40 pending cancelled + zero NR7 positions verified at pause.
-# Do not re-enable until the intended trail is chosen, re-backtested, and
-# the scanner exit + bracket lifecycle are fixed to match it.
+# RETIRED 2026-07-02 — no honest edge in ANY variant. Sequence:
+# (1) Audit found the deployed trail (10-day lowest-low, loose) was not the
+#     backtested one (10-day highest-low, tight, the PF 5.46/5.74 claim) →
+#     paused, DE40 pending cancelled, zero positions verified.
+# (2) Honest re-backtest of the TIGHT variant on IC's own D1 history
+#     (scripts/nr7_honest_bt.py) killed it too. The PF 5.5 claim decomposes
+#     into stacked optimism: exact-level entry fills through overnight gaps,
+#     exact-stop exit fills through gaps, whipsaw days (both bracket levels
+#     hit — common since the NR day is by definition the narrowest of 7)
+#     resolved by peeking at the day's CLOSE (lookahead), flat costs.
+#     Honest (open-touch whipsaw, IC per-bar spread, gap-aware both ways):
+#       US500: PF 1.22 full, 0.83 in 2023+   DE40: PF 1.12 full, 0.91 2023+
+#     Worst-case whipsaw ≈ 1.0. Loose (deployed) ≈ 0.9. Nothing survives.
+# Do NOT re-enable / rebuild — one live trade ever (-$10.56), retired clean.
 NR7_BREAKOUT = {
     "enabled": False,
     "pattern_type": "NR7_BREAKOUT",
