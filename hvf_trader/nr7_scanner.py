@@ -133,6 +133,20 @@ class Nr7Scanner:
     # ─── NR7 detection + bracket placement ──────────────────────────
 
     def _attempt_nr7_bracket(self, sym: str):
+        """Portfolio-gate wrapper (2 slots — bracket = 2 pendings).
+
+        NR7 is paused as of 2026-07-02, but the gate is wired now so any
+        rebuild inherits it.
+        """
+        from hvf_trader.risk import portfolio_gate
+        with portfolio_gate.reserve(sym, slots=2) as (gate_ok, gate_reason):
+            if not gate_ok:
+                logger.warning("[NR7] %s blocked by portfolio gate: %s",
+                               sym, gate_reason)
+                return
+            self._attempt_nr7_bracket_inner(sym)
+
+    def _attempt_nr7_bracket_inner(self, sym: str):
         cfg = self._cfg
         nr_lb = cfg["nr_lookback"]
         atr_period = cfg["atr_period"]

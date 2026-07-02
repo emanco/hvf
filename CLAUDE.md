@@ -222,20 +222,24 @@ LONDON_BREAKOUT      = {"enabled": True,  "instrument": "GBPUSD", "days": [0,1],
 BTC_DONCHIAN         = {"enabled": True,  "instances": ["BTCUSD","ETHUSD"], "entry_lookback_days": 55, "exit_lookback_days": 20, "risk_pct": 1.0}
 NR7_BREAKOUT         = {"enabled": False, "instances": ["US500","DE40"], "nr_lookback": 7, "risk_pct": 0.5}   # PAUSED 2026-07-02
 
-# Loss-limit circuit breakers (the ONLY portfolio-level control actually live):
+# Loss-limit circuit breakers:
 DAILY_LOSS_LIMIT_PCT = 10.0    # NOT 5 — widened for demo data collection
 WEEKLY_LOSS_LIMIT_PCT = 20.0   # NOT 8
 MONTHLY_LOSS_LIMIT_PCT = 30.0  # NOT 15
 PERF_GO_LIVE_DATE = "2026-03-25"
 
-# ⚠️ 2026-07-02 audit: MAX_CONCURRENT_TRADES, MAX_SPREAD_PCT_OF_STOP, the news
-# filter, margin cap, correlation check and min-RRR live ONLY in
-# risk_manager.pre_trade_check, which is called from the dead KZ_HUNT paths.
-# Every active strategy executes directly and bypasses all of them. Live
-# protection = loss-limit breaker (realized PnL only, DB-sourced) +
-# per-pattern 3-loss pause + each scanner's own ad-hoc checks. A shared
-# portfolio gate (count incl. pending orders + margin + currency exposure)
-# is the top structural fix on the backlog.
+# Portfolio gate (added 2026-07-02, hvf_trader/risk/portfolio_gate.py) —
+# called by ALL live strategy entry paths; counts broker positions + resting
+# pendings (bot magics), free-margin floor, per-currency cap. Deliberately
+# PERMISSIVE while on demo (max_positions 9, exposures 13, margin floor 25%,
+# 4 legs/currency) — tighten before real money:
+PORTFOLIO_GATE = {"enabled": True, "max_positions": 9, "max_total_exposures": 13,
+                  "min_free_margin_pct": 25.0, "max_per_currency": 4}
+
+# ⚠️ Note: MAX_CONCURRENT_TRADES, MAX_SPREAD_PCT_OF_STOP, the news filter and
+# min-RRR still live ONLY in risk_manager.pre_trade_check (dead KZ_HUNT-only
+# path). Live protection = loss-limit breaker (realized PnL only, DB-sourced)
+# + per-pattern 3-loss pause + PORTFOLIO_GATE + each scanner's ad-hoc checks.
 ```
 
 ## Deferred Work (see TODO.md)

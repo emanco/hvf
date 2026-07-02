@@ -217,6 +217,22 @@ class BtcDonchianScanner:
 
     def _attempt_entry(self, symbol: str, direction: str, close_price: float,
                        atr_val: float, signal_date):
+        """Portfolio-gate wrapper — entry logic in _inner."""
+        from hvf_trader.risk import portfolio_gate
+        with portfolio_gate.reserve(symbol) as (gate_ok, gate_reason):
+            if not gate_ok:
+                logger.warning("[BTC_DONCHIAN] %s blocked by portfolio gate: %s",
+                               symbol, gate_reason)
+                if self._alerter:
+                    self._alerter.send_message(
+                        f"<b>[BTC_DONCHIAN] entry blocked</b>\n"
+                        f"{symbol}: {gate_reason}")
+                return
+            self._attempt_entry_inner(symbol, direction, close_price,
+                                      atr_val, signal_date)
+
+    def _attempt_entry_inner(self, symbol: str, direction: str,
+                             close_price: float, atr_val: float, signal_date):
         cfg = self._cfg
         # Circuit breakers
         if self._circuit_breaker.is_tripped:

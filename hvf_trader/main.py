@@ -739,6 +739,20 @@ class HVFTrader:
             self._execute_london_breakout(signal)
 
     def _execute_london_breakout(self, signal):
+        """Portfolio-gate wrapper — placement logic in _inner."""
+        from hvf_trader.risk import portfolio_gate
+        with portfolio_gate.reserve(signal.symbol) as (ok, reason):
+            if not ok:
+                logger.warning(f"[LONDON_BO] {signal.symbol} blocked by "
+                               f"portfolio gate: {reason}")
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[LONDON_BO] entry blocked</b>\n"
+                        f"{signal.symbol}: {reason}")
+                return
+            self._execute_london_breakout_inner(signal)
+
+    def _execute_london_breakout_inner(self, signal):
         """Execute a London Breakout trade."""
         cfg = config.LONDON_BREAKOUT
         sym = signal.symbol
@@ -1005,6 +1019,20 @@ class HVFTrader:
         self._execute_night_tide(signal, latest_time)
 
     def _execute_night_tide(self, signal, bar_time):
+        """Portfolio-gate wrapper — placement logic in _inner."""
+        from hvf_trader.risk import portfolio_gate
+        with portfolio_gate.reserve(signal.symbol) as (ok, reason):
+            if not ok:
+                logger.warning(f"[NIGHT_TIDE] {signal.symbol} blocked by "
+                               f"portfolio gate: {reason}")
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[NIGHT_TIDE] entry blocked</b>\n"
+                        f"{signal.symbol}: {reason}")
+                return
+            self._execute_night_tide_inner(signal, bar_time)
+
+    def _execute_night_tide_inner(self, signal, bar_time):
         """Place a NIGHT_TIDE order with broker-side TP/SL."""
         from hvf_trader.detector.night_tide import signal_metadata
         from hvf_trader.risk.position_sizer import calculate_lot_size
@@ -2016,6 +2044,23 @@ class HVFTrader:
                     )
 
     def _asb_capture_and_place(self, sym, today, now):
+        """Portfolio-gate wrapper — reserves 2 slots (bracket = 2 pendings).
+
+        A gate block does NOT mark the day processed: the capture hour
+        retries every cycle until 08:00 UTC, so a transient margin/count
+        condition clearing re-enables the day's bracket.
+        """
+        from hvf_trader.risk import portfolio_gate
+        with portfolio_gate.reserve(sym, slots=2) as (ok, reason):
+            if not ok:
+                logger.warning(f"[ASB] {sym} blocked by portfolio gate: {reason}")
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[ASB] bracket blocked</b>\n{sym}: {reason}")
+                return
+            self._asb_capture_and_place_inner(sym, today, now)
+
+    def _asb_capture_and_place_inner(self, sym, today, now):
         """Compute Asian range and place BUY_STOP+SELL_STOP for this symbol.
 
         If trend_filter_enabled, skip the side that fights the H1 EMA200 trend

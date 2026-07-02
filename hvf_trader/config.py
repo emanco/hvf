@@ -180,10 +180,26 @@ RISK_PCT_BY_PATTERN = {
 DAILY_LOSS_LIMIT_PCT = 10.0       # Demo data collection — wider tolerance
 WEEKLY_LOSS_LIMIT_PCT = 20.0      # Demo data collection — wider tolerance
 MONTHLY_LOSS_LIMIT_PCT = 30.0     # Demo data collection — wider tolerance
-MAX_CONCURRENT_TRADES = 6         # V2 aggressive — 6 × 2% = 12% max simultaneous risk
+MAX_CONCURRENT_TRADES = 6         # ⚠️ enforced only by the dead KZ_HUNT gate path — live strategies use PORTFOLIO_GATE below
 MAX_SPREAD_PCT_OF_STOP = 0.10     # 10% of stop distance max (5% blocked normal market spreads)
 MAX_SPREAD_ABSOLUTE = 0.00020     # 2 pips — normal spreads always pass regardless of stop size
 MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
+
+# ─── Portfolio gate (shared by ALL live strategy entry paths) ────────────────
+# Added 2026-07-02 after the audit found every live strategy bypassed the
+# 8-gate RiskManager. Counts come from BROKER state (positions + resting
+# pendings, bot magics only). Deliberately PERMISSIVE while on demo /
+# validating — normal operation (NT 4 + ASB + LB + BTC 2 ≈ 8 positions,
+# +2-3 pendings) never touches these; they stop runaway states only.
+# Tighten before real money.
+PORTFOLIO_GATE = {
+    "enabled": True,
+    "max_positions": 9,           # bot-managed open positions (+in-flight reservations)
+    "max_total_exposures": 13,    # positions + resting pending orders
+    "min_free_margin_pct": 25.0,  # block new entries below this free-margin/equity floor
+    "max_per_currency": 4,        # open legs sharing one currency (forex only)
+}
+BOT_MAGICS = {20250305, 20260601, 20260605}   # main strategies, BTC_DONCHIAN, NR7
 
 # ─── Trade Management ───────────────────────────────────────────────────────
 PARTIAL_CLOSE_PCT = 0.60          # 60/40 split — bank more at T1, better risk-adjusted return (PF 1.79 vs 1.53, MaxDD 10.9% vs 19%)
