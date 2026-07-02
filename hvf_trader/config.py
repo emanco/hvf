@@ -642,8 +642,19 @@ PATTERN_FRESHNESS_BARS["BTC_DONCHIAN"] = 1
 #
 # Deployed at 0.5% risk per trade for first month to bound surprise downside.
 # Scale to 1% after 30 live trades if performance tracks backtest expectation.
+#
+# PAUSED 2026-07-02 (audit): the deployed trailing exit does NOT match the
+# backtested one. Backtest (run_nr7_indices.py:91) trails to the 10-day
+# HIGHEST LOW (tight); the scanner (nr7_scanner.py:384-396) trails to the
+# 10-day LOWEST LOW (loose). Re-running both variants on the same data:
+# backtested variant reproduces PF 5.46/5.74; deployed variant scores
+# PF ~1.04-1.12 (no edge). Also: GTC brackets never expire (backtest gave
+# 1-day validity), vanished-pending deadlock, gap-through fills missed.
+# Resting DE40 pending cancelled + zero NR7 positions verified at pause.
+# Do not re-enable until the intended trail is chosen, re-backtested, and
+# the scanner exit + bracket lifecycle are fixed to match it.
 NR7_BREAKOUT = {
-    "enabled": True,
+    "enabled": False,
     "pattern_type": "NR7_BREAKOUT",
     "nr_lookback": 7,                  # today's range = min of past N
     "atr_period": 14,

@@ -3,14 +3,14 @@
 ## What This Is
 Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, and equity indices. Started as a single KZ Hunt forex bot; now runs a portfolio of independent strategies, each on its own scanner thread. Deployed to a Windows VPS, managed as an NSSM service. Python, SQLAlchemy, Telegram alerts.
 
-## Current State (as of 2026-06-22)
+## Current State (as of 2026-07-02)
 - **Active strategies** (each its own scanner thread; `ENABLED_PATTERNS` for the main loop is now `[]`):
   - **NIGHT_TIDE** — M15 BB+RSI mean reversion on 4 cross pairs (AUDNZD, NZDCAD, AUDCAD, EURCHF), 22:00–01:00 UTC (DST-aware). Best live performer, but judge it against the **IC-native baseline: PF ~1.3–1.5, ~60% WR, ~6–11 fills/mo, max DD ~80p** (2026-07-02 diagnostic) — NOT the Dukascopy backtest PF 2–3 (IC's feed produces ~4x fewer signals; see `scripts/nt_ic_feed_diag.py`). EURCHF: near-zero setups on IC feed since 2025-10 (expected silence, not a bug). 1% risk.
-  - **ASIAN_SESSION_BREAKOUT (ASB)** — Asian-range breakout on GBPJPY + EURJPY, pending stop orders, EOD force-close 20:00 UTC. Research mode at 0.5% risk (collecting 30–50 fills).
-  - **LONDON_BREAKOUT (LONDON_BO)** — GBPUSD Asian-range breakout, Mon/Tue only, H1. 1% risk.
-  - **BTC_DONCHIAN** — daily Donchian (55/20, Turtle S2 variant) on BTCUSD + ETHUSD, trailing exits. 1% risk, LIVE.
-  - **NR7_BREAKOUT** — daily NR7 compression breakout on US500 + DE40 indices, stop orders + trailing. Research mode at 0.5% risk.
+  - **ASIAN_SESSION_BREAKOUT (ASB)** — Asian-range breakout on GBPJPY (EURJPY dropped 2026-06-26), pending stop orders, EOD force-close 20:00 UTC. Research mode at 0.5% risk (collecting 30–50 fills). ⚠️ 2026-07-02 audit: live arms its stops ~3h later (relative to the range) than the backtest that produced PF 1.79 — the live fill population is not the measured one; backtests have no commission. Live so far: 4W/7L, −$162.
+  - **LONDON_BREAKOUT (LONDON_BO)** — GBPUSD Asian-range breakout, Mon/Tue only, H1. 1% risk. ⚠️ 2026-07-02 audit: broker-time/UTC mislabel means live computes a 4-bar range (UTC 00–04) and trades UTC 08–13, while the "PF 1.77" backtest used a 7-bar range (UTC 21–04) traded UTC 05–10 — **the live config has no backtest support** (live record 6W/1L +$153 is 7 trades, not validation). Pending re-derivation or pause.
+  - **BTC_DONCHIAN** — daily Donchian (55/20, Turtle S2 variant) on BTCUSD + ETHUSD, trailing exits. 1% risk, LIVE. Implementation verified faithful to its sim (2026-07-02 audit), but claimed PF 5.09/3.22 is pre-2026-06-23-hardening and was never re-run; live entries lag broker close 2–5h (unmodeled).
 - **Disabled / retired**:
+  - **NR7_BREAKOUT** — PAUSED 2026-07-02. The deployed trailing exit (10-day lowest-low) is not the backtested one (10-day highest-low); the deployed variant re-backtests at PF ~1.04 (no edge) vs the claimed 5.46/5.74. Pending + positions flattened at pause. See config comment for re-enable conditions.
   - **KZ_HUNT** — disabled 2026-05-15. Geometric-validity ablation showed honest PF 0.44 (the apparent edge was fake quick wins from SL-on-profit-side mechanics). Detector/scorer code retained as reference (see KZ Hunt section below).
   - **QUANTUM_LONDON** — retired 2026-06-22 after −$631 lifetime live (PF 0.28). Low-R:R mean-reversion fade needing ~76–85% WR; never survived broker friction. EURCHF instance died 2026-06-04. Config kept for backtest history.
   - **HVF** — retired 2026-06-02 (detector finds ~zero patterns across gold/silver/crypto; algorithm is broken). **Viper**, **London Sweep** — net negative.
@@ -220,15 +220,22 @@ NIGHT_TIDE           = {"enabled": True,  "instruments": ["AUDNZD","NZDCAD","AUD
 ASIAN_SESSION_BREAKOUT = {"enabled": True, "instruments": ["GBPJPY","EURJPY"], "risk_pct": 0.5, "eod_force_close_hour": 20}
 LONDON_BREAKOUT      = {"enabled": True,  "instrument": "GBPUSD", "days": [0,1], "risk_pct": 1.0}
 BTC_DONCHIAN         = {"enabled": True,  "instances": ["BTCUSD","ETHUSD"], "entry_lookback_days": 55, "exit_lookback_days": 20, "risk_pct": 1.0}
-NR7_BREAKOUT         = {"enabled": True,  "instances": ["US500","DE40"], "nr_lookback": 7, "risk_pct": 0.5}
+NR7_BREAKOUT         = {"enabled": False, "instances": ["US500","DE40"], "nr_lookback": 7, "risk_pct": 0.5}   # PAUSED 2026-07-02
 
-# Global risk caps (apply across all strategies):
-MAX_CONCURRENT_TRADES = 6
-MAX_SPREAD_PCT_OF_STOP = 0.10
-DAILY_LOSS_LIMIT_PCT = 5.0
-WEEKLY_LOSS_LIMIT_PCT = 8.0
-MONTHLY_LOSS_LIMIT_PCT = 15.0
+# Loss-limit circuit breakers (the ONLY portfolio-level control actually live):
+DAILY_LOSS_LIMIT_PCT = 10.0    # NOT 5 — widened for demo data collection
+WEEKLY_LOSS_LIMIT_PCT = 20.0   # NOT 8
+MONTHLY_LOSS_LIMIT_PCT = 30.0  # NOT 15
 PERF_GO_LIVE_DATE = "2026-03-25"
+
+# ⚠️ 2026-07-02 audit: MAX_CONCURRENT_TRADES, MAX_SPREAD_PCT_OF_STOP, the news
+# filter, margin cap, correlation check and min-RRR live ONLY in
+# risk_manager.pre_trade_check, which is called from the dead KZ_HUNT paths.
+# Every active strategy executes directly and bypasses all of them. Live
+# protection = loss-limit breaker (realized PnL only, DB-sourced) +
+# per-pattern 3-loss pause + each scanner's own ad-hoc checks. A shared
+# portfolio gate (count incl. pending orders + margin + currency exposure)
+# is the top structural fix on the backlog.
 ```
 
 ## Deferred Work (see TODO.md)
