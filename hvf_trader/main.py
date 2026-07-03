@@ -982,6 +982,26 @@ class HVFTrader:
         # completed-bar evaluation without re-running that comparison
         # (scripts/nt_ic_feed_diag.py).
         latest_time = df["time"].iloc[-1]
+
+        # Staleness guard (trade 219, 2026-07-02): the FIRST copy_rates call
+        # of the window on a cold symbol can return an unsynchronized series
+        # hours old — the terminal syncs and the next call is fresh. An
+        # 8h-stale AUDCAD bar passed the new-bar dedup and fired a reversion
+        # signal that had already reverted (entered 16.8p off-signal, SL
+        # 28.8p from fill ≈ 2.5x intended risk). Reject anything older than
+        # 2 bar-periods vs broker-now; the next 60s cycle retries fresh.
+        # NOTE: bar times are broker-clock mislabeled as UTC.
+        from hvf_trader.data.data_fetcher import broker_utc_offset
+        broker_now = now + pd.Timedelta(hours=broker_utc_offset(now))
+        age_min = (broker_now - latest_time).total_seconds() / 60.0
+        if age_min > 30:
+            logger.warning(
+                "[NIGHT_TIDE] %s skip: stale data — newest bar %s is %.0f min "
+                "old (terminal not synced yet?); retrying next cycle",
+                symbol, latest_time, age_min,
+            )
+            return
+
         last_seen = self._night_tide_last_bar.get(symbol)
         if last_seen is not None and latest_time <= last_seen:
             return  # This bar already evaluated (at its open)
@@ -1094,11 +1114,36 @@ class HVFTrader:
         ticket = result["ticket"]
         fill_price = result["fill_price"]
         meta = signal_metadata(signal)
-
         pip = config.PIP_VALUES.get(sym, 0.0001)
+
+        # Recalculate SL from the ACTUAL fill. signal.stop_loss is anchored
+        # to the signal bar's close, so fill slippage silently changes the
+        # real stop distance while sizing assumed stop_pips (trade 219,
+        # 2026-07-02: 16.8p slippage -> 28.8p live stop ≈ 2.5x intended
+        # risk). TP stays at the BB-mid strategy target.
+        actual_sl = signal.stop_loss
+        sl_from_fill = (fill_price - cfg["stop_pips"] * pip
+                        if signal.direction == "LONG"
+                        else fill_price + cfg["stop_pips"] * pip)
+        if abs(sl_from_fill - signal.stop_loss) / pip > 0.5:
+            if self.order_manager.modify_stop_loss(ticket, sym, sl_from_fill):
+                logger.info(
+                    "[NIGHT_TIDE] %s SL re-anchored to fill: %.5f -> %.5f "
+                    "(%.1fp from fill)",
+                    sym, signal.stop_loss, sl_from_fill, cfg["stop_pips"],
+                )
+                actual_sl = sl_from_fill
+            else:
+                logger.warning(
+                    "[NIGHT_TIDE] %s SL re-anchor failed; keeping signal SL "
+                    "%.5f (%.1fp from fill)",
+                    sym, signal.stop_loss,
+                    abs(signal.stop_loss - fill_price) / pip,
+                )
+
         rrr = (
-            abs(signal.take_profit - fill_price) / abs(fill_price - signal.stop_loss)
-            if abs(fill_price - signal.stop_loss) > 0 else 0
+            abs(signal.take_profit - fill_price) / abs(fill_price - actual_sl)
+            if abs(fill_price - actual_sl) > 0 else 0
         )
 
         pattern_data = {
@@ -1109,7 +1154,7 @@ class HVFTrader:
             "score": 100,
             "status": "TRIGGERED",
             "entry_price": fill_price,
-            "stop_loss": signal.stop_loss,
+            "stop_loss": actual_sl,
             "target_1": signal.take_profit,
             "target_2": signal.take_profit,
             "rrr": rrr,
@@ -1133,7 +1178,7 @@ class HVFTrader:
             "pattern_type": "NIGHT_TIDE",
             "mt5_ticket": ticket,
             "entry_price": fill_price,
-            "stop_loss": signal.stop_loss,
+            "stop_loss": actual_sl,
             "target_1": signal.take_profit,
             "target_2": signal.take_profit,
             "lot_size": lot_size,
@@ -1147,19 +1192,19 @@ class HVFTrader:
         self.trade_logger.log_trade_open(trade_data)
 
         tp_pips = abs(signal.take_profit - fill_price) / pip
-        sl_pips = abs(signal.stop_loss - fill_price) / pip
+        sl_pips = abs(actual_sl - fill_price) / pip
         logger.info(
             "[NIGHT_TIDE] %s %s: fill=%.5f TP=%.5f (%.1fp) SL=%.5f (%.1fp) "
             "lots=%s rsi=%.1f",
             signal.direction, sym, fill_price, signal.take_profit, tp_pips,
-            signal.stop_loss, sl_pips, lot_size, signal.rsi,
+            actual_sl, sl_pips, lot_size, signal.rsi,
         )
         if self.alerter:
             self.alerter.send_message(
                 f"<b>[NIGHT_TIDE] {signal.direction} {sym}</b>\n"
                 f"Entry: {fill_price:.5f}\n"
                 f"TP: {signal.take_profit:.5f} (+{tp_pips:.1f}p)\n"
-                f"SL: {signal.stop_loss:.5f} (-{sl_pips:.1f}p)\n"
+                f"SL: {actual_sl:.5f} (-{sl_pips:.1f}p)\n"
                 f"BB({signal.bb_lower:.5f}/{signal.bb_mid:.5f}/{signal.bb_upper:.5f})\n"
                 f"RSI: {signal.rsi:.1f}  Lots: {lot_size}"
             )

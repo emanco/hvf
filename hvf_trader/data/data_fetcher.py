@@ -34,6 +34,25 @@ TIMEFRAME_MAP = {
 }
 
 
+def broker_utc_offset(now: Optional[datetime] = None) -> int:
+    """IC broker clock offset vs UTC: +3 during EU DST (last Sunday of March
+    01:00 UTC to last Sunday of October 01:00 UTC), else +2.
+
+    MT5 bar epochs are broker time but this module labels them UTC (see
+    fetch_ohlcv) — use this to compare bar timestamps against wall clock,
+    e.g. staleness checks.
+    """
+    from datetime import timedelta
+    if now is None:
+        now = datetime.now(timezone.utc)
+    y = now.year
+    mar = datetime(y, 3, 31, 1, tzinfo=timezone.utc)
+    mar_last_sun = mar - timedelta(days=(mar.weekday() + 1) % 7)
+    oct_ = datetime(y, 10, 31, 1, tzinfo=timezone.utc)
+    oct_last_sun = oct_ - timedelta(days=(oct_.weekday() + 1) % 7)
+    return 3 if mar_last_sun <= now < oct_last_sun else 2
+
+
 def fetch_ohlcv(
     symbol: str,
     timeframe: str = "H1",
