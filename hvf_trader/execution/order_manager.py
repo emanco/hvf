@@ -680,9 +680,11 @@ class OrderManager:
         # derive the broker-vs-UTC offset from a live tick rather than
         # assuming a fixed timezone (IC is UTC+2/+3 by DST).
         if expiration_utc is not None:
+            # The MetaTrader5 Python package doesn't expose the SYMBOL_EXPIRATION_*
+            # bitmask constants (MQL5-only), so use the literal value (4) as fallback.
             supports_specified = bool(
                 getattr(symbol_info, "expiration_mode", 0)
-                & mt5.SYMBOL_EXPIRATION_SPECIFIED
+                & getattr(mt5, "SYMBOL_EXPIRATION_SPECIFIED", 4)
             )
             tick = mt5.symbol_info_tick(symbol)
             if supports_specified and tick and tick.time:
