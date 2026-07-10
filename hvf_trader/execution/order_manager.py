@@ -264,7 +264,13 @@ class OrderManager:
             return False
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.error(
+            # retcode 10018 = market closed. Expected transiently at the daily
+            # rollover maintenance window (e.g. BTC_DONCHIAN's crypto trail):
+            # the caller retries next tick and succeeds once the market
+            # reopens, so log it as a warning rather than a hard error.
+            market_closed = getattr(mt5, "TRADE_RETCODE_MARKET_CLOSED", 10018)
+            log = logger.warning if result.retcode == market_closed else logger.error
+            log(
                 f"Modify SL failed: {symbol} ticket={ticket} new_sl={new_sl:.5f} "
                 f"retcode={result.retcode}, comment={result.comment}"
             )
