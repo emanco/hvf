@@ -138,8 +138,16 @@ class BtcDonchianScanner:
             prior_history = d1.iloc[:-1]
         last_bar_date = last_bar.name.date()
         closed_date_str = last_bar_date.isoformat()
-        if self._last_processed_date == closed_date_str:
-            return  # this closed bar already processed
+        # Don't early-return when this bar's already been processed for
+        # detection — the trailing-stop management below must run EVERY tick.
+        # Its only modify attempt used to fire once/day at the D1 rollover
+        # (~22:00 UTC), exactly when IC's crypto CFD is in its daily maintenance
+        # close, so modify_stop_loss was rejected (retcode 10018 "Market
+        # closed") and never retried until the next rollover — which also
+        # fails. Net effect: the broker stop stayed stuck at the entry level
+        # for the life of the position. Retrying each tick lets the trail apply
+        # the moment the market reopens.
+        already_processed = (self._last_processed_date == closed_date_str)
 
         # Compute rolling extremes from the bars BEFORE the last closed bar
         entry_lb = self._cfg["entry_lookback_days"]
@@ -158,12 +166,17 @@ class BtcDonchianScanner:
         last_high = float(last_bar["high"])
         last_low = float(last_bar["low"])
 
-        # Manage open position first
+        # Manage the open position on EVERY tick (see note above) — the trail
+        # target only changes daily, but re-attempting each poll means a modify
+        # rejected during the rollover maintenance window is retried (and
+        # succeeds) as soon as the market reopens. The guards inside
+        # _manage_open_position no-op once the stop already sits at target.
         if self._open_trade_id is not None:
             self._manage_open_position(sym, last_bar, exit_high, exit_low, prior_history)
-            # Even if trail moved the stop, we still want to process detection
-            # in case it's a flip signal. But: don't open a counter position
-            # while one's alive — that's handled in _attempt_entry().
+            self._save_state()
+
+        if already_processed:
+            return  # detection already ran for this closed bar
 
         # Detection
         if self._open_trade_id is None:
