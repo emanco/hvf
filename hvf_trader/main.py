@@ -1250,17 +1250,21 @@ class HVFTrader:
                 reason = "TAKE_PROFIT" if pnl > 0 else "STOP_LOSS"
                 pnl_estimated = False
             else:
-                # Fall back to TP target as best guess (broker hits are
-                # almost always TP for mean-reversion strategies — losing
-                # trades typically max-hold-out)
-                close_price = trade.target_1 or trade.entry_price
-                if trade.direction == "LONG":
-                    pnl_pips = (close_price - trade.entry_price) / pip
-                else:
-                    pnl_pips = (trade.entry_price - close_price) / pip
-                pnl = pnl_pips * 10.0 * (trade.lot_size or 0.01)
-                reason = "TAKE_PROFIT" if pnl_pips > 0 else "STOP_LOSS"
-                pnl_estimated = True
+                # The exit deal is not in history yet (the broker writes it a
+                # few seconds after the position leaves positions_get). DO NOT
+                # fabricate a close. The old code assumed TAKE_PROFIT at
+                # target_1 here, which on 2026-07-14 booked two AUDNZD stop-outs
+                # as +$220/+$320 TP "wins" and reset the per-symbol loss-streak
+                # counter, letting NIGHT_TIDE re-enter a falling market 3x.
+                # Leave the trade OPEN and retry next cycle; reconciliation
+                # backstops with a conservative stop-loss estimate if the deal
+                # never appears.
+                logger.warning(
+                    "[NIGHT_TIDE] %s ticket=%s gone from MT5 but no close deal "
+                    "in history yet; deferring to next cycle / reconciliation.",
+                    trade.symbol, ticket,
+                )
+                continue
 
             self.trade_logger.log_trade_close(
                 trade.id, close_price, pnl, pnl_pips, reason,
