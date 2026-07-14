@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -965,6 +965,22 @@ class HVFTrader:
         if open_nt >= cfg.get("max_concurrent", 4):
             logger.info("[NIGHT_TIDE] %s skip: max_concurrent (%d) reached",
                         symbol, open_nt)
+            return
+
+        # One trade per pair per night. The window is only ~3h (22:00-01:00 UTC)
+        # and windows are ~21h apart, so "any NIGHT_TIDE fill on this pair in the
+        # last 6h" == "already traded this pair tonight" — restart-safe
+        # (DB-backed, and counts already-closed fills so it survives a
+        # mid-window restart and blocks re-entry after a close). Validated
+        # 2026-07-14 on IC data: the cap lifts portfolio PF 1.42->1.55 and cuts
+        # DD 90->77p by removing falling-knife re-entries (e.g. the 3x AUDNZD
+        # churn that lost -$225 on 2026-07-14).
+        since = datetime.now(timezone.utc) - timedelta(hours=6)
+        if self.trade_logger.count_pattern_trades_since("NIGHT_TIDE", symbol, since) > 0:
+            logger.info(
+                "[NIGHT_TIDE] %s skip: already traded this pair tonight "
+                "(1/pair/night cap)", symbol,
+            )
             return
 
         df = fetch_and_prepare(symbol, cfg["timeframe"], bars=50)

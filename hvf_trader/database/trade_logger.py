@@ -487,6 +487,24 @@ class TradeLogger:
             .all()
         )
 
+    def count_pattern_trades_since(
+        self, pattern_type: str, symbol: str, since_dt: datetime
+    ) -> int:
+        """Count trades of a pattern+symbol opened at/after since_dt (any status).
+
+        Used for the NIGHT_TIDE one-trade-per-pair-per-night cap. Counts CLOSED
+        trades too, so an earlier fill that already exited still blocks re-entry.
+        """
+        return (
+            self._session.query(TradeRecord)
+            .filter(
+                TradeRecord.pattern_type == pattern_type,
+                TradeRecord.symbol == symbol,
+                TradeRecord.opened_at >= since_dt,
+            )
+            .count()
+        )
+
     def get_armed_patterns(self) -> list[PatternRecord]:
         """Return all patterns with status ARMED.
 
