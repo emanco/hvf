@@ -527,12 +527,18 @@ INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 # Re-validated as the BEST of 4 geometry variants on IC H1 with commission:
 # N=260 PF 1.63 +929p dd 108p over 8.3y (2023+: PF 1.62). Keep as deployed;
 # see scripts/lbo_geometry_validation.py before changing any clock handling.
+# Range band 12-20 -> 10-22 (2026-07-15 deep analysis, equal-risk R units):
+# the edge is a broad plateau ~8-25p, no cliff at 20p. 10-22 dominates 12-20
+# in BOTH full-history and 2023+ windows (FULL: PF 1.76 +81.4R vs 1.63 +50.8R;
+# 2023+: PF 1.81 +42.0R vs 1.62 +24.3R), with both boundary buckets
+# independently positive (8-12p PF ~2.4; 20-24p PF 1.98 in 2023+). Did NOT
+# widen past 22: the 28-35p bucket is PF 0.96 in 2023+.
 LONDON_BREAKOUT = {
     "enabled": True,
     "instrument": "GBPUSD",
     "days": [0, 1],                 # Monday + Tuesday (0=Mon, 1=Tue)
-    "min_range_pips": 12,
-    "max_range_pips": 20,
+    "min_range_pips": 10,
+    "max_range_pips": 22,
     "tp_multiplier": 1.0,           # TP = 1.0x Asian range from entry
     "exit_hour_utc": 13,            # Force close at 13:00 UTC
     "spread_pips": 1.0,

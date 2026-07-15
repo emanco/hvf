@@ -17,7 +17,10 @@ docstring without re-running that comparison.
 
 Original (superseded) claim: PF 1.77, 66% WR, +575p / 8y, 142 trades —
 that described broker-hour geometry incl. the Sunday-open gap.
-Best on Monday + Tuesday with range 12-20 pips (holds in re-validation).
+Best on Monday + Tuesday. Range band widened 12-20 -> 10-22 pips
+(2026-07-15 equal-risk deep analysis: edge is a broad plateau ~8-25p with
+no cliff at 20p; 10-22 dominates 12-20 in both full-history and 2023+
+windows — see config.py LONDON_BREAKOUT note).
 """
 
 import json
