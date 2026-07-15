@@ -290,12 +290,14 @@ class HVFTrader:
             try:
                 bal_str = f"${account['balance']:.2f}" if account else "(unavailable)"
                 eq_str = f"${account['equity']:.2f}" if account else "(unavailable)"
+                acts = config.active_strategy_map()
+                act_syms = sorted(config.active_traded_symbols())
                 self.alerter.send_message(
                     f"\u2705 <b>Bot online</b>\n"
                     f"Env: {config.ENVIRONMENT}\n"
                     f"Balance: {bal_str}  Equity: {eq_str}\n"
-                    f"Strategies: {', '.join(config.ENABLED_PATTERNS)} + QL/LB/NIGHT_TIDE\n"
-                    f"Instruments: {len(config.INSTRUMENTS)} pairs"
+                    f"Strategies ({len(acts)}): {', '.join(acts)}\n"
+                    f"Instruments ({len(act_syms)}): {', '.join(act_syms)}"
                 )
             except Exception as e:
                 logger.warning(f"Startup Telegram alert failed: {e}")

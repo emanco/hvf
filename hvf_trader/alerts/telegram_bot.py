@@ -349,13 +349,17 @@ class TelegramAlerter:
             return None
 
     def alert_startup(self):
-        """Alert on bot startup."""
+        """Alert on bot startup — one line per ENABLED strategy with its
+        instruments and risk (was: the retired KZ_HUNT universe + stale
+        global risk, fixed 2026-07-15)."""
+        lines = []
+        for name, symbols in config.active_strategy_map().items():
+            risk = config.RISK_PCT_BY_PATTERN.get(name, config.RISK_PCT)
+            lines.append(f"• {name} ({risk}%): {', '.join(symbols)}")
         text = (
             f"<b>\U0001F680 {config.BOT_NAME} Started</b>\n"
             f"Environment: <b>{config.ENVIRONMENT}</b>\n"
-            f"Instruments: {', '.join(config.INSTRUMENTS)}\n"
-            f"Risk: {config.RISK_PCT}% per trade\n"
-            f"Max concurrent: {config.MAX_CONCURRENT_TRADES}"
+            + "\n".join(lines)
         )
         self.send_message(text)
 
