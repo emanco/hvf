@@ -16,7 +16,7 @@ Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, a
   - **HVF** — retired 2026-06-02 (detector finds ~zero patterns across gold/silver/crypto; algorithm is broken). **Viper**, **London Sweep** — net negative.
 - **Account**: IC Markets Demo, ~$7.9k balance, risk per trade varies by strategy (0.5–1%)
 - **Account history**: Started $700 (2026-03-06), $10k deposit added 2026-03-31
-- **Go-live date**: 2026-03-25 (performance stats ignore trades before this)
+- **Go-live date**: 2026-07-16 "era 2" (performance stats + Telegram equity chart ignore trades/snapshots before this; reset from 2026-03-25 after the 2026-07-10..15 overhaul: NIGHT_TIDE fabricated-TP fix + 1/pair/night cap, BTC_DONCHIAN per-tick trail, ASB expiration fix, LONDON_BO 10–22p band. Pre-reset history remains in the DB.)
 - **DB caveat**: `trade_records.pnl` is unreliable when `pnl_estimated=1` (deal lookup failed). Exclude estimated trades when ranking strategy performance.
 
 ## DO NOT
@@ -226,7 +226,7 @@ NR7_BREAKOUT         = {"enabled": False, "instances": ["US500","DE40"], "nr_loo
 DAILY_LOSS_LIMIT_PCT = 10.0    # NOT 5 — widened for demo data collection
 WEEKLY_LOSS_LIMIT_PCT = 20.0   # NOT 8
 MONTHLY_LOSS_LIMIT_PCT = 30.0  # NOT 15
-PERF_GO_LIVE_DATE = "2026-03-25"
+PERF_GO_LIVE_DATE = "2026-07-16"   # "era 2" reset; kill switch uses PERF_KILL_SWITCH_SINCE (decoupled)
 
 # Portfolio gate (added 2026-07-02, hvf_trader/risk/portfolio_gate.py) —
 # called by ALL live strategy entry paths; counts broker positions + resting

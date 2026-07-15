@@ -375,7 +375,15 @@ PERF_KILL_SWITCH_SINCE = "2026-07-01"  # Kill switch counts trades since THIS da
                                        # trip the auto-halt on the clean forward
                                        # book. Reporting still uses PERF_GO_LIVE_DATE
                                        # so full history is preserved.
-PERF_GO_LIVE_DATE = "2026-03-25"       # Ignore trades before this date for performance stats (reset after bug fixes)
+PERF_GO_LIVE_DATE = "2026-07-16"       # Ignore trades before this date for performance stats.
+                                       # Reset 2026-07-16 ("era 2"): fresh equity
+                                       # baseline for the current book after the
+                                       # 2026-07-10..15 overhaul — NIGHT_TIDE
+                                       # fabricated-TP fix + 1/pair/night cap,
+                                       # BTC_DONCHIAN per-tick trailing, ASB
+                                       # expiration fix, LONDON_BO 10-22p band.
+                                       # (Was 2026-03-25; pre-reset history stays
+                                       # in the DB, just excluded from reporting.)
 STARTING_EQUITY = 10000.0              # Fallback when MT5 unavailable (current demo account balance)
 ACCOUNT_CURRENCY_SYMBOL = "$"          # Fallback display symbol when MT5 unavailable
 CURRENCY_SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£", "JPY": "¥", "CHF": "CHF ", "AUD": "A$", "NZD": "NZ$", "CAD": "C$"}
