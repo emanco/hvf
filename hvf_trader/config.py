@@ -602,6 +602,14 @@ ASIAN_SESSION_BREAKOUT = {
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
     "eod_force_close_hour": 20,       # UTC — force-close any open position
+    # BE12 overlay (2026-07-15, scripts/asb_eod_traintest.py): move SL to
+    # entry at this true-UTC hour. Winners hit TP within hours; the drag was
+    # afternoon faders (EOD-exit bucket -4.3R over 82 trades). Train/test
+    # validated: train PF 6.58 avgR +0.265 (baseline 1.55/+0.134); untouched
+    # test PF 3.73 avgR +0.203 (baseline 1.60/+0.139), drawdown halved. The
+    # whole BE family (12/14/16) dominated, not one lucky cell. Set None to
+    # disable.
+    "breakeven_hour_utc": 12,
     "min_range_pct_adr": 0.4,         # default min: range >= 0.4 * ADR(14). Per-pair backtest 2026-05-26 showed 0.4 PF=1.97 vs 0.3 PF=1.50 — extra trades from 0.3 dilute edge. GBPJPY edge is narrow (PF 3.66 at 0.4 -> 1.62 at 0.3); EURJPY flat (PF 1.33 vs 1.38). Per-pair override below for EURJPY.
     "min_range_pct_adr_by_symbol": {
         # GBPJPY uses the default 0.4 (don't dilute its narrow edge).

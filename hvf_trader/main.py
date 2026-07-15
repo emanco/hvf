@@ -2107,6 +2107,12 @@ class HVFTrader:
         if now.hour >= cfg["active_end_hour"]:
             self._asb_cancel_unfilled(now)
 
+        # BE12 overlay: tighten SL to entry on open ASB positions after the
+        # breakeven hour (train/test validated 2026-07-15 — see config note).
+        be_h = cfg.get("breakeven_hour_utc")
+        if be_h is not None and be_h <= now.hour < cfg["eod_force_close_hour"]:
+            self._asb_apply_breakeven()
+
         # Capture at start of the active window (one-shot per day per pair)
         if now.hour == cfg["asian_end_hour"]:
             for sym in cfg["instruments"]:
@@ -2449,6 +2455,53 @@ class HVFTrader:
                         f"{config.ASIAN_SESSION_BREAKOUT['active_end_hour']:02d}:00 UTC"
                     )
                 st[key] = None
+
+    def _asb_apply_breakeven(self):
+        """Move SL to entry on open ASB positions (BE12 overlay).
+
+        Broker-first and stateless: iterates MT5 positions by magic+comment,
+        so it needs no _asb_state and survives restarts. Idempotent — skips
+        positions whose SL already sits at/beyond entry, so calling every
+        scanner cycle is harmless. Tighten-only: never loosens an SL.
+
+        If the broker distance-check skips the modify (price hovering at
+        entry), the SL is unchanged and the next cycle retries; the success
+        log/alert only fires once the broker-side SL actually reads entry.
+        """
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return
+        cfg = config.ASIAN_SESSION_BREAKOUT
+        for sym in cfg["instruments"]:
+            for pos in (mt5.positions_get(symbol=sym) or ()):
+                if pos.magic != 20250305 or pos.comment != "ASB":
+                    continue
+                entry = pos.price_open
+                pip = 0.01 if "JPY" in sym else 0.0001
+                tol = 0.1 * pip
+                if pos.type == mt5.ORDER_TYPE_BUY:
+                    if pos.sl and pos.sl >= entry - tol:
+                        continue  # already at/beyond breakeven
+                else:
+                    if pos.sl and pos.sl <= entry + tol:
+                        continue
+                if not self.order_manager.modify_stop_loss(pos.ticket, sym, entry):
+                    continue  # retried next cycle
+                # Verify the broker actually took it (modify_stop_loss returns
+                # True on a min-distance skip too) before logging/alerting.
+                fresh = mt5.positions_get(ticket=pos.ticket) or []
+                if not fresh or abs(fresh[0].sl - entry) > tol:
+                    continue
+                logger.info(
+                    f"[ASB] {sym} breakeven set: ticket={pos.ticket} "
+                    f"SL {pos.sl:.5f} -> {entry:.5f}"
+                )
+                if self.alerter:
+                    self.alerter.send_message(
+                        f"<b>[ASB] SL to breakeven</b>\n"
+                        f"{sym} ticket={pos.ticket} SL -> {entry:.5f}"
+                    )
 
     def _asb_force_close_eod(self):
         """Force-close any still-open ASB positions at EOD."""
