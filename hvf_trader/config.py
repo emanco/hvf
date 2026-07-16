@@ -597,7 +597,11 @@ ASIAN_SESSION_BREAKOUT = {
     "enabled": True,
     # EURJPY dropped 2026-06-26: spread-correct backtest PF 1.06 (~1.0 after
     # commission) — no reliable edge. GBPJPY (PF 1.79) carries the strategy.
-    "instruments": ["GBPJPY"],
+    # USDJPY added 2026-07-16 (scripts/pair_extension_screen.py, pre-committed
+    # bar): live geometry + BE12, vol-scaled filters, real costs — 2023+
+    # PF 5.81 avgR +0.173 ddR 1.2R, test-2025+ PF 5.94; diversifies off GBP.
+    # Screened with vol-scaled params (see *_by_symbol overrides below).
+    "instruments": ["GBPJPY", "USDJPY"],
     "asian_start_hour": 0,            # UTC
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
@@ -617,6 +621,9 @@ ASIAN_SESSION_BREAKOUT = {
     },
     "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
     "min_buffer_pips": 2.0,
+    # Vol-scaled per-symbol overrides (USDJPY ADR ~0.81x GBPJPY's — the
+    # screened variant used these exact values; keep deploy == screen):
+    "min_buffer_pips_by_symbol": {"USDJPY": 1.6},
     "buffer_pct_range": 0.10,         # buffer = max(min_buffer, 10% of range)
     "tp_range_mult": 1.0,             # TP at 1× range from entry
     "risk_pct": 0.5,                  # conservative for first deploy
@@ -627,6 +634,7 @@ ASIAN_SESSION_BREAKOUT = {
     # away from EMA200; allows both sides in chop near EMA200.
     "trend_filter_enabled": True,
     "trend_filter_threshold_pips": 30,
+    "trend_filter_threshold_pips_by_symbol": {"USDJPY": 24},  # 30 x vol-scale 0.81
 }
 
 RISK_PCT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = ASIAN_SESSION_BREAKOUT["risk_pct"]

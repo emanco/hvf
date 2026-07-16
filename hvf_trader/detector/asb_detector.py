@@ -107,7 +107,9 @@ def compute_asian_range(
     if range_pips > cfg["max_range_pct_adr"] * adr_pips:
         return None
 
-    buffer_pips = max(cfg["min_buffer_pips"], cfg["buffer_pct_range"] * range_pips)
+    min_buf = cfg.get("min_buffer_pips_by_symbol", {}).get(
+        symbol, cfg["min_buffer_pips"])
+    buffer_pips = max(min_buf, cfg["buffer_pct_range"] * range_pips)
     long_stop = high + buffer_pips * pip
     short_stop = low - buffer_pips * pip
 

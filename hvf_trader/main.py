@@ -2220,7 +2220,8 @@ class HVFTrader:
                     ema_val = float(ema.iloc[-1])
                     pip = 0.01 if "JPY" in sym else 0.0001
                     diff_pips = (current - ema_val) / pip
-                    thr = cfg.get("trend_filter_threshold_pips", 30)
+                    thr = cfg.get("trend_filter_threshold_pips_by_symbol", {}).get(
+                        sym, cfg.get("trend_filter_threshold_pips", 30))
                     if diff_pips > thr:
                         place_short = False
                         trend_label = f"UPTREND (price-ema200=+{diff_pips:.0f}p)"
