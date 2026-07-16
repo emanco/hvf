@@ -34,7 +34,8 @@ from hvf_trader import config
 
 logger = logging.getLogger(__name__)
 
-PIP = config.PIP_VALUES.get("GBPUSD", 0.0001)
+def _pip(symbol: str) -> float:
+    return config.PIP_VALUES.get(symbol, 0.01 if "JPY" in symbol else 0.0001)
 
 
 @dataclass
@@ -62,7 +63,11 @@ class LondonBreakoutTracker:
     4. TRADING -> DONE when breakout detected or 13:00 UTC reached
     """
 
-    def __init__(self):
+    def __init__(self, symbol: str):
+        # Multi-instrument since 2026-07-16 (GBPJPY added via pair screen);
+        # one tracker per symbol, pip-aware for JPY quotes.
+        self.symbol = symbol
+        self.pip = _pip(symbol)
         self.reset()
 
     def reset(self):
@@ -109,25 +114,28 @@ class LondonBreakoutTracker:
         if self.state != "FORMING":
             return False
 
-        self.asian_range_pips = (self.asian_high - self.asian_low) / PIP
+        self.asian_range_pips = (self.asian_high - self.asian_low) / self.pip
 
-        # Range filter
-        if self.asian_range_pips < cfg["min_range_pips"]:
+        # Range filter — per-symbol band override (vol-scaled; e.g. GBPJPY
+        # 19-42p vs GBPUSD's 10-22p), falling back to the global band.
+        band = cfg.get("range_by_symbol", {}).get(self.symbol)
+        min_r, max_r = band if band else (cfg["min_range_pips"], cfg["max_range_pips"])
+        if self.asian_range_pips < min_r:
             self.state = "DONE"
             self.skipped_reason = "range {:.0f}p < min {:.0f}p".format(
-                self.asian_range_pips, cfg["min_range_pips"])
+                self.asian_range_pips, min_r)
             return False
 
-        if self.asian_range_pips > cfg["max_range_pips"]:
+        if self.asian_range_pips > max_r:
             self.state = "DONE"
             self.skipped_reason = "range {:.0f}p > max {:.0f}p".format(
-                self.asian_range_pips, cfg["max_range_pips"])
+                self.asian_range_pips, max_r)
             return False
 
         self.state = "READY"
         logger.info(
-            "[LONDON_BO] Range locked: high={:.5f} low={:.5f} range={:.0f}p".format(
-                self.asian_high, self.asian_low, self.asian_range_pips))
+            "[LONDON_BO] {} Range locked: high={:.5f} low={:.5f} range={:.0f}p".format(
+                self.symbol, self.asian_high, self.asian_low, self.asian_range_pips))
         return True
 
     def check_breakout(self, bar: pd.Series, cfg: dict) -> Optional[LondonBreakoutSignal]:
@@ -145,9 +153,11 @@ class LondonBreakoutTracker:
 
         self.state = "TRADING"
 
-        symbol = cfg["instrument"]
-        spread = cfg["spread_pips"] * PIP
-        tp_dist = self.asian_range_pips * cfg["tp_multiplier"] * PIP
+        symbol = self.symbol
+        spread_p = cfg.get("spread_pips_by_symbol", {}).get(
+            symbol, cfg["spread_pips"])
+        spread = spread_p * self.pip
+        tp_dist = self.asian_range_pips * cfg["tp_multiplier"] * self.pip
 
         # LONG breakout: bar high exceeds Asian high
         if bar["high"] > self.asian_high + spread:

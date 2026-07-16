@@ -228,11 +228,12 @@ class HVFTrader:
         for sym in config.INSTRUMENTS:
             self._kz_trackers[sym] = KillZoneTracker()
 
-        # ─── London Breakout Tracker ──────────────────────────────────
-        self._london_bo_tracker = None
+        # ─── London Breakout Trackers (one per instrument) ─────────────
+        self._london_bo_trackers = {}
         if config.LONDON_BREAKOUT.get("enabled"):
             from hvf_trader.detector.london_breakout import LondonBreakoutTracker
-            self._london_bo_tracker = LondonBreakoutTracker()
+            for _lbo_sym in config.LONDON_BREAKOUT["instruments"]:
+                self._london_bo_trackers[_lbo_sym] = LondonBreakoutTracker(_lbo_sym)
 
         # ─── Night Tide (BB+RSI on cross pairs) ────────────────────────
         self._night_tide_enabled = config.NIGHT_TIDE.get("enabled", False)
@@ -463,7 +464,7 @@ class HVFTrader:
                     logger.error(f"Scan {symbol} failed: {e}", exc_info=True)
 
             # London Breakout: check for Asian range breakout
-            if self._london_bo_tracker:
+            if self._london_bo_trackers:
                 try:
                     self._scan_london_breakout(now)
                 except Exception as e:
@@ -646,16 +647,16 @@ class HVFTrader:
             time.sleep(60)
 
     def _scan_london_breakout(self, now):
-        """Scan for London Breakout on GBPUSD.
+        """Scan for London Breakout on each configured instrument.
 
-        Runs within the main scanner loop on H1 bars.
+        Runs within the main scanner loop on H1 bars (multi-instrument
+        since 2026-07-16; GBPJPY added via pair screen).
         - 00:00-07:00 UTC: track Asian range
         - 07:00 UTC: lock range, apply filters
         - 08:00-13:00 UTC: detect breakout, execute
         - 13:00 UTC: force close if open
         """
         cfg = config.LONDON_BREAKOUT
-        sym = cfg["instrument"]
         hour = now.hour
         weekday = now.weekday()
 
@@ -665,12 +666,21 @@ class HVFTrader:
 
         # Outside relevant hours
         if hour >= cfg["exit_hour_utc"]:
-            # Force close any open London BO trade
+            # Force close any open London BO trades (all symbols)
             self._force_close_london_bo()
-            if self._london_bo_tracker.state != "IDLE":
-                self._london_bo_tracker.reset()
+            for tracker in self._london_bo_trackers.values():
+                if tracker.state != "IDLE":
+                    tracker.reset()
             return
 
+        for sym, tracker in self._london_bo_trackers.items():
+            try:
+                self._scan_london_bo_symbol(now, sym, tracker, cfg, hour)
+            except Exception as e:
+                logger.error(f"[LONDON_BO] {sym} scan failed: {e}", exc_info=True)
+
+    def _scan_london_bo_symbol(self, now, sym, tracker, cfg, hour):
+        """Per-symbol London Breakout scan (see _scan_london_breakout)."""
         # Fetch latest H1 bar (London Breakout is hardcoded to H1 — its
         # Asian-range tracking expects 7 bars from 00:00-07:00 UTC).
         df = fetch_and_prepare(sym, "H1", bars=10)
@@ -682,17 +692,17 @@ class HVFTrader:
 
         # Formation phase (00:00-07:00)
         if hour < 7:
-            self._london_bo_tracker.update_asian_bar(
+            tracker.update_asian_bar(
                 latest["high"], latest["low"], bar_time,
             )
             return
 
         # Lock range at 07:00
-        if self._london_bo_tracker.state == "FORMING":
-            qualified = self._london_bo_tracker.finalize_range(cfg)
+        if tracker.state == "FORMING":
+            qualified = tracker.finalize_range(cfg)
             if not qualified:
-                reason = self._london_bo_tracker.skipped_reason
-                logger.info("[LONDON_BO] Session skipped: {}".format(reason))
+                reason = tracker.skipped_reason
+                logger.info("[LONDON_BO] %s session skipped: %s", sym, reason)
                 if self.alerter:
                     self.alerter.send_message(
                         f"<b>[LONDON_BO] Session skipped</b>\n"
@@ -701,27 +711,26 @@ class HVFTrader:
                 return
 
             # Windowed news filter: block only if a high-impact event for
-            # GBPUSD's currencies falls inside LB's active window (00:00-13:00 UTC).
-            # Same-day events landing outside that window (e.g. late-NY releases)
-            # don't affect the Asian-range breakout edge.
+            # the symbol's currencies falls inside LB's active window
+            # (00:00-13:00 UTC). Same-day events landing outside that window
+            # (e.g. late-NY releases) don't affect the Asian-range breakout edge.
             from hvf_trader.data.news_filter import has_high_impact_in_window
             window_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             window_end = now.replace(
                 hour=cfg["exit_hour_utc"], minute=0, second=0, microsecond=0
             )
             if has_high_impact_in_window(sym, window_start, window_end):
-                self._london_bo_tracker.state = "DONE"
-                logger.info("[LONDON_BO] Session skipped: high-impact event in window")
+                tracker.state = "DONE"
+                logger.info("[LONDON_BO] %s session skipped: high-impact event in window", sym)
                 if self.alerter:
                     self.alerter.send_message(
                         f"<b>[LONDON_BO] Session skipped</b>\n"
-                        f"High-impact event scheduled today"
+                        f"{sym}: high-impact event scheduled today"
                     )
                 return
 
             # Range qualified — alert the user the setup is armed
             if self.alerter:
-                tracker = self._london_bo_tracker
                 self.alerter.send_message(
                     f"<b>[LONDON_BO] Range locked</b>\n"
                     f"{sym}: high={tracker.asian_high:.5f} low={tracker.asian_low:.5f}\n"
@@ -733,10 +742,10 @@ class HVFTrader:
         if hour < 8:
             return  # wait for London open
 
-        if self._london_bo_tracker.traded_today:
+        if tracker.traded_today:
             return
 
-        signal = self._london_bo_tracker.check_breakout(latest, cfg)
+        signal = tracker.check_breakout(latest, cfg)
         if signal:
             self._execute_london_breakout(signal)
 
@@ -758,15 +767,16 @@ class HVFTrader:
         """Execute a London Breakout trade."""
         cfg = config.LONDON_BREAKOUT
         sym = signal.symbol
+        tracker = self._london_bo_trackers[sym]
 
         # Circuit breaker (global + per-pattern)
         if self.circuit_breaker.is_tripped:
-            self._london_bo_tracker.mark_traded()
+            tracker.mark_traded()
             return
         pattern_clear, pattern_reason = self.circuit_breaker.check_pattern("LONDON_BO", sym)
         if not pattern_clear:
             logger.info("[LONDON_BO] Pattern breaker tripped, skipping: %s", pattern_reason)
-            self._london_bo_tracker.mark_traded()
+            tracker.mark_traded()
             return
 
         # Position sizing
@@ -778,14 +788,17 @@ class HVFTrader:
 
         fx_rate = self._get_quote_to_account_rate(sym)
         from hvf_trader.risk.position_sizer import calculate_lot_size
+        # Per-symbol risk override: new pairs run at research size (0.5%)
+        # until they accumulate live fills, without touching GBPUSD's 1%.
+        risk_pct = cfg.get("risk_pct_by_symbol", {}).get(sym, cfg["risk_pct"])
         lot_size = calculate_lot_size(
-            equity=equity, risk_pct=cfg["risk_pct"],
+            equity=equity, risk_pct=risk_pct,
             stop_distance_price=stop_distance, symbol=sym,
             account_currency=account.get("currency", "USD"),
             exchange_rate_to_account=fx_rate,
         )
         if lot_size <= 0:
-            self._london_bo_tracker.mark_traded()
+            tracker.mark_traded()
             return
 
         # Place order with TP and SL
@@ -796,12 +809,12 @@ class HVFTrader:
         )
         if not result:
             logger.error("[LONDON_BO] Order placement failed")
-            self._london_bo_tracker.mark_traded()
+            tracker.mark_traded()
             return
 
         ticket = result["ticket"]
         fill_price = result["fill_price"]
-        metadata = self._london_bo_tracker.get_pattern_metadata()
+        metadata = tracker.get_pattern_metadata()
 
         # Log pattern
         pattern_data = {
@@ -852,7 +865,7 @@ class HVFTrader:
             "pattern_metadata": metadata,
         }
         trade_record = self.trade_logger.log_trade_open(trade_data)
-        self._london_bo_tracker.mark_traded()
+        tracker.mark_traded()
 
         logger.info(
             "[LONDON_BO] {} {}: fill={:.5f}, TP={:.5f}, SL={:.5f}, "

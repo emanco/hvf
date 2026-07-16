@@ -543,10 +543,21 @@ INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 # widen past 22: the 28-35p bucket is PF 0.96 in 2023+.
 LONDON_BREAKOUT = {
     "enabled": True,
-    "instrument": "GBPUSD",
+    # Multi-instrument since 2026-07-16. GBPJPY added via the pre-registered
+    # pair screen (scripts/pair_extension_screen.py: 2023+ PF 2.21, test-2025+
+    # PF 2.90, vol-scaled band) + correlation check vs ASB/GBPJPY
+    # (scripts/gbpjpy_corr_check.py: near-complementary range filters, only
+    # 18 same-day overlaps in 4y; combined ddR 5.4 vs 7.5 additive).
+    "instruments": ["GBPUSD", "GBPJPY"],
     "days": [0, 1],                 # Monday + Tuesday (0=Mon, 1=Tue)
     "min_range_pips": 10,
     "max_range_pips": 22,
+    # Vol-scaled per-symbol band (GBPJPY median Asian range ~1.92x GBPUSD's)
+    # and entry-buffer spread; keep deploy == screen.
+    "range_by_symbol": {"GBPJPY": [19, 42]},
+    "spread_pips_by_symbol": {"GBPJPY": 1.9},
+    # New pair at research size until 30-50 live fills; GBPUSD stays 1%.
+    "risk_pct_by_symbol": {"GBPJPY": 0.5},
     "tp_multiplier": 1.0,           # TP = 1.0x Asian range from entry
     "exit_hour_utc": 13,            # Force close at 13:00 UTC
     "spread_pips": 1.0,
@@ -785,11 +796,11 @@ def active_strategy_map() -> dict:
     if ENABLED_PATTERNS:
         out["KZ_HUNT"] = sorted(INSTRUMENTS)
     for name, cfg in (("NIGHT_TIDE", NIGHT_TIDE),
-                      ("ASIAN_SESSION_BREAKOUT", ASIAN_SESSION_BREAKOUT)):
+                      ("ASIAN_SESSION_BREAKOUT", ASIAN_SESSION_BREAKOUT),
+                      ("LONDON_BO", LONDON_BREAKOUT)):
         if cfg.get("enabled"):                                # "instruments" list
             out[name] = sorted(cfg.get("instruments", []))
-    for name, cfg in (("LONDON_BO", LONDON_BREAKOUT),
-                      ("ASIAN_GRAVITY", ASIAN_GRAVITY)):
+    for name, cfg in (("ASIAN_GRAVITY", ASIAN_GRAVITY),):
         if cfg.get("enabled") and cfg.get("instrument"):      # single "instrument"
             out[name] = [cfg["instrument"]]
     for name, cfg in (("BTC_DONCHIAN", BTC_DONCHIAN),
