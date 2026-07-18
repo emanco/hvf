@@ -246,6 +246,12 @@ PORTFOLIO_GATE = {"enabled": True, "max_positions": 9, "max_total_exposures": 13
 - **M8**: RRR 1.0 threshold may be too tight with spread — revisit after 50+ trades
 - **L1-L5**: Logging/monitoring polish — low priority
 - **Feature backlog**: Correlation guard, alternative SL backtest, regime filter, Monte Carlo, per-pair daily limit
+- **Parked (screened, passed, not deployed)**: ASB/EURUSD (2023+ PF 3.69, test 4.02) — next in queue if ASB/USDJPY verifies live; LBO/EURUSD + LBO/EURGBP marginal passes (see `scripts/pair_extension_screen.py`)
+
+## Negative results (do not re-explore without a NEW hypothesis)
+- **NY-open breakout (London-morning range 08–13 UTC → NY 13–17 breakout)** — screened 2026-07-18 (`scripts/ny_breakout_screen.py`), pre-registered LBO-family geometry, honest costs: EURUSD PF 1.02 (coin flip), GBPUSD PF 0.83, both FAIL all bar legs. The family edge requires a *quiet* accumulation range (Asian); the London morning is an active move NY as often reverses as extends. The 13:00–20:00 UTC session gap stays uncovered deliberately.
+- **Scalping (sub-5p targets)** — ruled out 2026-07-18 on cost math: ~1p round-trip on EURUSD needs 60–73% WR to break even (QL needed 76–85% with a 1s scanner and died at PF 0.28); sub-5p targets also can't be honestly validated on bar data. Edge must live above the cost wall (10p+ targets).
+- **ASB/AUDJPY, LBO/USDJPY** — failed the 2026-07-16 pair screen.
 
 ## Backtesting
 ```bash
