@@ -42,7 +42,7 @@ The main scanner loop hosts **NIGHT_TIDE, ASB, and LONDON_BO inline** (`_scan_ni
 | Scanner (main) | `main.py:_scanner_loop` | 60s | KZ_HUNT pipeline (disabled) + NIGHT_TIDE / ASB / LONDON_BO scan/arm/execute, all inline |
 | BTC_DONCHIAN | `btc_donchian_scanner.py` | 60s | Daily Donchian on BTCUSD/ETHUSD |
 | NR7_BREAKOUT | `nr7_scanner.py` | 60s | Daily NR7 breakout on US500/DE40 |
-| Trade Monitor | `trade_monitor.py` | 30s | Partials at T1, trailing stops, invalidation, server-close detection |
+| Trade Monitor | `trade_monitor.py` | 1s | Partials at T1, trailing stops, invalidation, server-close detection (`TRADE_MONITOR_INTERVAL_SEC=1`; was 30s historically) |
 | Health Check | `health_check.py` | 60s | MT5 heartbeat, reconnection with exponential backoff |
 | Telegram Commands | `telegram_commands.py` | polling | /status, /health, /trades, /equity, /balance, /closeall |
 
@@ -194,7 +194,7 @@ C:\hvf_trader\venv\Scripts\python.exe -c "import sqlite3; conn = sqlite3.connect
 - **Armed patterns lock**: `threading.Lock` protects `_armed_patterns` list — always acquire before mutation or iteration.
 
 ### Reconciliation vs Trade Monitor
-- Both detect missing MT5 positions. Trade monitor runs every 30s (2 misses = close). Reconciliation runs every 60s (3 misses = close).
+- Both detect missing MT5 positions. Trade monitor runs every 1s (2 consecutive misses = close). Reconciliation runs every 60s (3 misses = close).
 - Trade monitor gets priority by design — it has better deal history lookup.
 - Reconciliation is the safety net for anything trade monitor misses.
 
