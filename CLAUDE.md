@@ -28,6 +28,7 @@ Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, a
 - Call `session.close()` anywhere — thread-local scoped sessions manage their own lifecycle
 - Store SQLAlchemy ORM objects in long-lived state — use `_detach_record()` to snapshot into SimpleNamespace
 - Trust `mt5.history_deals_get(position=ticket)` on IC Markets — it returns empty. Always fall back to broad search
+- Derive any *decision* from a PnL that may be estimated (`pnl_estimated=1`) without a path that revises it when the real deal lands. Three bugs in this family so far: NIGHT_TIDE fabricated TP "wins" (fixed 2026-07-14), reconciliation booking a TP win as an SL loss, and the per-pattern circuit breaker banking those phantom losses into a false 48h pause (LONDON_BO/GBPUSD, fixed 2026-07-20 — `revise_pattern_streak` now rebuilds the streak from corrected history and only ever *lifts* a pause)
 - "Fix" NIGHT_TIDE to evaluate completed bar closes — evaluating the forming bar at open is load-bearing (IC-native sim: stub-eval PF 1.42 vs completed-close PF 0.80). See comments in `data_fetcher.py:fetch_ohlcv` and `main.py:_scan_night_tide_instrument`
 
 ---
