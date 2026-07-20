@@ -395,6 +395,19 @@ class TradeLogger:
             f"PnL {old_pnl:+.2f} → {pnl:+.2f}, "
             f"pips {old_pnl_pips:+.1f} → {pnl_pips:+.1f}"
         )
+
+        # The streak counter was fed the estimate at close time, and the
+        # estimate assumes the stop was hit — a real TP therefore banked a
+        # phantom loss. Now that the row holds the broker's real PnL, rebuild
+        # the streak from history so the phantom is undone.
+        if (
+            self._circuit_breaker is not None
+            and record.pattern_type
+            and record.symbol
+        ):
+            self._circuit_breaker.revise_pattern_streak(
+                record.pattern_type, record.symbol
+            )
         return True
 
     def log_partial_close(self, trade_id: int, close_price: float) -> None:

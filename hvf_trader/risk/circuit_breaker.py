@@ -334,6 +334,91 @@ class CircuitBreaker:
 
         self._persist_pattern(pattern_type, symbol)
 
+    def revise_pattern_streak(self, pattern_type: str, symbol: str) -> None:
+        """Recompute one (pattern, symbol) streak from the DB after a PnL correction.
+
+        ``record_pattern_result`` is fed the PnL that was known at close time,
+        which is an *estimate* when MT5's deal lookup lags — and reconciliation's
+        estimate assumes the stop was hit. A trade that really hit TP therefore
+        banks a phantom loss in the streak counter. When the late-update path
+        later writes the broker's real PnL, this rebuilds the streak from the
+        corrected history so the phantom is undone (LONDON_BO/GBPUSD tripped a
+        false 48h pause this way on 2026-07-20: real record was W,L,W,L).
+
+        Recomputing from the DB (rather than adjusting by a delta) makes this
+        idempotent and self-healing regardless of how many corrections land.
+        """
+        new_streak = self._streak_from_history(pattern_type, symbol)
+        if new_streak is None:
+            return
+
+        key = (pattern_type, symbol)
+        old_streak = self._pattern_consecutive_losses.get(key, 0)
+        was_paused = self._pattern_paused_until.get(key) is not None
+        if new_streak == old_streak and not (
+            was_paused and new_streak < _PATTERN_LOSS_PAUSE_THRESHOLD
+        ):
+            return
+
+        self._pattern_consecutive_losses[key] = new_streak
+        if new_streak < _PATTERN_LOSS_PAUSE_THRESHOLD and was_paused:
+            self._pattern_paused_until[key] = None
+            logger.warning(
+                "PATTERN CIRCUIT BREAKER LIFTED: %s/%s -- streak revised %d → %d "
+                "after PnL correction; pause cleared",
+                pattern_type, symbol, old_streak, new_streak,
+            )
+        else:
+            logger.info(
+                "Pattern CB streak revised for %s/%s: %d → %d after PnL correction",
+                pattern_type, symbol, old_streak, new_streak,
+            )
+        self._persist_pattern(pattern_type, symbol)
+
+    def _streak_from_history(self, pattern_type: str, symbol: str) -> int | None:
+        """Count closed losses since the most recent win for one (pattern, symbol).
+
+        Bounded at PERF_KILL_SWITCH_SINCE — the project's existing "risk gates
+        only count trades since this date" boundary. Without it, rows old enough
+        to still carry unreliable estimated PnL (pnl_estimated=1) would drive a
+        live trading gate.
+
+        Returns None if the history can't be read (caller leaves state alone).
+        """
+        if not self.trade_logger:
+            return None
+        try:
+            from hvf_trader.database.models import TradeRecord
+
+            since = datetime.fromisoformat(
+                getattr(config, "PERF_KILL_SWITCH_SINCE", config.PERF_GO_LIVE_DATE)
+            )
+            rows = (
+                self.trade_logger._session.query(TradeRecord)
+                .filter(TradeRecord.status == "CLOSED")
+                .filter(TradeRecord.pattern_type == pattern_type)
+                .filter(TradeRecord.symbol == symbol)
+                .filter(TradeRecord.closed_at >= since)
+                .order_by(TradeRecord.closed_at.desc())
+                .limit(200)
+                .all()
+            )
+        except Exception as e:
+            logger.error(
+                "Pattern CB streak recompute failed for %s/%s: %s",
+                pattern_type, symbol, e,
+            )
+            return None
+
+        streak = 0
+        for r in rows:
+            pips = r.pnl_pips or 0
+            if pips > 0:
+                break
+            if pips < 0:
+                streak += 1
+        return streak
+
     def _persist_pattern(self, pattern_type: str, symbol: str) -> None:
         """Write the in-memory per-(pattern, symbol) state to the DB."""
         if not self.trade_logger:

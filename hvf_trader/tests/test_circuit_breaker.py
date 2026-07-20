@@ -97,3 +97,79 @@ class TestCircuitBreaker:
         now = datetime.now(timezone.utc)
         assert result > now
         assert result.day == 1
+
+
+class _HistoryStub:
+    """Query stub returning canned TradeRecord-alikes for streak recompute."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __getattr__(self, name):
+        if name == "all":
+            return lambda: self._rows
+        return self
+
+
+def _trade(pips):
+    r = MagicMock()
+    r.pnl_pips = pips
+    return r
+
+
+class TestPatternStreakRevision:
+    """revise_pattern_streak undoes phantom losses from estimated PnL.
+
+    Reconciliation's estimate assumes the stop was hit, so a trade that really
+    hit TP banks a phantom loss in the streak counter. LONDON_BO/GBPUSD tripped
+    a false 48h pause this way on 2026-07-20 (real record was W,L,W,L).
+    """
+
+    def _cb_with_history(self, rows, stored_streak, paused_until):
+        logger = MockTradeLogger()
+        state = MagicMock()
+        state.pattern_type = "LONDON_BO"
+        state.symbol = "GBPUSD"
+        state.consecutive_losses = stored_streak
+        state.paused_until = paused_until
+        logger._pattern_states = [state]
+        cb = CircuitBreaker(trade_logger=logger)
+        logger._session.query = _HistoryStub(rows)
+        return cb
+
+    def test_corrected_history_lifts_false_pause(self):
+        # Newest first: L, W, L, W -> true streak is 1, not 3.
+        rows = [_trade(-20.8), _trade(29.5), _trade(-5.4), _trade(37.6)]
+        cb = self._cb_with_history(
+            rows, 3, datetime.now(timezone.utc) + timedelta(hours=48)
+        )
+        assert cb.check_pattern("LONDON_BO", "GBPUSD")[0] is False
+
+        cb.revise_pattern_streak("LONDON_BO", "GBPUSD")
+
+        assert cb._pattern_consecutive_losses[("LONDON_BO", "GBPUSD")] == 1
+        assert cb.check_pattern("LONDON_BO", "GBPUSD")[0] is True
+
+    def test_revision_never_creates_a_pause(self):
+        """A worse corrected streak updates the count but must not trip a pause
+        retroactively — the 48h window it would have used is long expired."""
+        rows = [_trade(-10.0), _trade(-11.0), _trade(-12.0), _trade(-13.0)]
+        cb = self._cb_with_history(rows, 1, None)
+
+        cb.revise_pattern_streak("LONDON_BO", "GBPUSD")
+
+        assert cb._pattern_consecutive_losses[("LONDON_BO", "GBPUSD")] == 4
+        assert cb._pattern_paused_until.get(("LONDON_BO", "GBPUSD")) is None
+        assert cb.check_pattern("LONDON_BO", "GBPUSD")[0] is True
+
+    def test_unreadable_history_leaves_state_untouched(self):
+        cb = self._cb_with_history([], 3, datetime.now(timezone.utc) + timedelta(hours=48))
+        cb.trade_logger = None
+
+        cb.revise_pattern_streak("LONDON_BO", "GBPUSD")
+
+        assert cb._pattern_consecutive_losses[("LONDON_BO", "GBPUSD")] == 3
+        assert cb.check_pattern("LONDON_BO", "GBPUSD")[0] is False
