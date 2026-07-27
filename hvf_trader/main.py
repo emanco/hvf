@@ -1349,26 +1349,52 @@ class HVFTrader:
                 logger.error("[NIGHT_TIDE] Force-close failed for %s ticket=%s",
                              trade.symbol, ticket)
                 continue
+
+            # PnL: read the broker's real deal profit \u2014 never recompute from
+            # pips. close_position returns no "profit" field, so the old
+            # `pnl_pips * 10.0 * lot` fallback booked quote-currency values
+            # (unconverted to USD): AUDCAD/NZDCAD overstated ~42%, EURCHF
+            # mis-stated ~19%, and all of it est=0 so it slipped past every
+            # estimated-PnL filter. Mirror _detect_night_tide_closes: use
+            # close_deal.profit, or the account-currency-correct
+            # estimate_fallback_pnl (via broker tick specs) flagged estimated
+            # for reconciliation to revise if the deal isn't written yet.
+            from hvf_trader.execution.deal_utils import (
+                search_deal_history, find_close_deal, estimate_fallback_pnl,
+            )
             close_price = result.get("fill_price") if isinstance(result, dict) else 0
             pip = config.PIP_VALUES.get(trade.symbol, 0.0001)
-            if trade.direction == "LONG":
-                pnl_pips = (close_price - trade.entry_price) / pip
+            deals = search_deal_history(ticket, trade.symbol)
+            close_deal = find_close_deal(
+                deals, ticket, trade.symbol, trade.direction, trade.opened_at,
+            )
+            if close_deal:
+                close_price = close_deal.price
+                pnl = close_deal.profit
+                if trade.direction == "LONG":
+                    pnl_pips = (close_price - trade.entry_price) / pip
+                else:
+                    pnl_pips = (trade.entry_price - close_price) / pip
+                pnl_estimated = False
             else:
-                pnl_pips = (trade.entry_price - close_price) / pip
-            pnl = result.get("profit", pnl_pips * 10.0 * trade.lot_size) \
-                if isinstance(result, dict) else 0
+                pnl, pnl_pips = estimate_fallback_pnl(trade, close_price)
+                pnl_estimated = True
+
             self.trade_logger.log_trade_close(
                 trade.id, close_price, pnl, pnl_pips, reason,
+                pnl_estimated=pnl_estimated,
             )
             logger.info(
-                "[NIGHT_TIDE] %s force-close (%s): %+.1f pips $%+.2f",
+                "[NIGHT_TIDE] %s force-close (%s): %+.1f pips $%+.2f%s",
                 trade.symbol, reason, pnl_pips, pnl,
+                " (estimated)" if pnl_estimated else "",
             )
             if self.alerter:
                 emoji = "\u2705" if pnl > 0 else "\u274C"
                 self.alerter.send_message(
                     f"<b>{emoji} [NIGHT_TIDE] {reason} {trade.symbol}</b>\n"
                     f"Held: {held_hours:.1f}h  PnL: {pnl_pips:+.1f}p (~${pnl:+.2f})"
+                    f"{' (est)' if pnl_estimated else ''}"
                 )
 
     def _scan_instrument(self, symbol: str):
