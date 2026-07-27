@@ -27,7 +27,7 @@ Automated multi-strategy trading bot via MetaTrader 5, spanning forex, crypto, a
 - Use `&&` in PowerShell commands on the VPS — use `;` instead
 - Call `session.close()` anywhere — thread-local scoped sessions manage their own lifecycle
 - Store SQLAlchemy ORM objects in long-lived state — use `_detach_record()` to snapshot into SimpleNamespace
-- Trust `mt5.history_deals_get(position=ticket)` on IC Markets — it returns empty. Always fall back to broad search
+- Trust `mt5.history_deals_get(position=ticket)` on IC Markets — it returns empty OR a wrong non-empty set. Always broad-search filtered by symbol when the by-ticket set lacks the target position. Also pad `date_to` to `now+1d`: `deal.time` is server-time-labelled-UTC ~3h ahead, so a `now(utc)` upper bound drops the freshest deals (see Known Gotchas → IC Markets MT5)
 - Derive any *decision* from a PnL that may be estimated (`pnl_estimated=1`) without a path that revises it when the real deal lands. Three bugs in this family so far: NIGHT_TIDE fabricated TP "wins" (fixed 2026-07-14), reconciliation booking a TP win as an SL loss, and the per-pattern circuit breaker banking those phantom losses into a false 48h pause (LONDON_BO/GBPUSD, fixed 2026-07-20 — `revise_pattern_streak` now rebuilds the streak from corrected history and only ever *lifts* a pause)
 - "Fix" NIGHT_TIDE to evaluate completed bar closes — evaluating the forming bar at open is load-bearing (IC-native sim: stub-eval PF 1.42 vs completed-close PF 0.80). See comments in `data_fetcher.py:fetch_ohlcv` and `main.py:_scan_night_tide_instrument`
 
@@ -184,7 +184,8 @@ C:\hvf_trader\venv\Scripts\python.exe -c "import sqlite3; conn = sqlite3.connect
 ## Known Gotchas
 
 ### IC Markets MT5
-- `mt5.history_deals_get(position=ticket)` returns empty — always fall back to broad search (`history_deals_get(from_date, now)`) filtered by symbol
+- `mt5.history_deals_get(position=ticket)` is unreliable — it returns empty *or* a non-empty set that omits the target position's own deals (unrelated recent deals). A `if not deals` guard only falls back on *empty*, so a wrong-but-non-empty result silently defeats it. Always broad-search (`history_deals_get(from, to)`) filtered by symbol whenever the by-ticket set lacks `position_id == ticket`. (`deal_utils._query_deal_history`, hardened 2026-07-27)
+- **Deal-history clock skew** — `deal.time` is the broker's server time *labelled* as UTC, ~3h ahead of true UTC (verified 2026-07-27: server 16:50 vs UTC 13:50). A `date_to` of `datetime.now(timezone.utc)` sits *below* the timestamp of any deal closed in the last ~3h, silently excluding the freshest deals — precisely the ones a close/late-update lookup needs. This was the engine behind the estimated-PnL epidemic (deal lookup at close fails → estimated fallback → phantom SL losses feeding the circuit breaker). Fix: pad `date_to` to `now + 1 day` (no real deals live in the future). `deal_utils._query_deal_history`.
 - Spread widens significantly outside London/NY sessions — SL spread compensation only applied at entry
 
 ### SQLAlchemy / Threading

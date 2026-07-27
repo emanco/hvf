@@ -21,20 +21,41 @@ except ImportError:
 
 
 def _query_deal_history(ticket: int, symbol: str, lookback_days: int):
-    """Single query attempt: by-ticket then broad-search fallback."""
+    """Single query attempt: by-ticket, then broad symbol-filtered fallback.
+
+    Two IC Markets quirks are handled here:
+
+    1. Clock skew — ``deal.time`` is the broker's server time *labelled* as
+       UTC, running ~2-3h ahead of true UTC. A ``date_to`` of ``now(utc)``
+       therefore sits *below* the timestamp of any deal closed in the last
+       ~3h, silently excluding the freshest deals — exactly the ones a close
+       or late-update lookup wants. We pad the upper bound a full day into
+       the future (no real deals live there) to swallow the skew. Verified
+       2026-07-27: trade 232's close deal was invisible to ``date_to=now``
+       but present with ``now + 1d``.
+
+    2. ``position=ticket`` is unreliable: it returns an empty set *or* a
+       non-empty set that omits the target position's own deals (it appears
+       to ignore the filter and hand back unrelated recent deals). The old
+       ``if not deals`` guard only fell back on *empty*, so a wrong-but-
+       non-empty result defeated the fallback and the real close deal was
+       never found. Fall back to the broad symbol-filtered search whenever
+       the by-ticket set lacks the target position.
+    """
     now = datetime.now(timezone.utc)
     from_date = now - timedelta(days=lookback_days)
+    to_date = now + timedelta(days=1)  # pad past broker/UTC clock skew (quirk 1)
 
-    deals = mt5.history_deals_get(from_date, now, position=ticket)
+    deals = mt5.history_deals_get(from_date, to_date, position=ticket) or ()
 
-    # IC Markets often returns nothing for position=ticket filter.
-    # Fall back to broad search filtered by symbol.
-    if not deals:
-        all_deals = mt5.history_deals_get(from_date, now)
+    # Broad fallback when position=ticket didn't actually return the target
+    # position's deals (quirk 2) — not just when it returned nothing.
+    if not any(getattr(d, "position_id", None) == ticket for d in deals):
+        all_deals = mt5.history_deals_get(from_date, to_date)
         if all_deals:
             deals = [d for d in all_deals if d.symbol == symbol]
 
-    return deals or []
+    return list(deals)
 
 
 def search_deal_history(
