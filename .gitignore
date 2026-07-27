@@ -17,3 +17,4 @@ bt_*.txt
 data/calendar_cache.json
 .claude/
 .playwright-mcp/
+.tokensave
