@@ -542,12 +542,22 @@ INVALIDATION_ENABLED_BY_PATTERN["QUANTUM_LONDON"] = False
 # independently positive (8-12p PF ~2.4; 20-24p PF 1.98 in 2023+). Did NOT
 # widen past 22: the 28-35p bucket is PF 0.96 in 2023+.
 LONDON_BREAKOUT = {
-    "enabled": True,
+    # RETIRED 2026-07-28. The PF 1.63 validation filled 62% of trades at the
+    # breakout level on days the window OPENED through it -- a price never
+    # available (4h blind gap between range end 04:00 and window open 08:00).
+    # Honest-fill re-fit over 960 cells (scripts/lbo_honest_refit.py) found
+    # 8/960 positive on train, best avgR +0.020, failed both the robustness
+    # and held-out gates. Not a parameter miss: ~1.7p round-trip on a ~15p
+    # stop is ~0.11R/trade of friction the gross edge never clears.
+    # Do not re-enable without a NEW hypothesis. See CLAUDE.md negative results.
+    "enabled": False,
     # Multi-instrument since 2026-07-16. GBPJPY added via the pre-registered
     # pair screen (scripts/pair_extension_screen.py: 2023+ PF 2.21, test-2025+
     # PF 2.90, vol-scaled band) + correlation check vs ASB/GBPJPY
     # (scripts/gbpjpy_corr_check.py: near-complementary range filters, only
     # 18 same-day overlaps in 4y; combined ddR 5.4 vs 7.5 additive).
+    # NB: that screen used the same level-fill assumption -> PF 2.21 is not
+    # trustworthy; GBPJPY measured 0.71 (chase) / 0.95 (skip) on honest fills.
     "instruments": ["GBPUSD", "GBPJPY"],
     "days": [0, 1],                 # Monday + Tuesday (0=Mon, 1=Tue)
     "min_range_pips": 10,
@@ -607,27 +617,44 @@ PATTERN_FRESHNESS_BARS["NIGHT_TIDE"] = 1
 ASIAN_SESSION_BREAKOUT = {
     "enabled": True,
     # EURJPY dropped 2026-06-26: spread-correct backtest PF 1.06 (~1.0 after
-    # commission) — no reliable edge. GBPJPY (PF 1.79) carries the strategy.
-    # USDJPY added 2026-07-16 (scripts/pair_extension_screen.py, pre-committed
-    # bar): live geometry + BE12, vol-scaled filters, real costs — 2023+
-    # PF 5.81 avgR +0.173 ddR 1.2R, test-2025+ PF 5.94; diversifies off GBP.
-    # Screened with vol-scaled params (see *_by_symbol overrides below).
-    # EURUSD added 2026-07-24 (scripts/pair_extension_screen.py, pre-committed
-    # bar; demo data-collection): live geometry + BE12, vol-scaled filters
-    # (ADR ~0.47x GBPJPY), real costs (0.7p comm) — 2023+ PF 3.69 test-2025+
-    # PF 4.02, N=85 ddR 2.1; diversifies off JPY entirely.
-    "instruments": ["GBPJPY", "USDJPY", "EURUSD"],
+    # commission) — no reliable edge.
+    # USDJPY + EURUSD dropped 2026-07-28 by the fill audit (scripts/asb_fill_audit.py).
+    # Both were added on scripts/pair_extension_screen.py numbers (USDJPY 2023+
+    # PF 5.81, EURUSD 3.69) that the audit reproduces EXACTLY as its naive-BE
+    # row — i.e. the screen inherited two sim fictions: (1) filling pending-stop
+    # legs that were un-placeable at 07:00, (2) booking a breakeven scratch on
+    # trades where MT5 would reject the SL-through-market modify. Honest 2023+:
+    # USDJPY PF 1.06, EURUSD PF 0.77 (0.74 with a realistic spread floor —
+    # the recorded per-bar spread medians to 0.00p on both). Neither had taken
+    # a live fill. GBPJPY is the only honest survivor (PF ~1.13-1.49) and it is
+    # also the only pair live is positive on (4W/0L, +$43.24 of the -$131.18
+    # lifetime; all the loss is dropped EURJPY).
+    # Do not re-add either without re-screening on the FIXED screen.
+    "instruments": ["GBPJPY"],
     "asian_start_hour": 0,            # UTC
     "asian_end_hour": 7,              # UTC — capture range at this hour
     "active_end_hour": 11,            # UTC — cancel unfilled pendings at this hour
     "eod_force_close_hour": 20,       # UTC — force-close any open position
-    # BE12 overlay (2026-07-15, scripts/asb_eod_traintest.py): move SL to
-    # entry at this true-UTC hour. Winners hit TP within hours; the drag was
-    # afternoon faders (EOD-exit bucket -4.3R over 82 trades). Train/test
-    # validated: train PF 6.58 avgR +0.265 (baseline 1.55/+0.134); untouched
-    # test PF 3.73 avgR +0.203 (baseline 1.60/+0.139), drawdown halved. The
-    # whole BE family (12/14/16) dominated, not one lucky cell. Set None to
-    # disable.
+    # BE12 overlay (2026-07-15): move SL to entry at this true-UTC hour.
+    # ⚠️ Its validation was FICTION (audited 2026-07-28, scripts/asb_fill_audit.py).
+    # scripts/asb_eod_traintest.py models BE as `eff_sl = entry_px` whenever
+    # bar.hour >= be_h — unconditionally. But MT5 rejects an SL through the
+    # market (a BUY's SL must sit below Bid, retcode 10016), so on exactly the
+    # underwater trades this was meant to save, the modify FAILS: live keeps
+    # the original stop while the sim booked a free ~-0.1R scratch. ~60% of the
+    # sim's BE exits were impossible (47/75 GBPJPY). Honest 2023+ GBPJPY: 1.36,
+    # vs the 5.40 the naive model claimed — and 1.34 with no BE at all, i.e.
+    # this overlay is worth ~nothing, not the "1.5x expectancy" once recorded.
+    # The tell we missed: the whole BE-hour family (12/14/16) dominated. A real
+    # edge is hour-specific; a free scratch is available at every hour.
+    # Kept at 12 because live ALREADY behaves as the honest column (see
+    # main.py:_asb_apply_breakeven — it retries on failure rather than
+    # pretending), so this is a no-op to leave, not a live risk. Note that
+    # means live silently degrades to "no BE" on affected trades, logging
+    # nothing. Candidate replacement, NOT yet validated: close at market at
+    # 12:00 when underwater (always fillable) — 2023+ GBPJPY 1.49, halves DD,
+    # but it was found on the same data that killed BE12, so it needs the
+    # pre-committed train/test treatment first. Set None to disable.
     "breakeven_hour_utc": 12,
     "min_range_pct_adr": 0.4,         # default min: range >= 0.4 * ADR(14). Per-pair backtest 2026-05-26 showed 0.4 PF=1.97 vs 0.3 PF=1.50 — extra trades from 0.3 dilute edge. GBPJPY edge is narrow (PF 3.66 at 0.4 -> 1.62 at 0.3); EURJPY flat (PF 1.33 vs 1.38). Per-pair override below for EURJPY.
     "min_range_pct_adr_by_symbol": {
@@ -636,9 +663,9 @@ ASIAN_SESSION_BREAKOUT = {
     },
     "max_range_pct_adr": 1.0,         # range <= 1.0 * ADR(14)
     "min_buffer_pips": 2.0,
-    # Vol-scaled per-symbol overrides (USDJPY ADR ~0.81x GBPJPY's — the
-    # screened variant used these exact values; keep deploy == screen):
-    "min_buffer_pips_by_symbol": {"USDJPY": 1.6, "EURUSD": 0.9},  # EURUSD 2.0 x 0.47
+    # (USDJPY 1.6 / EURUSD 0.9 vol-scaled overrides removed 2026-07-28 with the
+    # pairs themselves.)
+    "min_buffer_pips_by_symbol": {},
     "buffer_pct_range": 0.10,         # buffer = max(min_buffer, 10% of range)
     "tp_range_mult": 1.0,             # TP at 1× range from entry
     "risk_pct": 0.5,                  # conservative for first deploy
@@ -649,7 +676,8 @@ ASIAN_SESSION_BREAKOUT = {
     # away from EMA200; allows both sides in chop near EMA200.
     "trend_filter_enabled": True,
     "trend_filter_threshold_pips": 30,
-    "trend_filter_threshold_pips_by_symbol": {"USDJPY": 24, "EURUSD": 14},  # 30 x vol-scale (0.81, 0.47)
+    # (USDJPY 24 / EURUSD 14 removed 2026-07-28 with the pairs themselves.)
+    "trend_filter_threshold_pips_by_symbol": {},
 }
 
 RISK_PCT_BY_PATTERN["ASIAN_SESSION_BREAKOUT"] = ASIAN_SESSION_BREAKOUT["risk_pct"]
