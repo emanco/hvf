@@ -181,7 +181,10 @@ class TelegramCommandHandler:
                            if getattr(t, "mt5_ticket_partial", None)}
             tracked = db_tickets | db_partials
             for p in positions:
-                if p.magic == 20250305 and p.ticket not in tracked:
+                # config.BOT_MAGICS, not a single literal: 20250305 covers only
+                # the main-loop strategies (NIGHT_TIDE/ASB), so an orphaned
+                # BTC_DONCHIAN position (magic 20260601) was invisible here.
+                if p.magic in config.BOT_MAGICS and p.ticket not in tracked:
                     mt5_untracked.append(p)
         except Exception:
             pass
@@ -275,7 +278,10 @@ class TelegramCommandHandler:
                            if getattr(t, "mt5_ticket_partial", None)}
             tracked = db_tickets | db_partials
             for p in positions:
-                if p.magic == 20250305 and p.ticket not in tracked:
+                # config.BOT_MAGICS, not a single literal: 20250305 covers only
+                # the main-loop strategies (NIGHT_TIDE/ASB), so an orphaned
+                # BTC_DONCHIAN position (magic 20260601) was invisible here.
+                if p.magic in config.BOT_MAGICS and p.ticket not in tracked:
                     mt5_untracked.append(p)
         except Exception:
             pass
