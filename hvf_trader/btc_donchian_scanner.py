@@ -47,10 +47,22 @@ logger = logging.getLogger(__name__)
 
 class BtcDonchianScanner:
     PATTERN_TYPE = "BTC_DONCHIAN"
-    # Ticks (~60s each) to keep retrying a broker-rejected entry. IC's crypto
-    # maintenance close has been observed to last ~4 min; 30 is generous cover
-    # while still abandoning a signal well inside the same broker day.
-    MAX_ENTRY_RETRIES = 30
+    # How long to keep retrying a broker-rejected entry before abandoning the
+    # signal. This MUST cover the instrument's daily maintenance close, because
+    # detection fires at the D1 rollover — which sits *inside* that close for
+    # every non-crypto instrument we trade. Measured on IC from M1 bar gaps
+    # (broker clock, 2026-07-29):
+    #     BTCUSD / ETHUSD              23:58 -> 00:00    ~2 min
+    #     XAUUSD / USTEC / US500       23:58 -> 01:00   ~61 min
+    #     JP225                        (no quotes 00:00-01:00 either)
+    # The budget used to be 30 ticks (~30 min), tuned on crypto alone when
+    # crypto was the whole universe. For the four instruments added 2026-07-29
+    # it therefore expired ~30 min BEFORE the market reopened, so every signal
+    # on them was guaranteed to be abandoned unfilled — a silent no-op dressed
+    # up as a working deployment (USTEC SHORT, 2026-07-29, abandoned 21:31 UTC
+    # against a 22:00 UTC reopen). A wall-clock window rather than a tick count
+    # so it stays correct if poll_interval_sec ever changes.
+    ENTRY_RETRY_WINDOW = timedelta(hours=3)
 
     def __init__(self, order_manager, trade_logger, connector,
                  circuit_breaker, alerter=None, cfg=None):
@@ -78,6 +90,13 @@ class BtcDonchianScanner:
         # a genuinely un-fillable signal can't spin order_send all day.
         self._entry_retry_date: str | None = None
         self._entry_retry_count: int = 0
+        self._entry_retry_started: datetime | None = None
+        # Detection alerts are per SIGNAL, not per attempt. The alert used to
+        # be sent from inside the entry path, so a signal that retried N times
+        # fired N identical "SHORT signal (LIVE)" Telegram messages — 30 in a
+        # row for USTEC on 2026-07-29. Alert fatigue on a channel that also
+        # carries real fills is a monitoring failure, not just noise.
+        self._alerted_signal_date: str | None = None
 
         instrument = self._cfg["instrument"]
         self._state_file = config.LOG_DIR / f"btc_donchian_state_{instrument}.json"
@@ -212,27 +231,34 @@ class BtcDonchianScanner:
         # gives the entry the same treatment. Policy skips (circuit breaker,
         # portfolio gate, sub-minimum lots) still consume the signal.
         if not entry_ok:
+            now = datetime.now(timezone.utc)
             if self._entry_retry_date != closed_date_str:
                 self._entry_retry_date = closed_date_str
                 self._entry_retry_count = 0
+                self._entry_retry_started = now
             self._entry_retry_count += 1
-            if self._entry_retry_count <= self.MAX_ENTRY_RETRIES:
+            waited = now - (self._entry_retry_started or now)
+            if waited < self.ENTRY_RETRY_WINDOW:
                 logger.warning(
                     "[BTC_DONCHIAN] %s entry rejected by broker; will retry "
-                    "(%d/%d) on next tick — signal NOT consumed",
-                    sym, self._entry_retry_count, self.MAX_ENTRY_RETRIES,
+                    "(attempt %d, %.0f of %.0f min) — signal NOT consumed",
+                    sym, self._entry_retry_count,
+                    waited.total_seconds() / 60,
+                    self.ENTRY_RETRY_WINDOW.total_seconds() / 60,
                 )
                 return  # leave _last_processed_date unset
             logger.error(
-                "[BTC_DONCHIAN] %s entry still rejected after %d retries — "
-                "abandoning the %s signal",
-                sym, self.MAX_ENTRY_RETRIES, closed_date_str,
+                "[BTC_DONCHIAN] %s entry still rejected after %d attempts over "
+                "%.0f min — abandoning the %s signal",
+                sym, self._entry_retry_count,
+                waited.total_seconds() / 60, closed_date_str,
             )
             if self._alerter:
                 self._alerter.send_message(
                     f"<b>[BTC_DONCHIAN] entry abandoned</b>\n"
-                    f"{sym}: broker rejected the {closed_date_str} signal "
-                    f"{self.MAX_ENTRY_RETRIES}x — no position opened."
+                    f"{sym}: broker rejected the {closed_date_str} signal for "
+                    f"{waited.total_seconds() / 60:.0f} min "
+                    f"({self._entry_retry_count} attempts) — no position opened."
                 )
 
         self._last_processed_date = closed_date_str
@@ -360,7 +386,7 @@ class BtcDonchianScanner:
             # Neither a policy skip nor a broker rejection — we simply cannot
             # size safely. Route it into the RETRYABLE bucket so a transient
             # Market Watch / spec glitch self-heals, bounded by
-            # MAX_ENTRY_RETRIES with a Telegram alert on abandon. Sizing on a
+            # ENTRY_RETRY_WINDOW with a Telegram alert on abandon. Sizing on a
             # guessed value-per-point is the one thing never to do here.
             logger.error(
                 "[BTC_DONCHIAN] %s cannot derive value-per-point "
@@ -410,8 +436,14 @@ class BtcDonchianScanner:
             f"lots={lots}, risk=${implied_risk:.2f} of ${risk_usd:.2f} intended, "
             f"dpp={dpp:.6g}, current={current_px:.2f})"
         )
-        logger.info(msg)
-        if cfg.get("alert_on_detection", True) and self._alerter:
+        # Once per SIGNAL, not once per attempt. A broker-rejected entry is
+        # retried every tick for up to ENTRY_RETRY_WINDOW, and this alert used
+        # to be re-sent on each of those attempts.
+        first_attempt = self._alerted_signal_date != str(signal_date)
+        if first_attempt:
+            self._alerted_signal_date = str(signal_date)
+            logger.info(msg)
+        if first_attempt and cfg.get("alert_on_detection", True) and self._alerter:
             mode = "DRY-RUN" if cfg["dry_run"] else "LIVE"
             self._alerter.send_message(
                 f"<b>[BTC_DONCHIAN] {direction} signal ({mode})</b>\n"
