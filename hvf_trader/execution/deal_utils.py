@@ -299,3 +299,71 @@ def combine_split_pnl(trade_record, main_close_price: float, main_close_profit: 
     remainder_pct = 1.0 - partial_pct
     total_pips = partial_pips * partial_pct + main_pips * remainder_pct
     return total_pnl, total_pips
+
+
+# ─── Balance operations (deposits / withdrawals) ─────────────────────────────
+
+# MT5 deal types that represent NON-TRADING capital flows. Trading costs
+# (commission, swap/interest) are deliberately NOT here — those are real
+# performance drag and must stay in the return series.
+BALANCE_DEAL_TYPES = {
+    2,   # DEAL_TYPE_BALANCE  — deposit / withdrawal
+    3,   # DEAL_TYPE_CREDIT
+    6,   # DEAL_TYPE_BONUS
+}
+
+
+def sync_balance_adjustments(trade_logger, lookback_days: int = 3650) -> int:
+    """Mirror MT5 balance-type deals into the DB. Returns rows newly inserted.
+
+    Every equity-derived metric (rolling Sharpe, daily PnL, PnL-since-go-live,
+    the equity chart) reads day-over-day balance deltas, so an unrecorded
+    deposit reads as trading profit. The 2026-07-29 $30k demo top-up produced a
+    +388% "return" day, inflating the 60-day rolling Sharpe to 4.57 and
+    suppressing the Sharpe halt/warn alarm for a full window.
+
+    Idempotent — keyed on deal ticket, so it is safe to call every cycle. The
+    default lookback is deliberately the full account history: deposits are
+    rare and cheap to re-scan, and a missed one corrupts every downstream
+    metric permanently.
+    """
+    if not MT5_AVAILABLE or mt5 is None:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    from_date = now - timedelta(days=lookback_days)
+    # Pad the upper bound past the broker's server-time-labelled-as-UTC skew
+    # (~3h ahead), same quirk documented in _query_deal_history.
+    to_date = now + timedelta(days=1)
+
+    try:
+        deals = mt5.history_deals_get(from_date, to_date)
+    except Exception as e:
+        logger.warning("Balance-adjustment sync failed: %s", e)
+        return 0
+    if not deals:
+        return 0
+
+    inserted = 0
+    for d in deals:
+        if getattr(d, "type", None) not in BALANCE_DEAL_TYPES:
+            continue
+        profit = float(getattr(d, "profit", 0.0) or 0.0)
+        if profit == 0.0:
+            continue
+        # deal.time is server-time labelled UTC (~3h ahead of true UTC). Keep
+        # the raw value: it is only used for day-bucketing against equity
+        # snapshots, and the deposit's own day is what matters.
+        ts = datetime.fromtimestamp(d.time, tz=timezone.utc).replace(tzinfo=None)
+        try:
+            if trade_logger.record_balance_adjustment(
+                deal_ticket=int(d.ticket), timestamp=ts, amount=profit,
+                deal_type=int(d.type), comment=getattr(d, "comment", "") or "",
+            ):
+                inserted += 1
+        except Exception as e:
+            logger.warning("Could not record balance adjustment %s: %s",
+                           getattr(d, "ticket", "?"), e)
+    if inserted:
+        logger.info("Balance-adjustment sync: %d new row(s)", inserted)
+    return inserted

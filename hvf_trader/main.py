@@ -29,7 +29,7 @@ from hvf_trader.execution.order_manager import OrderManager
 from hvf_trader.execution.trade_monitor import TradeMonitor
 from hvf_trader.monitoring.health_check import HealthChecker
 from hvf_trader.monitoring.reconciliation import Reconciliator
-from hvf_trader.alerts.telegram_bot import TelegramAlerter
+from hvf_trader.alerts.telegram_bot import TelegramAlerter, esc
 from hvf_trader.alerts.telegram_commands import TelegramCommandHandler
 from hvf_trader.detector.kz_hunt_detector import detect_kz_hunt_patterns, check_kz_hunt_entry_confirmation
 from hvf_trader.detector.kz_hunt_scorer import score_kz_hunt
@@ -515,6 +515,17 @@ class HVFTrader:
                 account = self.connector.get_account_info()
                 if account:
                     self.circuit_breaker.update(account["balance"])
+                    # Mirror any deposit/withdrawal BEFORE snapshotting, so the
+                    # flow is already on record when this cycle's balance jump
+                    # is read back as a "return" (idempotent, keyed on ticket).
+                    try:
+                        from hvf_trader.execution.deal_utils import (
+                            sync_balance_adjustments,
+                        )
+                        sync_balance_adjustments(self.trade_logger)
+                    except Exception as e:
+                        logger.error(f"Balance-adjustment sync failed: {e}",
+                                     exc_info=True)
                     # Log equity snapshot every cycle
                     self.trade_logger.log_equity_snapshot(
                         balance=account["balance"],
@@ -706,7 +717,7 @@ class HVFTrader:
                 if self.alerter:
                     self.alerter.send_message(
                         f"<b>[LONDON_BO] Session skipped</b>\n"
-                        f"{sym}: {reason}"
+                        f"{sym}: {esc(reason)}"
                     )
                 return
 
@@ -759,7 +770,7 @@ class HVFTrader:
                 if self.alerter:
                     self.alerter.send_message(
                         f"<b>[LONDON_BO] entry blocked</b>\n"
-                        f"{signal.symbol}: {reason}")
+                        f"{signal.symbol}: {esc(reason)}")
                 return
             self._execute_london_breakout_inner(signal)
 
@@ -1092,7 +1103,7 @@ class HVFTrader:
                 if self.alerter:
                     self.alerter.send_message(
                         f"<b>[NIGHT_TIDE] entry blocked</b>\n"
-                        f"{signal.symbol}: {reason}")
+                        f"{signal.symbol}: {esc(reason)}")
                 return
             self._execute_night_tide_inner(signal, bar_time)
 
@@ -2181,7 +2192,7 @@ class HVFTrader:
                 logger.warning(f"[ASB] {sym} blocked by portfolio gate: {reason}")
                 if self.alerter:
                     self.alerter.send_message(
-                        f"<b>[ASB] bracket blocked</b>\n{sym}: {reason}")
+                        f"<b>[ASB] bracket blocked</b>\n{sym}: {esc(reason)}")
                 return
             self._asb_capture_and_place_inner(sym, today, now)
 

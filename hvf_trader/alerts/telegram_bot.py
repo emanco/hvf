@@ -3,6 +3,7 @@ Telegram alerts: trade events, daily summary, errors.
 Uses python-telegram-bot library (async).
 """
 
+import html
 import logging
 import asyncio
 import queue
@@ -11,6 +12,21 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from hvf_trader import config
+
+
+def esc(text) -> str:
+    """HTML-escape dynamic text before interpolating it into an HTML alert.
+
+    Telegram's parse_mode=HTML rejects the ENTIRE message on an unknown tag, so
+    one bare '<' in interpolated text silently drops the whole alert — the send
+    fails, an ERROR is logged, and the notification you were relying on never
+    arrives. Found 2026-07-29: portfolio_gate's "free margin 22% < floor 25%"
+    put a '<' at byte 53 of the ASB bracket-blocked alert, so EVERY
+    margin-floor block since 2026-06-02 was invisible on Telegram (06-02,
+    07-27, 07-28). Wrap any broker/gate/exception string that goes into an
+    alert; do NOT wrap the surrounding markup.
+    """
+    return html.escape(str(text), quote=False)
 
 logger = logging.getLogger(__name__)
 
@@ -193,10 +209,19 @@ class TelegramAlerter:
             equity = balance
             cs = config.ACCOUNT_CURRENCY_SYMBOL
 
-        # Daily PnL from MT5 balance change (includes swaps, commissions, all legs)
+        # Daily PnL from MT5 balance change (includes swaps, commissions, all
+        # legs), MINUS any non-trading capital flow — otherwise a deposit is
+        # reported as profit (a $30k top-up on 2026-07-29 would have shown as
+        # "PnL today: +$30,000").
+        today_start_utc = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        flow_today = trade_logger.get_balance_adjustments_total(
+            since=today_start_utc.replace(tzinfo=None)
+        )
         prev_balance = trade_logger.get_previous_day_closing_balance()
         if prev_balance is not None:
-            daily_pnl = balance - prev_balance
+            daily_pnl = balance - prev_balance - flow_today
         else:
             # Fallback to DB-derived PnL if no prior snapshot exists
             daily_pnl = trade_logger.get_daily_pnl()
@@ -219,8 +244,15 @@ class TelegramAlerter:
             tzinfo=timezone.utc
         )
         equity_ts = trade_logger.get_equity_timeseries(since=go_live_dt)
+        flow_since_go_live = trade_logger.get_balance_adjustments_total(
+            since=go_live_dt.replace(tzinfo=None)
+        )
         if equity_ts:
             starting_balance = equity_ts[0]["balance"]
+            # Deposits/withdrawals are capital, not performance. Rebasing the
+            # start by the flow keeps the chart's shaded area and the headline
+            # figure consistent with each other AND with the true PnL.
+            starting_balance += flow_since_go_live
             total_pnl = balance - starting_balance
         else:
             total_pnl = 0.0

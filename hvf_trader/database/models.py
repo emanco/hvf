@@ -195,6 +195,44 @@ class EquitySnapshot(Base):
         )
 
 
+# ─── Balance Adjustments (deposits / withdrawals) ───────────────────────────
+
+class BalanceAdjustment(Base):
+    """Non-trading capital flows, so they can be excluded from performance.
+
+    Added 2026-07-29 after a $30k demo deposit was silently counted as trading
+    profit: every equity-derived metric reads day-over-day balance deltas, so
+    the deposit landed as a +388% "return". That inflated the 60-day rolling
+    Sharpe to 4.57 (avg daily return +29.8%) and would have kept the Sharpe
+    halt/warn alarm from ever firing for a full window — i.e. a deposit
+    silently disables a safety net. It would also have reported +$30,000 as
+    the day's PnL.
+
+    Rows mirror MT5 balance-type deals and are keyed by `deal_ticket` so the
+    sync is idempotent. Amount is signed: deposits positive, withdrawals
+    negative.
+    """
+
+    __tablename__ = "balance_adjustments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    deal_ticket = Column(Integer, nullable=False, unique=True, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    deal_type = Column(Integer, nullable=True)
+    comment = Column(String(255), nullable=True)
+    recorded_at = Column(
+        DateTime, nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<BalanceAdjustment(ticket={self.deal_ticket}, "
+            f"amount={self.amount:+.2f}, at={self.timestamp})>"
+        )
+
+
 # ─── Circuit Breaker State ──────────────────────────────────────────────────
 
 class CircuitBreakerState(Base):

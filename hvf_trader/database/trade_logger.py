@@ -12,6 +12,7 @@ from logging.handlers import RotatingFileHandler
 
 from hvf_trader.config import LOG_BACKUP_COUNT, LOG_DIR, LOG_MAX_BYTES
 from hvf_trader.database.models import (
+    BalanceAdjustment,
     CircuitBreakerState,
     EquitySnapshot,
     EventLog,
@@ -796,11 +797,72 @@ class TradeLogger:
         if len(equities) < 2:
             return []
 
+        # Subtract non-trading capital flows before computing a return, or a
+        # deposit reads as performance. The $30k demo top-up on 2026-07-29 put
+        # a +388% day into the series (rolling Sharpe 4.57, avg daily return
+        # +29.8%), which would have suppressed the Sharpe halt/warn alarm for a
+        # full 60-day window — a deposit silently disabling a safety net.
+        day_keys = [str(r.day) for r in rows if r.last_id in equity_by_id]
+        adj_by_day = self.get_balance_adjustments_by_day(since=since)
+
         returns = []
         for i in range(1, len(equities)):
-            if equities[i - 1] > 0:
-                returns.append((equities[i] - equities[i - 1]) / equities[i - 1])
+            prev = equities[i - 1]
+            if prev <= 0:
+                continue
+            # Flows dated to day i moved the balance between snapshot i-1 and i.
+            flow = adj_by_day.get(day_keys[i], 0.0)
+            returns.append((equities[i] - prev - flow) / prev)
         return returns
+
+    # ─── Balance adjustments (deposits / withdrawals) ───────────────────
+
+    def get_balance_adjustments_by_day(
+        self, since: datetime | None = None
+    ) -> dict[str, float]:
+        """Net non-trading capital flow per UTC date, keyed 'YYYY-MM-DD'."""
+        from sqlalchemy import func
+
+        q = self._session.query(
+            func.date(BalanceAdjustment.timestamp).label("day"),
+            func.sum(BalanceAdjustment.amount).label("total"),
+        )
+        if since is not None:
+            q = q.filter(BalanceAdjustment.timestamp >= since)
+        return {str(r.day): float(r.total or 0.0)
+                for r in q.group_by(func.date(BalanceAdjustment.timestamp)).all()}
+
+    def get_balance_adjustments_total(
+        self, since: datetime | None = None
+    ) -> float:
+        """Net non-trading capital flow since `since` (deposits +, withdrawals -)."""
+        from sqlalchemy import func
+
+        q = self._session.query(func.sum(BalanceAdjustment.amount))
+        if since is not None:
+            q = q.filter(BalanceAdjustment.timestamp >= since)
+        return float(q.scalar() or 0.0)
+
+    def record_balance_adjustment(
+        self, deal_ticket: int, timestamp: datetime, amount: float,
+        deal_type: int | None = None, comment: str | None = None,
+    ) -> bool:
+        """Idempotently record one balance operation. True if newly inserted."""
+        existing = (
+            self._session.query(BalanceAdjustment)
+            .filter(BalanceAdjustment.deal_ticket == deal_ticket)
+            .first()
+        )
+        if existing:
+            return False
+        self._session.add(BalanceAdjustment(
+            deal_ticket=deal_ticket, timestamp=timestamp, amount=amount,
+            deal_type=deal_type, comment=comment,
+        ))
+        self._session.commit()
+        logger.info("Recorded balance adjustment: ticket=%s %+.2f at %s (%s)",
+                    deal_ticket, amount, timestamp, comment or "")
+        return True
 
     # ─── Circuit Breaker ────────────────────────────────────────────────
 
