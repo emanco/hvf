@@ -47,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 class BtcDonchianScanner:
     PATTERN_TYPE = "BTC_DONCHIAN"
+    # Ticks (~60s each) to keep retrying a broker-rejected entry. IC's crypto
+    # maintenance close has been observed to last ~4 min; 30 is generous cover
+    # while still abandoning a signal well inside the same broker day.
+    MAX_ENTRY_RETRIES = 30
 
     def __init__(self, order_manager, trade_logger, connector,
                  circuit_breaker, alerter=None, cfg=None):
@@ -68,6 +72,12 @@ class BtcDonchianScanner:
         self._open_trade_id: int | None = None
         self._current_stop: float | None = None
         self._last_processed_date: str | None = None  # broker date of last processed CLOSED D1 bar
+        # Entry-retry bookkeeping: a market order rejected by IC's crypto
+        # maintenance close (retcode 10018 at the ~22:00 UTC rollover, which is
+        # exactly when detection fires) must be retried, not dropped. Bounded so
+        # a genuinely un-fillable signal can't spin order_send all day.
+        self._entry_retry_date: str | None = None
+        self._entry_retry_count: int = 0
 
         instrument = self._cfg["instrument"]
         self._state_file = config.LOG_DIR / f"btc_donchian_state_{instrument}.json"
@@ -179,16 +189,50 @@ class BtcDonchianScanner:
             return  # detection already ran for this closed bar
 
         # Detection
+        entry_ok = True
         if self._open_trade_id is None:
             # Breakout entry
             if last_close > entry_high:
-                self._attempt_entry(sym, "LONG", last_close, atr_val, last_bar_date)
+                entry_ok = self._attempt_entry(sym, "LONG", last_close, atr_val, last_bar_date)
             elif last_close < entry_low:
-                self._attempt_entry(sym, "SHORT", last_close, atr_val, last_bar_date)
+                entry_ok = self._attempt_entry(sym, "SHORT", last_close, atr_val, last_bar_date)
             else:
                 logger.info(
                     "[BTC_DONCHIAN] %s no signal: close=%.2f entry_hi=%.2f entry_lo=%.2f atr=%.2f",
                     sym, last_close, entry_high, entry_low, atr_val,
+                )
+
+        # Only consume the signal once the broker has actually had its say.
+        # Detection fires at the broker D1 rollover (~22:00 UTC), which is IC's
+        # crypto maintenance close — measured live, order_send there returns
+        # retcode 10018 for minutes. Marking the bar processed on a rejection
+        # would DROP the trade outright (worse than the 2-3h entry lag this
+        # gate was moved to avoid: a Donchian system earns from a handful of
+        # trends). The trail already retries per-tick for the same reason; this
+        # gives the entry the same treatment. Policy skips (circuit breaker,
+        # portfolio gate, sub-minimum lots) still consume the signal.
+        if not entry_ok:
+            if self._entry_retry_date != closed_date_str:
+                self._entry_retry_date = closed_date_str
+                self._entry_retry_count = 0
+            self._entry_retry_count += 1
+            if self._entry_retry_count <= self.MAX_ENTRY_RETRIES:
+                logger.warning(
+                    "[BTC_DONCHIAN] %s entry rejected by broker; will retry "
+                    "(%d/%d) on next tick — signal NOT consumed",
+                    sym, self._entry_retry_count, self.MAX_ENTRY_RETRIES,
+                )
+                return  # leave _last_processed_date unset
+            logger.error(
+                "[BTC_DONCHIAN] %s entry still rejected after %d retries — "
+                "abandoning the %s signal",
+                sym, self.MAX_ENTRY_RETRIES, closed_date_str,
+            )
+            if self._alerter:
+                self._alerter.send_message(
+                    f"<b>[BTC_DONCHIAN] entry abandoned</b>\n"
+                    f"{sym}: broker rejected the {closed_date_str} signal "
+                    f"{self.MAX_ENTRY_RETRIES}x — no position opened."
                 )
 
         self._last_processed_date = closed_date_str
@@ -230,59 +274,106 @@ class BtcDonchianScanner:
     # ─── Entry ───────────────────────────────────────────────────────
 
     def _attempt_entry(self, symbol: str, direction: str, close_price: float,
-                       atr_val: float, signal_date):
-        """Portfolio-gate wrapper — entry logic in _inner."""
+                       atr_val: float, signal_date) -> bool:
+        """Portfolio-gate wrapper — entry logic in _inner.
+
+        Returns False ONLY when the broker rejected the order (caller should
+        retry without consuming the signal). Policy skips return True.
+        """
         from hvf_trader.risk import portfolio_gate
         with portfolio_gate.reserve(symbol) as (gate_ok, gate_reason):
             if not gate_ok:
                 logger.warning("[BTC_DONCHIAN] %s blocked by portfolio gate: %s",
                                symbol, gate_reason)
                 if self._alerter:
+                    from hvf_trader.alerts.telegram_bot import esc
                     self._alerter.send_message(
                         f"<b>[BTC_DONCHIAN] entry blocked</b>\n"
-                        f"{symbol}: {gate_reason}")
-                return
-            self._attempt_entry_inner(symbol, direction, close_price,
-                                      atr_val, signal_date)
+                        f"{symbol}: {esc(gate_reason)}")
+                return True
+            return self._attempt_entry_inner(symbol, direction, close_price,
+                                             atr_val, signal_date)
 
     def _attempt_entry_inner(self, symbol: str, direction: str,
-                             close_price: float, atr_val: float, signal_date):
+                             close_price: float, atr_val: float,
+                             signal_date) -> bool:
         cfg = self._cfg
         # Circuit breakers
         if self._circuit_breaker.is_tripped:
             logger.info("[BTC_DONCHIAN] global breaker tripped, skipping")
-            return
+            return True
         ok, reason = self._circuit_breaker.check_pattern(self.PATTERN_TYPE, symbol)
         if not ok:
             logger.info("[BTC_DONCHIAN] pattern breaker tripped: %s", reason)
-            return
+            return True
 
         # Sizing
         account = self._connector.get_account_info()
         if not account:
             logger.error("[BTC_DONCHIAN] no account info; skipping entry")
-            return
+            return True
         equity = account["equity"]
 
-        # Initial stop = entry ± atr_mult × ATR
-        atr_mult = cfg["atr_stop_multiplier"]
-        if direction == "LONG":
-            stop_price = close_price - atr_mult * atr_val
+        # Anchor the stop to the price we are ABOUT to fill at, not the signal
+        # D1 close. This is a fidelity fix, not a semantic change: the sim sets
+        # stop = fill ± atr_mult × ATR, so risk is always exactly atr_mult × ATR.
+        # Live used to anchor both the stop and the lot size to close_price
+        # while filling at market seconds-to-hours later, so any adverse drift
+        # went straight into real risk with nothing re-deriving it. Both live
+        # trades over-risked: BTCUSD 1.39x, ETHUSD 1.53x intended (audit
+        # 2026-07-28). The post-fill correction below closes the residual gap.
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            logger.warning("[BTC_DONCHIAN] %s no tick; falling back to D1 close "
+                           "as the entry anchor", symbol)
+            ref_px = close_price
         else:
-            stop_price = close_price + atr_mult * atr_val
-        stop_dist = abs(close_price - stop_price)
+            ref_px = tick.ask if direction == "LONG" else tick.bid
+
+        atr_mult = cfg["atr_stop_multiplier"]
+        stop_dist = atr_mult * atr_val
         if stop_dist <= 0:
             logger.error("[BTC_DONCHIAN] invalid stop_dist=%.4f, skipping", stop_dist)
-            return
+            return True
+        stop_price = (ref_px - stop_dist if direction == "LONG"
+                      else ref_px + stop_dist)
 
-        # BTCUSD lot sizing: 1 lot = 1 BTC, $1 per $1 price move per lot
+        # Lot sizing. DPP = account-currency dollars per 1.0 price unit per
+        # 1.0 lot, read from the broker's own tick specs. This was hardcoded as
+        # `risk_usd / stop_dist` — i.e. DPP == 1.0 — which is correct for
+        # BTCUSD/ETHUSD (contract size 1) and ONLY for them. Extending the
+        # universe to metals/indices (2026-07-29) makes that assumption
+        # actively dangerous: XAUUSD is 100, so a 1% risk would have become
+        # ~100% of equity on a single trade, and JP225 is ~0.0061, so it would
+        # have traded silently at ~1/165th of intended size. Same family as the
+        # "pips x $10" DO NOT in CLAUDE.md: never assume a value-per-point,
+        # always read it from the instrument.
         risk_usd = equity * cfg["risk_pct"] / 100.0
-        # round to broker step (0.01 lot for BTCUSD)
-        raw_lots = risk_usd / stop_dist
         info = mt5.symbol_info(symbol)
-        vol_step = info.volume_step if info else 0.01
-        vol_min = info.volume_min if info else 0.01
-        vol_max = info.volume_max if info else 10.0
+        if info is not None and not info.visible:
+            mt5.symbol_select(symbol, True)
+            info = mt5.symbol_info(symbol)
+        dpp = None
+        if info is not None and info.trade_tick_size:
+            dpp = info.trade_tick_value / info.trade_tick_size
+        if not dpp or dpp <= 0:
+            # Neither a policy skip nor a broker rejection — we simply cannot
+            # size safely. Route it into the RETRYABLE bucket so a transient
+            # Market Watch / spec glitch self-heals, bounded by
+            # MAX_ENTRY_RETRIES with a Telegram alert on abandon. Sizing on a
+            # guessed value-per-point is the one thing never to do here.
+            logger.error(
+                "[BTC_DONCHIAN] %s cannot derive value-per-point "
+                "(tick_value=%s tick_size=%s) — refusing to size, will retry",
+                symbol, getattr(info, "trade_tick_value", None),
+                getattr(info, "trade_tick_size", None),
+            )
+            return False
+        # round to broker step (0.01 lot for BTCUSD)
+        raw_lots = risk_usd / (stop_dist * dpp)
+        vol_step = info.volume_step or 0.01
+        vol_min = info.volume_min or 0.01
+        vol_max = info.volume_max or 10.0
         # FLOOR to the broker step — round() could size up to +20% over
         # intended risk, and clamping up to vol_min could 2x+ it (audit
         # 2026-07-02). Below-minimum sizing skips the trade, matching the
@@ -295,16 +386,29 @@ class BtcDonchianScanner:
                 "skipping entry (sizing up would exceed intended risk)",
                 symbol, raw_lots, vol_min,
             )
-            return
+            return True
 
-        # Get current ask/bid for entry estimate (market order)
-        tick = mt5.symbol_info_tick(symbol)
-        current_px = tick.ask if direction == "LONG" else tick.bid if tick else close_price
+        # Invariant: flooring to the broker step can only take realised risk
+        # BELOW intended, never above. A violation means DPP is wrong for this
+        # instrument — refuse the trade rather than discover it in the PnL.
+        # This is the assertion that would have caught the crypto-only sizer
+        # being pointed at gold, independently of whether the fix above is
+        # right, so keep it even though it looks redundant.
+        implied_risk = lots * stop_dist * dpp
+        if implied_risk > risk_usd * 1.05:
+            logger.error(
+                "[BTC_DONCHIAN] %s sizing sanity FAILED: implied risk $%.2f > "
+                "intended $%.2f (lots=%s dist=%.5f dpp=%.6g) — refusing entry",
+                symbol, implied_risk, risk_usd, lots, stop_dist, dpp,
+            )
+            return True
 
+        current_px = ref_px
         msg = (
             f"[BTC_DONCHIAN] {symbol} {direction} SIGNAL (D1 close={close_price:.2f}, "
-            f"ATR={atr_val:.2f}, stop={stop_price:.2f}, dist=${stop_dist:.2f}, "
-            f"lots={lots}, risk=${risk_usd:.2f}, current={current_px:.2f})"
+            f"ATR={atr_val:.2f}, stop={stop_price:.2f}, dist={stop_dist:.5g}px, "
+            f"lots={lots}, risk=${implied_risk:.2f} of ${risk_usd:.2f} intended, "
+            f"dpp={dpp:.6g}, current={current_px:.2f})"
         )
         logger.info(msg)
         if cfg.get("alert_on_detection", True) and self._alerter:
@@ -318,7 +422,7 @@ class BtcDonchianScanner:
 
         if cfg["dry_run"]:
             logger.info("[BTC_DONCHIAN] dry_run=True — not placing order")
-            return
+            return True
 
         # Place market order with broker-side initial SL, no TP
         result = self._order_manager.place_market_order(
@@ -327,10 +431,35 @@ class BtcDonchianScanner:
             comment=self.PATTERN_TYPE, magic=cfg["magic"],
         )
         if not result:
-            logger.error("[BTC_DONCHIAN] order_send failed")
-            return
+            # Do NOT consume the signal — see the retry block in _tick.
+            logger.error("[BTC_DONCHIAN] %s order_send failed (retryable)", symbol)
+            return False
         ticket = result.get("ticket") or result.get("order_ticket")
         fill_price = result.get("fill_price", current_px)
+
+        # Re-derive the stop from the ACTUAL fill so realised risk is exactly
+        # atr_mult × ATR × lots. The order already carries a valid protective
+        # stop, so there is no unprotected window; this only trims the residual
+        # drift between the pre-trade tick and the fill. A failure here is
+        # benign (the original stop stands) and self-heals on the next trail
+        # tick, so it must not fail the entry.
+        corrected_stop = (fill_price - stop_dist if direction == "LONG"
+                          else fill_price + stop_dist)
+        if abs(corrected_stop - stop_price) >= 0.01:
+            if self._order_manager.modify_stop_loss(ticket, symbol, corrected_stop):
+                logger.info(
+                    "[BTC_DONCHIAN] %s stop re-anchored to fill: %.2f → %.2f "
+                    "(fill %.2f vs pre-trade %.2f)",
+                    symbol, stop_price, corrected_stop, fill_price, current_px,
+                )
+                stop_price = corrected_stop
+            else:
+                logger.warning(
+                    "[BTC_DONCHIAN] %s could not re-anchor stop to fill "
+                    "(keeping %.2f; risk ≈ $%.2f vs intended $%.2f)",
+                    symbol, stop_price, abs(fill_price - stop_price) * lots,
+                    stop_dist * lots,
+                )
 
         # Persist trade record
         trade_data = {
@@ -361,9 +490,12 @@ class BtcDonchianScanner:
         self._open_trade_id = trade_record.id
         self._current_stop = stop_price
         logger.info(
-            "[BTC_DONCHIAN] %s %s FILLED: ticket=%s @ %.2f, SL=%.2f, lots=%s",
+            "[BTC_DONCHIAN] %s %s FILLED: ticket=%s @ %.2f, SL=%.2f, lots=%s, "
+            "risk=$%.2f",
             direction, symbol, ticket, fill_price, stop_price, lots,
+            abs(fill_price - stop_price) * lots,
         )
+        return True
 
     # ─── Trail ───────────────────────────────────────────────────────
 
