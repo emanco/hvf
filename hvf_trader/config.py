@@ -189,15 +189,26 @@ MAX_MARGIN_USAGE_PCT = 0.50       # Never use > 50% free margin
 # Added 2026-07-02 after the audit found every live strategy bypassed the
 # 8-gate RiskManager. Counts come from BROKER state (positions + resting
 # pendings, bot magics only). Deliberately PERMISSIVE while on demo /
-# validating — normal operation (NT 4 + ASB + LB + BTC 2 ≈ 8 positions,
-# +2-3 pendings) never touches these; they stop runaway states only.
+# validating — these stop runaway states only, they are NOT the risk budget.
 # Tighten before real money.
+#
+# Raised 2026-07-29 with the Donchian universe extension. The caps must sit
+# ABOVE the legitimate peak or they silently reject valid entries first-come,
+# which looks like a strategy having no signals rather than a config error.
+# Legitimate peak now: NIGHT_TIDE 4 (1/pair/night x 4 pairs) + ASB 1 + Donchian
+# 6 = 11 positions, and ASB rests a 2-leg OCO bracket pre-fill, so ~13
+# exposures. Sized one slot of headroom above that.
 PORTFOLIO_GATE = {
     "enabled": True,
-    "max_positions": 9,           # bot-managed open positions (+in-flight reservations)
-    "max_total_exposures": 13,    # positions + resting pending orders
+    "max_positions": 12,          # bot-managed open positions (+in-flight reservations)
+    "max_total_exposures": 16,    # positions + resting pending orders
     "min_free_margin_pct": 25.0,  # block new entries below this free-margin/equity floor
     "max_per_currency": 4,        # open legs sharing one currency (forex only)
+    # NOTE max_per_currency's _currencies() split treats any 6-char alpha
+    # symbol as forex, so BTCUSD/ETHUSD/XAUUSD each contribute a USD leg
+    # (US500/JP225/USTEC do not — digits / 5 chars). Worst case is 3 USD legs
+    # against the cap of 4, so it fits, but there is only one slot spare and
+    # any further USD-quoted 6-char instrument would start blocking entries.
 }
 BOT_MAGICS = {20250305, 20260601, 20260605}   # main strategies, BTC_DONCHIAN, NR7
 
@@ -723,6 +734,48 @@ BTC_DONCHIAN = {
     "instances": [
         {"instrument": "BTCUSD"},      # 9-year PF 5.09, walk-forward 2.94
         {"instrument": "ETHUSD"},      # 10-year PF 3.22, walk-forward 4.69
+        # ── Universe extension, added 2026-07-29 ─────────────────────────────
+        # scripts/donchian_universe_screen.py screened 24 instruments on the
+        # UNCHANGED live rule (55/20, ATR20x1.0) with the incumbent sanity gate
+        # passing all 8 pins. FOUR cleared the pre-committed bar (real-cost
+        # PF >= 1.30 on 2017+, N >= 40, avgR > 0, AND avgR > 0 on the held-out
+        # 2022+ test leg); the two deployed below are the subset this account is
+        # large enough to size. Figures are real-cost PF 2017+ (test-leg PF).
+        # Monthly-R correlation to the incumbents: mean 0.07 — the diversification
+        # is the entire point, per-market edge here is thin.
+        # At HALF risk (0.5%) until 30-50 clean fills, same staging as ASB. The
+        # screen is a screen, not a deploy decision.
+        # NOTE all 12 FX pairs FAILED badly (best USDJPY 0.86) — see CLAUDE.md
+        # negative results. Do not add FX to this strategy.
+        {"instrument": "JP225",  "risk_pct": 0.5},   # PF 1.51 (test 1.75)
+        {"instrument": "US500",  "risk_pct": 0.5},   # PF 1.44 (test 1.17)
+        #
+        # XAUUSD and USTEC passed the same screen but were held back on
+        # 2026-07-29 because one minimum lot risked more than the budget at
+        # $7.7k equity — the sizer correctly refuses to round UP to vol_min, so
+        # each would have been a SILENT NO-OP instrument (warns, skips every
+        # signal forever). Unblocked the same day by a deposit to $37.7k and
+        # re-verified against live IC specs at that equity:
+        #   XAUUSD  vol_min 0.01, dpp 100, ATR ~82.8 -> 0.02 lots (2x min),
+        #           implied risk $165.53 of $188.65 budget.
+        #   USTEC   vol_min 0.10, dpp 1,   ATR ~629  -> 0.20 lots (2x min),
+        #           implied risk $125.80 of $188.65 budget.
+        # Sized against the ATR DISTRIBUTION, not spot ATR: the live failure
+        # mode is not over-risk (flooring to vol_step can only under-risk, and
+        # the post-sizing invariant proves it) but the outright SKIP when
+        # raw_lots < vol_min. At this equity XAUUSD goes silent in 3.6% of the
+        # last 2 years of D1 ATR readings and USTEC in 0.0%. That residual gold
+        # blind spot is adversely selected — it is the high-vol tail, where a
+        # trend system's big trades live — so it is a real cost, not rounding.
+        # Full coverage of gold's ATR p99 would need ~$47k; 3x-min-lot sizing
+        # (risk tracking ATR instead of pinning to the floor) ~$84k.
+        {"instrument": "USTEC",  "risk_pct": 0.5},   # PF 1.59 (test 1.30)
+        {"instrument": "XAUUSD", "risk_pct": 0.5},   # PF 2.54 (test 2.30) — best candidate
+        # ⚠️ US500 and USTEC correlate 0.61 on monthly R (near-duplicates in the
+        # screen). Both are deployed anyway at half stake, but count them as
+        # ~1.5 independent bets, not 2, when judging the portfolio.
+        # (ATRs move — re-run the sizing block in
+        # scripts/donchian_universe_screen.py before adding anything further.)
     ],
 }
 

@@ -6,24 +6,48 @@ is the lightweight precursor to statistical alarms — no CI math yet, just the
 numbers next to each other. Live PF excludes pnl_estimated trades (DB caveat:
 those PnLs are unreliable).
 
-Honest backtest PFs are the validated 2026-06-23 figures (see memory
-project_backtest_harness_hardened). Update the reference table if a strategy
-is re-validated.
+Which strategies appear is DERIVED from config.active_strategy_map(), not a
+hand-maintained status tag — a retirement drops the row automatically. The old
+table went stale exactly that way: on 2026-07-28 it still listed NR7 (retired
+07-02) and LONDON_BO (retired 07-28) as active. Same fix as alert_startup.
+
+The reference PFs must be the HONEST re-backtests, and each carries its source.
+The pre-2026-07 figures were all inflated by the two fill fictions (blind-gap
+entry fills, stop-modify-through-market) — see CLAUDE.md "Negative results".
+Because the status dot is live/backtest, an inflated denominator makes a
+perfectly healthy strategy read red, which is the failure mode that trains you
+to ignore the dot.
 """
 from datetime import datetime, timezone
 
 from hvf_trader import config
 from hvf_trader.database.models import TradeRecord
 
-# (honest backtest PF as string, status tag). Validated 2026-06-23.
+# pattern_type -> (display string, numeric PF for the ratio, provenance).
+# Numeric is separate from display so a range can be shown without the old
+# fragile float(s.replace("~", "")) parse silently falling back to "no
+# comparison" (which rendered as a green dot).
 _REFERENCE = {
-    "NR7_BREAKOUT":           ("~5.0", "active"),
-    "NIGHT_TIDE":             ("2.13", "active"),   # spread-correct (was 2.39)
-    "BTC_DONCHIAN":           ("~5.0", "active"),
-    "LONDON_BO":              ("1.32", "active"),   # spread-correct (was 1.37)
-    "ASIAN_SESSION_BREAKOUT": ("1.79", "active"),   # GBPJPY-only (EURJPY dropped 06-26)
-    "QUANTUM_LONDON":         ("0.44", "RETIRED"),
-    "KZ_HUNT":                ("0.38", "off"),
+    "NIGHT_TIDE": (
+        "1.4-1.55", 1.40,
+        "IC-native baseline, scripts/nt_ic_feed_diag.py (2026-07-14). NOT the "
+        "Dukascopy PF 2-3 — IC's feed yields ~4x fewer signals.",
+    ),
+    "ASIAN_SESSION_BREAKOUT": (
+        "1.28", 1.28,
+        "GBPJPY honest 2023+, floored spread, scripts/asb_fill_audit.py row E "
+        "(2026-07-28). Was 1.79 — void, inflated by both fill fictions.",
+    ),
+    "BTC_DONCHIAN": (
+        "BTC 2.6 / ETH 4.9 / XAU 2.5 / USTEC 1.6 / JP225 1.5 / US500 1.4", 2.60,
+        "Crypto legs: entry-at-close, scripts/btc_donchian_honest_bt.py "
+        "(2026-07-02); was ~5.0, never honest. XAUUSD/USTEC/JP225/US500: "
+        "real-cost PF 2017+, scripts/donchian_universe_screen.py (2026-07-29). "
+        "Per-symbol because the universe extension spans very different edges — "
+        "a single number here would flatter the index legs and understate "
+        "crypto. Ratio uses the BTC leg, so the dot tracks the incumbents; the "
+        "half-stake extension legs are not separable here yet.",
+    ),
 }
 
 # short labels to keep the table narrow on mobile
@@ -93,23 +117,20 @@ def build_strategy_scorecard(trade_logger) -> str:
             return "🟡"
         return "🔴"
 
-    # Active strategies only, in reference order — retired/off are dropped.
+    # Rows come from the live config, so retiring a strategy removes it here
+    # with no edit to this file.
+    active = config.active_strategy_map()
     lines = [
         "<b>📋 Strategy Scorecard</b>",
         f"<i>live (since {go_live}) vs honest backtest</i>",
         "",
     ]
     total_est = 0
-    for pt, (bkt_s, status) in _REFERENCE.items():
-        if status != "active":
-            continue
+    for pt, symbols in active.items():
         d = agg.get(pt, {"n": 0, "w": 0, "gw": 0.0, "gl": 0.0, "est": 0, "open": 0})
         total_est += d["est"]
         live_str, live_val = live_str_and_val(d)
-        try:
-            bkt_val = float(bkt_s.replace("~", ""))
-        except ValueError:
-            bkt_val = None
+        bkt_s, bkt_val, _src = _REFERENCE.get(pt, ("—", None, ""))
         name = _SHORT.get(pt, pt)
         if d["n"]:
             detail = f"{d['n']}T · {100 * d['w'] / d['n']:.0f}% WR"
@@ -117,8 +138,24 @@ def build_strategy_scorecard(trade_logger) -> str:
             detail = "no closed trades"
         if d["open"]:
             detail += f" · {d['open']} open"
-        lines.append(f"{status_dot(live_val, bkt_val)} <b>{name}</b>")
+        lines.append(f"{status_dot(live_val, bkt_val)} <b>{name}</b> "
+                     f"<i>{', '.join(symbols)}</i>")
         lines.append(f"   live <b>{live_str}</b>  vs  backtest {bkt_s}   ({detail})")
+
+    # Anything with live history since go-live that is no longer enabled. Keeps
+    # a retired strategy's PnL from silently vanishing from this view.
+    retired = sorted(set(agg) - set(active))
+    if retired:
+        bits = []
+        for pt in retired:
+            d = agg[pt]
+            if not (d["n"] or d["open"]):
+                continue
+            bits.append(f"{_SHORT.get(pt, pt)} ({d['n']}T"
+                        + (f", {d['open']} open" if d["open"] else "") + ")")
+        if bits:
+            lines.append("")
+            lines.append(f"<i>retired, still in PnL history: {', '.join(bits)}</i>")
 
     lines.append("")
     lines.append(
