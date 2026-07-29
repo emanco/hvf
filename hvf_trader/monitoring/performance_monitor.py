@@ -152,7 +152,22 @@ class PerformanceMonitor:
             cutoff = go_live
 
         daily_returns = self.trade_logger.get_daily_equity_returns(since=cutoff)
-        if len(daily_returns) < 10:
+
+        # Two floors, not one. Calendar days accrue whether or not the bot
+        # trades, so a quiet book reaches any day-count while carrying almost
+        # no information — the Sharpe then comes from a handful of real moves
+        # divided by the tiny stdev of a mostly-zero series, and annualising by
+        # sqrt(252) turns that noise into a confident-looking number. Requiring
+        # ACTIVE days is what actually gates on information.
+        active_days = sum(1 for r in daily_returns if r != 0.0)
+        if (len(daily_returns) < config.PERF_SHARPE_MIN_DAYS
+                or active_days < config.PERF_SHARPE_MIN_ACTIVE_DAYS):
+            logger.debug(
+                "Rolling Sharpe skipped: %d/%d days, %d/%d active — "
+                "insufficient sample",
+                len(daily_returns), config.PERF_SHARPE_MIN_DAYS,
+                active_days, config.PERF_SHARPE_MIN_ACTIVE_DAYS,
+            )
             return []
 
         mean_r = sum(daily_returns) / len(daily_returns)
@@ -183,8 +198,10 @@ class PerformanceMonitor:
             alerts.append((key, text))
 
         logger.info(
-            "Rolling Sharpe: %.2f (%d days, %dd window, avg daily return %.3f%%)",
-            sharpe, len(daily_returns), config.PERF_SHARPE_WINDOW_DAYS, mean_r * 100,
+            "Rolling Sharpe: %.2f (%d days / %d active, %dd window, "
+            "avg daily return %.3f%%)",
+            sharpe, len(daily_returns), active_days,
+            config.PERF_SHARPE_WINDOW_DAYS, mean_r * 100,
         )
         return alerts
 

@@ -376,6 +376,17 @@ PERF_ROUTINE_ALERTS_ENABLED = False    # 2026-07-01: silence routine perf/health
 PERF_SHARPE_WINDOW_DAYS = 60           # Rolling Sharpe ratio window
 PERF_SHARPE_WARN_THRESHOLD = 0.5       # Sharpe < 0.5 → alert: reduce size
 PERF_SHARPE_HALT_THRESHOLD = 0.0       # Sharpe < 0.0 → alert: halt trading
+# Sample floors, raised 2026-07-29. The old floor was 10 calendar days with no
+# activity requirement, which on this book meant a Sharpe computed from ~4 real
+# moves padded with zero-return days: a near-zero mean over a near-zero stdev,
+# annualised by sqrt(252), yields a large-magnitude number out of noise. Right
+# after the deposit-accounting fix that produced a -2.63 "CRITICAL: HALT
+# TRADING" off 13 days whose entire signal was -1.02% net. A red alert that
+# fires on noise teaches you to ignore red alerts — the same failure mode the
+# scorecard's inflated-denominator dot had. ACTIVE days (non-zero return) is
+# the load-bearing one: calendar days accrue whether or not the bot trades.
+PERF_SHARPE_MIN_DAYS = 30              # calendar days of equity snapshots
+PERF_SHARPE_MIN_ACTIVE_DAYS = 15       # of those, days with a non-zero return
 PERF_WR_DECAY_THRESHOLD = 15           # Alert if recent WR drops >15% below all-time WR
 PERF_KILL_SWITCH_MIN_TRADES = 200      # Min trades before kill switch can activate
 PERF_KILL_SWITCH_MIN_PF = 1.2          # Auto-halt if live PF < this after min trades
