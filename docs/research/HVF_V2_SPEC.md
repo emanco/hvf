@@ -1012,6 +1012,101 @@ reaches it, the trade supply is ~75/year, and the one lever we had a mechanism-l
 to expect would help does the opposite. Reopening this needs a *new* hypothesis about where
 edge lives, not another parameter of the ones already tested.
 
+> ⚠️ **§8.11's retirement was premature and is withdrawn.** §8.12 supplies exactly the new
+> structural hypothesis this paragraph demanded, and it invalidates the population every
+> number in §8.10–8.11 was measured on. The entry findings themselves still stand — they
+> are correct *about the funnels the current detector emits*.
+
+### 8.12 The detector misses multi-degree funnels — proven on Hunt's USDJPY 1W
+
+Checking the untested high timeframes turned up a defect that outranks everything in
+§8.10–8.11. Three facts, in order.
+
+**1. USDJPY 1W is not a data gap.** It was recorded as unreproducible for want of a 2026
+price chain. That was wrong. The feed carries `USDJPY_W1` back to **1971**, and the levels
+Hunt's panel solves to are all present: he needs `a = 140.147, b = 161.267`, and the feed
+makes **161.951 in 2024**, **139.580 later that year**, and **163.987 in 2026** — the
+funnel straddles 2024–26 and its target *was* hit.
+
+**2. It is not an anchoring artefact either.** §11.1 warns that a `_W1` source is used
+natively, so `native = c["src"].endswith("_W1")` forces `offsets = [None]` and the
+week-start is never swept. Rebuilding weekly bars from D1 (7 week-starts) and from H1 (42)
+moves the best score from **0.3403 → 0.3356 → 0.3287**. Forty-two anchors, no effect.
+
+**3. Hunt's funnel is present, essentially exactly, and the detector cannot see it.**
+At `box = 3.0%` all six pivots print:
+
+| pivot | date | price | got fib | Hunt | err |
+|---|---|---|---|---|---|
+| H1 | 2024-06-28 | 161.951 | 1.000 | 1.00 | — |
+| RL1 | 2024-09-13 | 139.580 | 0.000 | 0.00 | — |
+| RH2 | 2025-01-10 | 158.880 | 0.863 | 0.86 | 0.003 |
+| RL2 | 2025-04-18 | 139.886 | 0.014 | 0.01 | 0.004 |
+| RH3 | 2025-08-01 | 150.917 | 0.507 | 0.51 | 0.003 |
+| RL3 | 2025-09-12 | 145.485 | 0.264 | 0.26 | 0.004 |
+
+**Mean |fib error| 0.0034**, against a null floor of 0.0820 and the detector's own best of
+0.3287. AMP1 is 5.9% off reference. This is not a near-miss, it is the setup.
+
+**Why it is missed: the pivot gaps are [7, 5, 5, 5, 1].** §4.3 retracted the
+six-consecutive-pivots rule *only for the H1→RL1 leg* and replaced it with `_anchor_pivot`,
+a backward walk to the exhaustion extreme. That was the right diagnosis applied too
+narrowly. On the weekly chart **every leg is multi-degree**: four or five noise pivots sit
+between each pair of funnel pivots, and RL2 is *lower* than the four lows around it, so no
+monotone-contraction filter recovers it either. Each funnel pivot is the extreme of its own
+sub-swing at a coarser degree than the box that must be used to make RH3/RL3 print at all.
+
+**What this invalidates.** The 5,367 funnels behind §8.10–8.11 were all selected as
+`anchor + 5 consecutive pivots`. That population is therefore biased toward funnels whose
+interiors happen to be degenerate — the ones with no sub-structure — and Hunt's own
+weekly setup is not in it. An `avgR` near zero over a population that provably excludes the
+reference example is not evidence that HVF has no edge. **The performance question is
+reopened, not answered.**
+
+**Honesty about this result.** n = 1, and the six pivots were picked by eye from a printed
+pivot list *after* seeing Hunt's fibs. That proves the structure **exists and is
+expressible**; it proves nothing about **findability**. The next step is to specify a
+parameter-free multi-degree selection rule, then re-run §8.6 blind — it must recover
+USDJPY 1W *and* keep the 3/3 that already pass, without inflating emissions past §8.7's
+rates. Until that is done this is a defect report, not a working detector.
+
+### 8.13 Target ladder — the AMP2 hypothesis is falsified, but distance helps
+
+`scripts/hvf_v2_target_ladder.py`, same population and entry as §8.10, same stop, seven
+rungs at `m × AMP1` (log projection where the period implies it), cost 0.05 × ATR14.
+
+| m × AMP1 | n | WR% | avgR | 95% CI | train | TEST | N needed |
+|---|---|---|---|---|---|---|---|
+| 0.250 | 1817 | 66.7 | −0.004 | [−0.041, +0.033] | +0.017 | −0.016 | 322,024 |
+| 0.375 | 1958 | 56.5 | +0.010 | [−0.037, +0.058] | +0.075 | −0.028 | 84,482 |
+| 0.500 | 1963 | 46.5 | +0.013 | [−0.045, +0.070] | +0.045 | −0.007 | 84,950 |
+| 0.750 | 1962 | 35.1 | +0.053 | [−0.023, +0.128] | +0.048 | +0.056 | 8,207 |
+| **1.000** | 1960 | 27.6 | +0.059 | [−0.031, +0.149] | +0.091 | +0.040 | 9,316 |
+| **1.500** | 1959 | 20.3 | **+0.140** | **[+0.022, +0.258]** | +0.226 | +0.088 | **2,863** |
+| 2.000 | 1959 | 16.1 | +0.142 | [+0.007, +0.277] | +0.286 | +0.056 | 3,630 |
+
+**§9.1's premise is refuted.** The dashed ray sits *nearer* than the solid one (0.58–0.77
+range-units past the midpoint, i.e. `m < 1`), and every nearer rung is **worse** than the
+current rule — monotonically, all the way down to `m = 0.25` where the edge is gone
+entirely. Whatever the second ray is, taking it as the profit target destroys the edge.
+
+**Distance helps instead, and `m = 1.5` clears the §8.11 pre-commitment** — `avgR 0.140 ≥
+0.13`, CI excludes zero, TEST positive. Three reasons to hold that loosely:
+
+* **TEST degrades badly**: train +0.226 → TEST +0.088. Not a collapse, and the sign holds,
+  but TEST alone does *not* reach 0.13. This is a marginal pass on the letter of the
+  pre-commitment, and should be reported as marginal rather than as a win.
+* **The optimum is at the edge of the sweep** and the curve is still rising at 1.5. An
+  interior peak would be evidence of a real trade-off; a boundary one usually means the
+  swept parameter is proxying for something else.
+* **"Further is better" is generic.** On a fat-tailed series, widening the target while
+  holding the stop mechanically buys tail exposure. That is a property of prices, not of
+  HVF geometry, and it would show up on random entries too — which is the control this run
+  does not have.
+
+The curve is smooth and monotone rather than a lone spike, so the seven comparisons are not
+the main worry here. The population is: this inherits §8.12's defect in full.
+
 ---
 
 ## 9. Open questions
