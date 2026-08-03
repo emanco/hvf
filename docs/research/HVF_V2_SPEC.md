@@ -1109,6 +1109,129 @@ the main worry here. The population is: this inherits §8.12's defect in full.
 
 ---
 
+### 8.14 Multi-degree rule — the MUTUAL-EXTREME condition, `scripts/hvf_v2_mef.py`
+
+§8.12 demanded a parameter-free multi-degree selection rule that recovers USDJPY 1W,
+keeps the existing matches, and does not inflate emissions past §8.7. The first two are
+met, comprehensively. The third is not, and that is now the whole remaining problem.
+
+**Two obvious repairs ruled out on paper first, on the weekly chart's own numbers.**
+
+* *A ZigZag whose reversal threshold shrinks with the funnel.* To confirm RH3 = 0.51 the
+  threshold must be ≤ 0.26 (the drop into RL3), but an earlier pullback inside the same leg
+  is 0.31 (0.40 → 0.09) and confirms 0.40 as the high first. The admissible interval is
+  empty. **[V]**
+* *Hierarchical degree reduction* (repeatedly delete the smallest leg). The funnel's **last**
+  leg is 0.26 while the noise legs inside it run to 0.41, so any reduction coarse enough to
+  clear the noise deletes RH3 → RL3 first. **[V]**
+
+Both fail the same way: they are **global** rules over leg amplitude, and a funnel's degree
+is not globally monotone.
+
+**The rule. [C], and it is the generalisation §8.12 diagnosed.** Each funnel pivot is the
+extreme of the window its two neighbours define:
+
+    RL1 = min low  between H1  and RH2        RL2 = min low  between RH2 and RH3
+    RH2 = max high between RL1 and RL2        RH3 = max high between RL2 and RL3
+
+plus the nesting already required (RH2 < H1, RL2 > RL1, RH3 < RH2, RL3 > RL2); mirrored for
+shorts. This is `_anchor_pivot` — §4.3's accepted fix for the H1 → RL1 leg — applied to
+**every** leg instead of one. No threshold, no degree index, no lookback. It is causal by
+construction: every interior condition references pivots already in the past at arming
+time, and the one live edge, RL3, is the running extreme since RH3, so a lower low simply
+re-arms a later funnel.
+
+Enumeration is bounded by "previous / next more-extreme same-kind pivot". Those walls and
+the record runs between them are precomputed with monotonic stacks, so the search costs
+O(candidates), not O(n) per step — the first version scanned and did not finish in 10 min.
+
+**Two changes to the test, both forced by the rule, not chosen to suit it.**
+
+1. *Liveness is counted in bars.* §8.3 defect 3 anchored matches in time with "ends in
+   2026". That is a bar-count statement disguised as a date. Hunt posted these 2026-03 to
+   2026-07 and USDJPY 1W's RL3 is 2025-09-12 — 25 **weeks** earlier, but only 25 **bars**,
+   which on a 1h chart is a day. Bound is now `2026-01-01 − 30 × bar period`. For every
+   chart of 18h or less this moves the line by at most a fortnight; only the weekly moves
+   materially.
+2. *The pass criterion is a rank, not a floor.* The old "best live beats best pre-2026"
+   comparison breaks here. The rule emits ~200 live candidates against ~88,000 null ones on
+   gold, and the minimum of 88,000 draws sits far below the minimum of 200 for arithmetic
+   reasons alone — so a bare floor comparison penalises the live side by a per-chart factor.
+   Reported instead: `k` = null candidates scoring at least as well as the best live one,
+   and `E = ((k+1)/(N+1)) × n_live` = the expected number of coincidences that good.
+   **Pre-committed at E < 0.05** before running anything past gold and BTC. Candidates are
+   deduplicated by their six timestamps first: the MEF condition is scale-invariant, so the
+   same funnel reappears at every box fine enough to print it (USDJPY 1W's at 26 of 28), and
+   counting it 26 times would corrupt both sides of the rank.
+
+**Result — 8 of 8, both held-out charts included.**
+
+| chart | set | box% | anch | fib err | AMP1 | shape | live | null | k | E |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | calib | 0.1 | 0 | 0.0061 | 2.1% | MATCH | 210 | 88,437 | 0 | 0.002 |
+| BTCUSD 1h | **TEST** | 0.1 | — | 0.0052 | 1.7% | MATCH | 3,981 | 135,188 | 0 | 0.029 |
+| XAU/XAG 8h | calib | 0.1 | 3 | 0.0027 | 0.3% | MATCH | 4,415 | 213,383 | 0 | 0.021 |
+| USDJPY 4h | calib | 0.1 | 0 | 0.0058 | 0.3% | MATCH | 1,123 | 72,414 | 0 | 0.016 |
+| USDJPY 1W | calib | 0.1 | 0 | **0.0034** | 5.9% | MATCH | 476 | 17,564 | 0 | 0.027 |
+| WTI 18h | calib | 1.08 | 15 | 0.0177 | 5.7% | MATCH | 3,364 | 103,218 | 0 | 0.033 |
+| XAUEUR 1h | **TEST** | 0.1 | — | 0.0057 | 1.8% | MATCH | 1,420 | 135,716 | 0 | 0.010 |
+| HYG 4h | calib | 0.1 | 0 | 0.0033 | 1.3% | MATCH | 388 | **0** | — | n/a |
+
+Every fib coordinate agrees with the panel to 2dp, worst case 0.03 (WTI's RL3). **k = 0
+everywhere**: across ~765,000 pre-window candidates, not one scored as well as the live
+match on its own chart. §8.6's 3/3 becomes 8/8, and the two pre-committed held-out charts
+(§8.4) passed blind.
+
+HYG is not a failure — its feed starts 2026-01-26 (909 bars), entirely inside the live
+window, so there is no null population to rank against. Undefined, and a feed limitation
+of the kind already catalogued in §8.2.
+
+**The box stops mattering — §8.8's negative is softened. [V]** Each chart matches over a
+*plateau* of box sizes and then falls off a cliff, exactly as scale-invariance predicts.
+Coarsest box still scoring MATCH: gold 0.71, BTC 1.88, XAU/XAG 3.29, USDJPY 4h 0.47,
+USDJPY 1W 3.29, WTI 1.08, XAUEUR 0.94\*, HYG 0.94\* (\* sweep ran out of live candidates
+rather than hitting a cliff). The reported "box 0.1%" for 7 of 8 is a tie-break artefact —
+ties break to the first box swept — not a fit. §8.8 said no rule picks a box; the answer is
+that under MEF the box mostly does not need picking, over a band often 30× wide. The one
+conflict is WTI, which matches **only** at 1.08 while USDJPY 4h dies above 0.47, so a
+single global box still does not cover all eight.
+
+**The bad news — selectivity is worse, not better.** The acceptance search prunes on
+`AMP_TOL`, i.e. on a range read off the chart being searched for. A live system has no such
+number. Ungated distinct funnels per month, against §8.7's detector rates:
+
+| box% | GoldCFD 2h | vs 1.1 | USDJPY 4h | vs 0.4 | HYG 4h | vs 0.2 |
+|---|---|---|---|---|---|---|
+| 0.1 | 44.7 | 41× | 50.3 | 126× | 6.5 | 33× |
+| 0.5 | 14.9 | 14× | 9.4 | 24× | 0.3 | 2× |
+| 1.0 | 5.3 | 5× | 1.6 | 4× | 0.2 | 1× |
+| 2.0 | 1.2 | 1× | 0.3 | 1× | 0.0 | — |
+
+Rates reach §8.7 only at box ≈ 2%, and USDJPY 4h's funnel is gone above 0.47%. At the
+coarsest box that keeps all the intraday matches, the rule emits **10–25×** the old count.
+
+**What this means. [V]** MEF is a **necessary** condition on Hunt's funnels and a very
+strong one — it recovers all eight from a search that had previously found three. It is not
+**sufficient**: it finds Hunt's setup among several thousand structural twins. Detection is
+solved; **selection is not, and is now the binding constraint.** Nothing here yet licenses
+re-running §8.10 — a population of 4,000 candidates per chart per year is not a strategy,
+and running expectancy over it would repeat §8.12's error in the opposite direction.
+
+**Lead for selection, with its blind check already run. [I]** Hunt's fib coordinates
+cluster hard. Bands from the six calibration charts, tested against the two held-out ones:
+
+| coord | calibration band (n=6) | BTCUSD 1h | XAUEUR 1h | holds? |
+|---|---|---|---|---|
+| RH2 | 0.77 – 0.94 | 0.84 | 0.82 | ✅ |
+| RL2 | 0.01 – 0.34 | 0.08 | 0.09 | ✅ |
+| RH3 | 0.47 – 0.85 | 0.65 | 0.63 | ✅ |
+| RL3 | 0.19 – 0.47 | 0.14 | 0.12 | ❌ both below |
+
+Three of four survived a genuine out-of-sample test; RL3's lower bound did not, and widens
+to 0.12. `RH2 ≥ 0.77` in all eight is the sharpest of them. This is a *ranking* prior, not
+a detection rule, and with n = 8 it is a lead rather than a result — but it is the obvious
+next lever, and it must be measured on emission rate and on expectancy separately.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
