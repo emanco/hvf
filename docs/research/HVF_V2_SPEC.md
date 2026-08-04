@@ -1698,6 +1698,125 @@ turning the ATR band into a rank rather than a gate, and adding `AMP1/trend` to 
 emission rate is still ~3 orders of magnitude above §8.7's, and expectancy over a
 950/month population would repeat §8.12's error a third time.
 
+### 8.20 The scale band becomes a rank — and the band is retired by it
+
+§8.15 applied `AMP1/ATR14` as a hard band `[1.882, 10.196]` whose edges came from six charts,
+and it deleted USDJPY 4h, which sat *on* the upper edge. That is the generic failure of a band
+fitted at n=6. §8.15 itself concluded the quantity is a **scale prior** and belongs in a
+ranking score; §8.19 cleared the last blocker by making `AMP1/trend` measurable. This builds
+the score. `scripts/hvf_v2_mef_rank.py`.
+
+**The score. [C]** A diagonal Mahalanobis distance in log space over two features,
+
+    u = log(AMP1 / ATR14 at H1)      §8.15, the only shape metric that ever survived
+    v = log(AMP1 / prior trend)      §8.19, usable only since the degree repair
+
+fitted to the six calibration funnels, evaluated on all eight. Log space because both are
+ratios; diagonal because n=6 cannot support a covariance. **Nothing is discarded.** What is
+reported is where Hunt's own funnel sits in the ordering, and how many candidates per month
+outrank it — the honest form of §8.7's emission-rate question and the number §8.10 needs.
+
+| feature | mean | sd | = ratio | 1sd band |
+|---|---|---|---|---|
+| `log AMP1/ATR14` | 1.688 | 0.605 | 5.41 | 2.95 – 9.90 |
+| `log AMP1/trend` | −0.442 | 0.760 | 0.64 | 0.30 – 1.38 |
+
+**Result 1 — the rank finds Hunt's funnel near the top of a five-figure population. [V]**
+One box per chart, both directions, live window, `confirm`-keyed throughout. Rank is Hunt's
+position; `ahead/mo` is how many candidates a human would have to read before reaching his.
+
+| chart | N | ATR only | trend only | **both** | ahead/mo (both) |
+|---|---|---|---|---|---|
+| GoldCFD 2h | 76,797 | 2,070 | 18,279 | 2,106 (2.7%) | 299.4 |
+| BTCUSD 1h *(TEST)* | 49,673 | 95 | 1,906 | **25 (0.1%)** | 3.4 |
+| XAU/XAG 8h | 1,280 | 52 | 10 | 13 (1.0%) | 1.7 |
+| USDJPY 4h | 3,742 | 54 | 2,504 | 85 (2.3%) | 11.9 |
+| USDJPY 1W | 49 | 9 | 1 | 8 (16.3%) | 1.0 |
+| WTI 18h | 3,528 | 54 | 2,475 | 786 (22.3%) | 111.7 |
+| XAUEUR 1h *(TEST)* | 18,633 | 206 | 1,178 | **114 (0.6%)** | 16.1 |
+| HYG 4h | 1 | 1 | 1 | 1 | 0.0 |
+| **median rank** | | 54 | 1,542 | 55 | |
+
+Adding §8.19's direction gate first:
+
+| chart | N gated | ATR only | trend only | **both** | ahead/mo (both) |
+|---|---|---|---|---|---|
+| GoldCFD 2h | 4,891 | 1,159 | 1,765 | 1,169 (23.9%) | 166.1 |
+| BTCUSD 1h *(TEST)* | 5,175 | 72 | 1,214 | **22 (0.4%)** | 3.0 |
+| XAU/XAG 8h | 1,198 | 13 | 6 | 13 (1.1%) | 1.7 |
+| USDJPY 4h | 309 | 35 | 301 | 45 (14.6%) | 6.3 |
+| USDJPY 1W | 9 | 2 | 1 | 2 (22.2%) | 0.1 |
+| WTI 18h | 1,682 | — | — | gate drops it | — |
+| XAUEUR 1h *(TEST)* | 2,306 | 171 | 98 | 102 (4.4%) | 14.4 |
+| HYG 4h | 1 | 1 | 1 | 1 | 0.0 |
+| **median rank** | | 35 | 98 | **22** | |
+
+**BTCUSD, held out, ranks 25th of 49,673 ungated and 22nd of 5,175 gated** — 3.0 candidates a
+month ahead of it — having played no part in fitting the prior. XAUEUR, also held out, is
+0.6% / 4.4%. Six of eight charts are now at **≤ 16 ahead/month**, five at ≤ 6.3, against
+§8.19's gated emission of 950/mo on gold and 735 on BTCUSD. That is the two-to-three orders
+of magnitude §8.15 said were missing, on seven charts.
+
+**Percentile is not the headline and is reported only for completeness.** The direction gate
+removes candidates that were *already worse* than Hunt's, so it can worsen the percentile
+while improving the absolute rank — gold goes 2.7% → 23.9% while its rank improves 2,106 →
+1,169. `ahead/mo` is the quantity §8.7 and §8.10 care about: how long a list a human reads.
+
+**Result 2 — a tight band across Hunt's charts is NOT the same thing as a discriminative
+feature. [V]** This is the methodological finding of the section and it reverses a judgement
+made in §8.15. `AMP1/trend` has the *tighter* band of the two after §8.19 (2.8×, bounded in
+(0,1)) and §8.15 would have ranked it the better feature on that basis. As a ranking feature
+alone it is **useless** — median rank 1,542, and it puts Hunt at the 67th and 70th percentile
+on USDJPY 4h and WTI. `AMP1/ATR14`, whose band is looser, gives a median rank of 54.
+
+The reason is that §8.15 judged features by the **spread of Hunt's own values** and the right
+criterion is **separation from the candidate distribution**. A feature on which every
+candidate looks like Hunt is tight and worthless. Any future feature must be scored this way.
+
+`v` is still worth carrying jointly, on a narrower claim: it improves **both** held-out charts
+(BTCUSD 95 → 25, XAUEUR 206 → 114 ungated) and it is what takes the gated median from 35 to
+22. It costs on WTI (54 → 786), which is the same persistent outlier as §8.15, §8.17, §8.18
+and §8.19. Two-of-two out-of-sample improvement at n=2 is weak evidence; carry it, and revisit
+if a third test chart disagrees.
+
+**Result 3 — the band is subsumed, not merely superseded. [V]** A rank does not automatically
+retire a band, and on gold the band looked like the stronger shortlist: it keeps 1,268
+candidates where the rank leaves 2,106 ahead of Hunt. Composing them (gate → band → rank)
+settles it:
+
+| chart | gated | + band | Hunt survives | rank | ahead/mo | gain vs rank alone |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | 4,891 | 752 | yes | 751 | 106.7 | **1.6×** |
+| BTCUSD 1h *(TEST)* | 5,175 | 107 | yes | 22 | 3.0 | 1.0× |
+| XAU/XAG 8h | 1,198 | 33 | yes | 13 | 1.7 | 1.0× |
+| USDJPY 4h | 309 | 35 | yes | 30 | 4.1 | 1.5× |
+| USDJPY 1W | 9 | 3 | yes | 2 | 0.1 | 1.0× |
+| XAUEUR 1h *(TEST)* | 2,306 | 536 | yes | 102 | 14.4 | 1.0× |
+
+**The band adds at most 1.6× and usually nothing at all**, because almost everything it
+deletes was already ranked behind Hunt. It carries the deletion risk for no shortlist gain.
+**Retire it.** [C]
+
+A detail that sharpens the original objection: measured on the *detected* funnel rather than
+the chart annotation, the band does **not** drop USDJPY 4h here — it keeps Hunt on all eight.
+§8.15's deletion came from the annotated AMP1/ATR of 10.196 against an edge of 10.196. Whether
+a chart survives turns on which of two near-identical measurements is used. That is the
+argument for a rank stated more strongly than §8.15 stated it, not more weakly.
+
+**Result 4 — what is still broken. [V]** **Gold.** 1,169th of 4,891, 166 candidates a month
+ahead of Hunt's, against §8.7's 1.1/mo. It is the one chart where neither the gate nor the
+rank bites, and it is also the largest population (76,797 at one box). WTI is worse in kind —
+§8.19's gate discards it outright. So the shortlist is usable on six of eight charts and not
+on two, and the two are the ones every previous section also failed on.
+
+**§8.10 status. [C]** The band-to-rank conversion was the last of §8.15's three blockers and
+it is done. Expectancy can now be run **per chart over a ranked shortlist**, not over the raw
+population — which is exactly the error §8.12 made twice. The honest framing for §8.10 is a
+top-N sweep: at N=25 the shortlist contains Hunt's funnel on BTCUSD, XAU/XAG, USDJPY 1W and
+HYG, and does not on gold, USDJPY 4h, WTI or XAUEUR. Gold must be diagnosed before any
+aggregate expectancy number is quoted, or it will dominate the population and the result will
+mean nothing.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
