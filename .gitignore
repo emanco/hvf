@@ -21,3 +21,6 @@ data/calendar_cache.json
 
 # HVF research OHLC extracts (34 MB, regenerable from the broker feed)
 backtests/data/hvf_v2/
+
+# enumeration caches (hundreds of MB, rebuildable)
+scripts/*.pkl

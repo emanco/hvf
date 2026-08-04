@@ -2421,6 +2421,96 @@ attempts to improve on it from outside — 8.20's rank, 8.24's reward:risk, 8.25
 floor, 8.26's fourteen exit rules, and now a stop buffer and a TP ladder — have all
 returned null. **The rule set is frozen.**
 
+### 8.29 The box — the last hindsight, and what removing it costs
+
+`scripts/hvf_v2_mef_universalbox.py`, `scripts/hvf_v2_mef_universalnull.py`
+
+The box size was the only input still chosen by knowing the answer. 8.14 picked it
+per chart as "the coarsest box that still reproduces Hunt's funnel" — eight numbers
+fitted to eight charts, 0.4652% to 3.2919% — and it sits upstream of everything else
+in the study.
+
+The USDJPY 1W chart displays the setting directly: **`Box Size 0.5 %`, `Source H/L`**
+[D]. A single universal constant, from the source. My value on that same chart is
+3.2919%, 6.6× coarser.
+
+**Detection at a universal 0.5% matches 7 of 8** — fib errors 0.003–0.007 against a
+`PASS_FIB` of 0.02, a 3–7× margin. The sole failure is WTI at 0.032, which has now
+failed eight consecutive sections. One constant reproduces almost every funnel Hunt
+drew.
+
+**The backtest does not survive it intact.**
+
+| variant | calib | held-out (blind) | all 8 | n |
+|---|---|---|---|---|
+| hindsight per-chart | +0.63 | **+0.98** | **+0.76** | 212 |
+| **universal 0.50%** | **+0.65** | +0.28 | +0.51 | 309 |
+| universal 0.4652% | +0.42 | +0.72 | +0.53 | 314 |
+| universal 1.00% | +0.23 | +0.31 | +0.26 | 228 |
+
+Calibration is unchanged (+0.63 → +0.65); the held-out figure collapses. That
+asymmetry is diagnostic. The per-chart box was fitted to Hunt's drawing **on each
+chart, including the two pre-committed held-out ones** — so BTCUSD and XAUEUR were
+never fully blind, and the +0.98R quoted since 8.22 was partly buying its own
+answer. **8.4's held-out protocol was violated upstream of the point where it was
+enforced.** Every held-out figure in 8.22–8.28 inherits this and should be read as
+optimistic.
+
+**Dispersion tells the same story from the other side.**
+
+| chart | hindsight | universal 0.50% | delta | cands |
+|---|---|---|---|---|
+| GoldCFD 2h | +1.72 | **+1.57** | −0.15 | 2.0× |
+| BTCUSD 1h `T` | +0.85 | +0.37 | −0.47 | 11.7× |
+| XAU/XAG 8h | −0.74 | +0.32 | **+1.06** | 20.4× |
+| USDJPY 4h | +0.55 | +0.38 | −0.17 | 0.8× |
+| USDJPY 1W | +1.62 (n=2) | +0.11 (n=7) | −1.50 | 14.4× |
+| WTI 18h | −0.07 | +0.33 | **+0.41** | 1.1× |
+| XAUEUR 1h `T` | +1.22 | +0.18 | −1.04 | 5.7× |
+| HYG 4h | no trades | −1.00 (n=1) | — | 6.0× |
+
+Under the universal box every chart with meaningful n is positive, including the two
+that had failed everything. The fitted box gave a −0.74 to +1.72 spread; the honest
+one gives a narrow, unspectacular, uniformly positive band. Extreme dispersion
+across instruments that should behave alike is what fitting looks like; uniformity
+is what a real, modest edge looks like.
+
+**The shift-null, re-run under the universal box:**
+
+| chart | n | real | null mean | null sd | pctile |
+|---|---|---|---|---|---|
+| **GoldCFD 2h** | 50 | **+1.57** | +0.42 | 0.41 | **99.0%** |
+| USDJPY 1W | 7 | +0.11 | +0.12 | 1.21 | 84.0% |
+| BTCUSD 1h `T` | 66 | +0.37 | +0.10 | 0.29 | 83.5% |
+| XAU/XAG 8h | 52 | +0.32 | +0.05 | 0.39 | 77.5% |
+| USDJPY 4h | 43 | +0.38 | +0.09 | 0.50 | 75.0% |
+| WTI 18h | 35 | +0.33 | +0.06 | 0.77 | 75.0% |
+| XAUEUR 1h `T` | 55 | +0.18 | +0.48 | 0.37 | **22.0%** |
+| HYG 4h | 1 | −1.00 | −0.01 | 0.26 | 0.0% |
+| **POOLED** | **309** | **+0.51** | **+0.20** | **0.17** | **95.0%** |
+
+Pooled survives at the **95th** percentile rather than 8.23's 100th — positive but
+no longer overwhelming. Two things deserve stating plainly. The null mean is **+0.20,
+not zero**, so of the +0.51R only about +0.31R is attributable to *where* the funnel
+sits; the remainder comes from the direction gate and risk geometry, which 8.22
+established is real edge but is a different claim. And **XAUEUR now fails outright at
+the 22nd percentile** — worse than shifting it — having scored 77.5th under its
+fitted box.
+
+**What holds up is gold.** +1.57R against a null of +0.42 ± 0.41 at the **99th
+percentile**, with the smallest box change of any chart (2.0× the candidates, versus
+11.7× for BTC and 20.4× for XAU/XAG) — gold's fitted box was already close to
+Hunt's stated 0.5%, so gold is the one instrument whose result never depended on the
+leak. It is nearly unchanged (1.72 → 1.57) precisely because there was little to
+remove.
+
+**Verdict: adopt the universal 0.5% box [D] and drop the per-chart table.** It is
+parameter-free, sourced from Hunt's own tool, reproduces 7 of 8 funnels, and removes
+the last hindsight in the system. The cost is a third of the headline return and the
+credibility of every held-out figure prior to this section — both of which were not
+ours to keep. The honest pooled number is **+0.51R at the 95th percentile**, and the
+honest single-instrument number is **gold at +1.57R and the 99th**.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
