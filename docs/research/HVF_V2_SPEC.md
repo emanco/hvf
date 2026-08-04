@@ -1455,6 +1455,116 @@ unblocked, report expectancy split by it. If with-trend funnels pay and counter-
 do not, the gate earns its place on our data rather than on doctrine — and if they pay
 equally, we learn that HVF genuinely is direction-agnostic once the geometry is right.
 
+### 8.18 The short skew is **real, trend-driven and mechanical** — direction must be imposed
+
+§8.16 reported 17:1 and 21:1 short-to-long emission ratios on gold and BTCUSD, two markets
+that have risen for years. That is a smell, not a finding, and it was chased to ground.
+
+**It is not a code defect. [V]** `scripts/hvf_v2_mef_mirror.py` reflects the price series
+and asks whether symmetric code swaps the two counts. Three levels, increasingly strict:
+
+| chart | level | longs | shorts | S:L | symmetric? |
+|---|---|---|---|---|---|
+| GoldCFD 2h | as traded | 6,304 | 108,037 | 17.1 | — |
+| | **A** mirror the pivot list (`price → −price`, H↔L) | 108,037 | 6,304 | 0.06 | **exact** |
+| | B `p → C²/p` (% moves preserved) | 110,741 | 6,095 | 0.06 | ~2.5% off |
+| | C `p → K − p` (% moves **not** preserved) | 11,800 | 2,633 | 0.22 | no |
+| BTCUSD 1h | as traded | 2,307 | 47,736 | 20.7 | — |
+| | **A** | 47,736 | 2,307 | 0.05 | **exact** |
+| | B | 49,643 | 2,378 | 0.05 | ~4% off |
+| USDJPY 4h | as traded | 114 | 5,658 | 49.6 | — |
+| | **A** | 5,658 | 114 | 0.02 | **exact** |
+| | B | 5,693 | 114 | 0.02 | ~0.6% off |
+| HYG 4h | every level | 1 | 1 | 1.0 | exact |
+
+Level A swaps the counts **to the digit on all four charts**: `mef_candidates`'s bearish
+branch is a true mirror of its bullish one. Level B's residual is ZigZag numerics, not
+structure. Level C is *expected* to break — an arithmetic reflection does not preserve
+percentage moves, so a %-box ZigZag prints different pivots; it is the control that shows
+levels A and B are testing something.
+
+The load-bearing consequence is in level B: **reflect gold into a synthetic multi-year
+downtrend and the skew flips to ~18:1 longs.** The skew tracks the direction of the series.
+
+**The mechanism, decomposed exactly. [V]** The first hypothesis — that the enumeration
+window (the wall span `next_beyond − prev_beyond`) is wider for lows than for highs in an
+uptrend — is *true but far too weak*: median span is 12 for both kinds on all three liquid
+charts, and even the mean only reaches 1.27× (gold), 1.97× (BTC), 1.05× (USDJPY 4h). It
+cannot produce 17–50×. `scripts/hvf_v2_mef_bias.py` records this; it is a dead end kept so
+it is not re-tried.
+
+Grouping live candidates by their **anchor pivot** does produce it, and to three digits:
+
+| chart | dir | distinct anchors | funnels | per anchor | top-10 anchors' share |
+|---|---|---|---|---|---|
+| GoldCFD 2h | long | 148 | 6,304 | 42.6 | 32.2% |
+| | short | **598** | 108,037 | **180.7** | 2.2% |
+| BTCUSD 1h | long | 87 | 2,307 | 26.5 | 31.6% |
+| | short | **424** | 47,736 | **112.6** | 2.6% |
+| USDJPY 4h | long | 15 | 114 | 7.6 | 95.6% |
+| | short | **190** | 5,658 | **29.8** | 6.2% |
+
+The skew is the product of two independent factors, and they multiply out exactly:
+
+    gold     598/148 = 4.04  ×  180.7/42.6 = 4.24  →  17.1  ✓
+    BTCUSD   424/ 87 = 4.87  ×  112.6/26.5 = 4.25  →  20.7  ✓
+    USDJPY   190/ 15 = 12.67 ×   29.8/ 7.6 = 3.92  →  49.6  ✓
+
+A long funnel anchors on a high, a short funnel on a low. In an uptrend highs are exceeded
+continuously and lows are seldom undercut, so **4–13× more lows survive as valid anchors**,
+and each survivor gets **~4× more room** to host a funnel. The long side is not merely
+rarer, it is *degenerate*: on USDJPY 4h ten anchors carry 96% of all long candidates, on
+gold 32%, whereas the short side is diffuse (2–6%). Ungated, the enumerator is trading the
+trend's own asymmetry, not the pattern.
+
+**So the user's objection was right, and for a stronger reason than a bug would have been.**
+An unfiltered HVF bot on gold or BTCUSD would be a short-selling machine in a secular bull
+market. Direction cannot be left to the geometry; it has to be imposed.
+
+**Does the multi-year window rescue §8.17? Partly — exactly where it was claimed to. [V]**
+§8.17 tested at most one year and got 3/7. `scripts/hvf_v2_mef_trendhorizon.py` extends it:
+
+| chart | Hunt | 1y | 2y | 3y | 5y |
+|---|---|---|---|---|---|
+| GoldCFD 2h | long | +60.9% ✅ | +126.6% ✅ | +123.7% ✅ | +237.2% ✅ |
+| BTCUSD 1h *(TEST)* | long | −11.5% ❌ | +1.1% ✅ | **+242.5% ✅** | +23.4% ✅ |
+| XAU/XAG 8h | long | −22.8% ❌ | −15.8% ❌ | −9.6% ❌ | −17.8% ❌ |
+| USDJPY 4h | long | +5.1% ✅ | +10.1% ✅ | +29.7% ✅ | +49.8% ✅ |
+| USDJPY 1W | long | +23.6% ✅ | +46.4% ✅ | +48.2% ✅ | +46.1% ✅ |
+| WTI 18h | short | +16.4% ❌ | +21.2% ❌ | +22.2% ❌ | +65.3% ❌ |
+| XAUEUR 1h *(TEST)* | short | +63.1% ❌ | +128.5% ❌ | +147.1% ❌ | +246.1% ❌ |
+| HYG 4h | short | — | — | — | — |
+| **recall** | | **3/7** | **4/7** | **4/7** | **4/7** |
+
+The claim under test was specifically *gold and BTCUSD are up over several years*. **It is
+correct, and BTCUSD is the chart the longer window recovers**: −11.5% on the year is a
+drawdown inside a +242% three-year advance, so the 1-year window mislabelled it and 2y/3y/5y
+all agree with Hunt's long. Gold agrees on every horizon.
+
+What the longer window does **not** do is make with-main-trend a rule. Recall stops at 4/7
+and the three failures are horizon-independent: XAU/XAG falls on all four, while WTI and
+XAUEUR rise on all four and Hunt shorted both. XAUEUR is gold quoted in euros, up **+246%
+over five years, shorted**. Hunt genuinely takes counter-trend setups; §8.17's negative
+stands, it is simply narrower than it looked.
+
+**Decision. [C] — direction becomes a hard filter anyway, and the reason is §8.18, not §8.17.**
+§8.17 left `with_main_trend` as a feature to be settled on expectancy. That is now superseded:
+the filter's job is not to imitate Hunt, it is to **correct a measured mechanical bias in the
+enumerator**. A population that is 17:1 short because lows do not get undercut is not a
+population whose expectancy means anything. Concretely, on gold the trend gate takes
+114,341 → 6,304 candidates (−94.5%) before any other filter, and it removes precisely the
+side the bias inflates.
+
+Two things this costs, both stated up front: it forgoes ~3/7 of Hunt's own published setups,
+and the trend definition itself is still the weak link — no rule tested in §8.17 or here beats
+4/8, and the parameter-free definition remains broken on USDJPY 4h and WTI (§8.15). The
+multi-year net-move rule at 2y–5y is adopted as the direction gate because it is the only one
+that both scores 4/7 and has a stated rationale, not because it is well established.
+
+**§8.10 is still blocked**, but the blocking list is now shorter: direction is settled
+(this section), scale is a prior not a gate (§8.15), and what remains is repairing the trend
+definition and turning the ATR band into a rank.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
