@@ -1384,6 +1384,77 @@ gold". With direction restored that is ~30×, and the dominant failure mode is n
 literal — derive direction from the prior trend and enumerate one direction per anchor
 rather than both — and only then re-measure. §8.10 remains blocked.
 
+### 8.17 Is HVF a with-main-trend pattern? **Not in Hunt's own sample** — clean negative
+
+**The hypothesis, from the trader.** HVF is overwhelmingly a *continuation* pattern; it
+rarely marks a trend change. Direction should therefore be read off the **larger
+timescale** — if the chart has risen for the past year it is a long, if it has fallen it is
+a short — adapting the window to months or weeks. A funnel against the main trend also
+fights the fundamentals, and legitimising one needs a *second* pattern (head-and-shoulders
+and the like) to price the risk, which we do not have implemented.
+
+This is a strong, cheap, falsifiable claim, and it would solve §8.16 outright: unlike
+`extreme_of_m(50)`, a signed net move is **exclusive** — its sign picks one side and
+refuses the other by construction.
+
+**Test 1 — the funnel's own timeframe** (`hvf_v2_mef_maintrend.py`), six exclusive rules
+over 100–200 bars. Best recall **6/8** (close vs SMA100). Mis-specified, and rejected on
+those grounds rather than on the score: 100 bars of 2h is eight days, which is not a main
+trend.
+
+**Test 2 — the daily series, calendar windows** (`hvf_v2_mef_maintrend_htf.py`). This is
+the hypothesis as stated. Recall against the way Hunt actually traded each chart:
+
+| rule | close vs SMA50 | vs SMA200 | net 3m | net 6m | **net 1y** | zigzag 5% | zigzag 10% |
+|---|---|---|---|---|---|---|---|
+| recall | 4/8 | 2/8 | 2/8 | 3/8 | **3/8** | 1/8 | 3/8 |
+
+Prices verified individually rather than trusted in aggregate:
+
+| chart | Hunt | H1/L1 date | price | −3m | −1y | 1y move | with 1y trend? |
+|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | long | 2026-06-15 | 4309.03 | 4965.74 | 2677.37 | **+60.9%** | ✅ |
+| BTCUSD 1h *(TEST)* | long | 2026-03-10 | 70224.08 | 92357.00 | 79386.21 | −11.5% | ❌ |
+| XAU/XAG 8h | long | 2026-02-05 | 67.464 | 82.762 | 87.334 | −22.8% | ❌ |
+| USDJPY 4h | long | 2026-07-01 | 162.598 | 156.362 | 154.770 | +5.1% | ✅ |
+| USDJPY 1W | long | 2024-06-27 | 160.770 | 150.535 | 130.102 | +23.6% | ✅ |
+| WTI 18h | short | 2026-03-10 | 86.550 | 61.110 | 74.330 | +16.4% | ❌ |
+| XAUEUR 1h *(TEST)* | short | 2026-04-21 | 4018.85 | 3645.25 | 2464.10 | +63.1% | ❌ |
+| HYG 4h | short | 2026-03-27 | 78.670 | — | — | — | no history |
+
+**3 of 7 with the yearly trend, 4 against** — and the two against include *both*
+pre-committed held-out charts. Shorter windows are no better: on the 3-month view it is
+2 of 7. **On this evidence the hypothesis is falsified for Hunt's charted sample.** A
+with-trend gate on any of these windows would reject the majority of the setups he posted.
+
+**Gold is the one clean instance of the model, and it is instructive.** +60.9% on the year,
+−13.2% over the quarter, Hunt long — buy the dip inside the main uptrend. That is the
+pattern the hypothesis describes, and it appears once.
+
+**Three honest limits on this negative.**
+
+* **n = 7.** Hunt's posted charts are also plausibly a *biased* sample: a trader publishes
+  the setups worth talking about, and a contrarian entry is more worth talking about than
+  the fourth pullback in an obvious uptrend. This may say more about what gets posted than
+  about what gets traded.
+* **WTI's anchor is unreliable.** It was already the weakest match (fib 0.0177, at the pass
+  boundary) and the chart where §8.15's trend definition degenerated to a 1-bar leg. Its
+  L1 sits after a +41% three-month rally, which is not a downtrend terminus. Treat that
+  row as unresolved, not as evidence.
+* **This does not contradict §2.2.** §2.2's "prior trend into the exhaustion point" is the
+  *local* leg one degree above the funnel, which is up-into-H1 for every long by
+  construction. That is why it is true of all eight and also why it cannot select (§8.16).
+  The main-trend hypothesis is a different, stronger claim, and it is the stronger one that
+  fails.
+
+**What to do with it instead. [C]** Do not gate on it — that discards Hunt's own examples.
+The trader's own formulation already points at the right shape: a counter-trend funnel is
+not *forbidden*, it is *expensive*, and needs corroboration we cannot yet supply. So carry
+`with_main_trend` as a **feature, not a filter**, and settle it empirically: when §8.10 is
+unblocked, report expectancy split by it. If with-trend funnels pay and counter-trend ones
+do not, the gate earns its place on our data rather than on doctrine — and if they pay
+equally, we learn that HVF genuinely is direction-agnostic once the geometry is right.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
