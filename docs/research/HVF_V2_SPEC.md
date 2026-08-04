@@ -2348,6 +2348,79 @@ rather than measurements: the live spread during the hours we actually trade, an
 the current gold swap line. Both should be read out of the terminal before sizing,
 and neither is close enough to a threshold to change the decision.
 
+### 8.28 Two details from doctrine — the stop buffer and the TP ladder
+
+`scripts/hvf_v2_mef_doctrine.py`
+
+The user described the pattern as three waves compressing into a funnel, then a
+move back with the same force and length for "TP1, TP2, etc.", with the stop "just
+outside the tiny funnel". Two things there are not what 8.26 tested, and both are
+Hunt's own description rather than my invention — which makes them the strongest
+remaining candidates for something the implementation got wrong.
+
+**A. The stop sits *at* the sixth pivot, not outside it.** There is no buffer
+anywhere in the implementation. 8.25 rejected a minimum stop distance in ATR units,
+but that is a different object — it filters setups whose stop is too tight, it does
+not move the stop. 8.27 gave a fresh reason to look: 2–7 trades per chart gapped
+clean through the stop.
+
+| stop | calib mean R | held-out mean R | all 8 | n | win% |
+|---|---|---|---|---|---|
+| **at 6th pivot (baseline)** | **+0.63** | **+0.98** | **+0.76** | 212 | 26.4% |
+| +5% of risk beyond | +0.58 | +0.90 | +0.70 | 208 | 26.4% |
+| +10% of risk beyond | +0.57 | +0.85 | +0.68 | 205 | 27.3% |
+| +20% of risk beyond | +0.45 | +0.76 | +0.57 | 195 | 27.7% |
+| +33% of risk beyond | +0.52 | +0.72 | +0.59 | 187 | 30.5% |
+| +50% of risk beyond | +0.59 | +0.76 | +0.65 | 176 | 34.7% |
+| +0.25 ATR14 beyond | +0.53 | +0.88 | +0.67 | 200 | 27.5% |
+| +0.50 ATR14 beyond | +0.52 | +0.68 | +0.58 | 194 | 28.9% |
+| +1.00 ATR14 beyond | +0.54 | +0.71 | +0.61 | 170 | 32.9% |
+
+**The baseline wins outright — every buffer is worse on calibration and worse
+held-out.** No selection step was even needed. And the shape is 8.26's trap again,
+arriving from a third direction: widening the stop lifts win rate monotonically from
+26.4% to 34.7% while mean R falls, because a buffer costs R on *every* winner to
+rescue *some* losers. The gapped-through stops 8.27 found are real but they are not
+worth what it costs to avoid them.
+
+This is now the third independent confirmation that the sixth pivot is a real level
+rather than a convention: 8.25 said don't filter on it, 8.26 said don't move it
+after entry, 8.28 says don't pad it before entry.
+
+**B. Partials, isolated from the breakeven move.** 8.26 concluded partials lose, but
+every partial it tested *also* moved the stop to breakeven — and the breakeven move
+is independently the thing 8.26 blamed for clipping the tail. So a ladder with the
+stop left alone had never actually been measured. That is what "TP1, TP2" describes.
+
+| ladder | calib mean R | held-out mean R | all 8 | n | win% |
+|---|---|---|---|---|---|
+| **all at 1× AMP1 (baseline)** | **+0.63** | **+0.98** | **+0.76** | 212 | 26.4% |
+| half 1×, half 1.5× | +0.77 | +0.74 | +0.76 | 178 | 25.3% |
+| half 1×, half 2× | +0.61 | +0.67 | +0.63 | 162 | 22.8% |
+| half 1×, half 3× | +0.67 | +1.13 | +0.83 | 129 | 23.3% |
+| thirds 1× / 2× / 3× | +0.72 | +1.08 | +0.84 | 129 | 23.3% |
+| thirds 1× / 1.5× / 2× | +0.60 | +0.66 | +0.62 | 162 | 22.8% |
+| quarter 1×, ¾ at 2× | +0.75 | +0.67 | +0.72 | 162 | 21.6% |
+| ¾ at 1×, quarter 2× | +0.48 | +0.66 | +0.54 | 162 | 22.8% |
+
+**Rejected by the pre-committed protocol.** The calibration winner is `half 1×, half
+1.5×` at +0.77R, and it does not transfer: +0.74R held-out against the baseline's
++0.98R. Choose honestly and you choose wrong.
+
+The ladder family is nonetheless *not* harmful the way the buffer is, and two rows
+beat the baseline pooled — `thirds 1×/2×/3×` at +0.84R and `half 1×, half 3×` at
++0.83R. Both are declined, for reasons that were already on the record before this
+section ran: they are not what calibration selected, so taking them is hindsight; n
+falls to 129; and 8.26's target sweep already put a wide zero-straddling CI on
+everything at 3× AMP1. The consistent signal across both tables is that the long leg
+carries the result — which is 8.26's finding again, not a new one.
+
+**Verdict: keep the exit exactly as it is, for the sixth time.** Detection plus the
+direction gate plus entry/stop/target at the funnel's own levels. Six independent
+attempts to improve on it from outside — 8.20's rank, 8.24's reward:risk, 8.25's ATR
+floor, 8.26's fourteen exit rules, and now a stop buffer and a TP ladder — have all
+returned null. **The rule set is frozen.**
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
