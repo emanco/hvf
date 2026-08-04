@@ -2125,6 +2125,63 @@ validated out-of-sample before being credited.
 non-independent trades. Bucket boundaries are quartiles of the observed sample, so the `T ≈ 7`
 optimum is in-sample and is not a tuned parameter recommendation.
 
+### 8.25 A minimum stop in ATR units — rejected out-of-sample
+
+§8.24 diagnosed the collapse past `AMP1/risk ≈ 10` as a stop sitting inside single-bar noise, and
+proposed the principled filter that follows from it: `risk / ATR14 ≥ threshold` at the arming bar.
+It was suggested by §8.24's own data, so it was validated the only way that means anything —
+threshold chosen on the **six calibration charts**, then applied unchanged to the two
+pre-committed held-out ones. `scripts/hvf_v2_mef_stopfilter.py`.
+
+**Result 1 — the mechanism is visible, and weak. [V]** Baseline picks bucketed by `risk/ATR14`:
+
+| risk/ATR | n | median T | breakeven | realised win% | edge | mean R |
+|---|---|---|---|---|---|---|
+| 0.49 – 1.41 | 166 | 7.46 | 11.8% | 15.1% | +3.2% | +0.17 |
+| 1.42 – 2.35 | 165 | 5.09 | 16.4% | 19.4% | +3.0% | +0.16 |
+| 2.35 – 4.03 | 165 | 5.27 | 15.9% | 21.2% | +5.3% | +0.25 |
+| 4.06 – 20.88 | 165 | 6.05 | 14.2% | 23.0% | +8.8% | **+0.55** |
+
+Monotone in the predicted direction — a stop further from the noise does better, 0.17R → 0.55R —
+but `corr(risk/ATR, win) = +0.043`, which is nothing. *(Disclosure: these 661 picks are run
+individually rather than through the one-position-per-chart sequencing, so this is a larger
+population than the 212 sequenced baseline trades; it measures the relationship cleanly but is
+not the same sample as the sections below.)*
+
+**Result 2 — and the threshold does not transfer. This is the finding. [V]**
+
+| threshold | 6 calibration charts | 2 held-out charts | all 8 |
+|---|---|---|---|
+| **0.00 (none)** | n=134, +0.63R | n=78, **+0.98R** | n=212, **+0.76R** |
+| 0.50 | 135, +0.62 | 78, +0.98 | 213, +0.75 |
+| 1.00 | 120, +0.56 | 79, +0.96 | 199, +0.72 |
+| **1.50 (best on calib)** | 100, **+0.69** | 79, **+0.81** | 179, +0.74 |
+| 2.00 | 83, +0.52 | 78, +0.61 | 161, +0.57 |
+| 3.00 | 55, +0.09 | 62, +0.53 | 117, +0.33 |
+
+The best calibration threshold, `risk/ATR ≥ 1.50`, improves calibration from +0.63R to +0.69R and
+**degrades the held-out two from +0.98R to +0.81R**. Across all eight it moves +0.76R to +0.74R —
+it discards 33 trades to achieve nothing. **Reject the filter. [C]**
+
+This is the same lesson as §8.20 arriving by a different route: a plausible mechanism plus an
+in-sample improvement is not evidence. The mechanism in Result 1 is *real* and still fails to
+produce a usable rule, because the effect is too weak relative to the variance to survive a
+threshold being placed on it.
+
+**Result 3 — the structure keeps carrying the result regardless. [V]** At `risk/ATR ≥ 1.50`
+against §8.23's shift-null: pooled **+0.88R vs a null of +0.02 ± 0.16, the 100th percentile**;
+BTCUSD (held out) 99.0%, gold 91.5%, USDJPY 4h 90.5%. That is §8.23 reconfirmed on a different
+subsample, not a new finding, and it is not the filter's doing.
+
+**Where selection now stands. [C]** Three selection ideas have been tested against a null and all
+three have failed: §8.20's scale-prior rank (61st percentile of selection nulls), §8.24's
+reward:risk (+0.42R against +0.73R), and this one (no out-of-sample transfer). What survives every
+test is **detection (§8.14) and direction (§8.19)**. The working conclusion is that funnel
+*selection* may simply not be where the edge lives — take every gated funnel the detector emits,
+cap exposure by position limits rather than by ranking, and stop spending sections trying to
+choose between them. Costs, slippage and the exit rule are untouched and are now the only
+material unknowns left before a live decision.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

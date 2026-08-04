@@ -1,3 +1,4 @@
 .rank_cache.pkl
 .backtest_cache.pkl
 .ablation_cache.pkl
+.stopfilter_cache.pkl
