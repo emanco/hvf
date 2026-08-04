@@ -1973,6 +1973,90 @@ stop and target distances, same regime. Until that runs, the correct statement i
 Everything else remains subject to zero costs, zero slippage on a fill §8.21 showed is
 knife-edge, overlapping non-independent trades, and 43 months of one regime.
 
+### 8.23 Ablation — the structure is real, the direction gate is real, the rank still is not
+
+§8.22 could not attribute its own result: the control shuffled *which* funnel was traded and so
+kept direction, timing and the 2.5:1 geometry present in the null. The honest reading was left
+as "a trend-aligned breakout in a trending window, funnel possibly decoration".
+**That reading is now falsified.** `scripts/hvf_v2_mef_ablation.py`.
+
+**Method. [C]** The funnel does three separable jobs — it supplies a **scale** (`AMP1`, which
+§8.19's gate needs), a **timing** (the breakout at the 5th pivot, armed from `RL3.confirm`), and
+a **risk unit with its payoff**. Three ablations remove exactly one each:
+
+* **B/C structure** — same instrument, direction, risk distance, reward:risk *and the same
+  distance from price to the trigger*, but armed `k` bars away from the funnel. Levels are
+  expressed as offsets from the anchor's close, so everything is preserved exactly and only the
+  coincidence that this level bounds a funnel is removed. **`k=0` reproduces the baseline bar for
+  bar (0.76R, 212 trades)**, which is the sanity check that the ablation is well-formed.
+* **D direction** — every trade mirrored about its anchor.
+* **E gate** — same rank and geometry, selected from the **ungated** pool (503,219 candidates,
+  57,976 gated).
+
+**Result 1 — removing the structure destroys the edge. [V]** 200 random shifts of ±50–1500 bars:
+
+| chart | real meanR | null mean | null sd | null p95 | **percentile** | real win% | null win% |
+|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | +1.72 | +0.69 | 0.40 | 1.34 | **98.0%** | 37.5% | 27.5% |
+| BTCUSD 1h *(TEST)* | +0.85 | +0.06 | 0.25 | 0.50 | **99.5%** | 26.5% | 19.8% |
+| XAU/XAG 8h | −0.74 | −0.80 | 0.46 | 0.28 | 79.5% | 9.1% | 4.1% |
+| USDJPY 4h | +0.55 | +0.15 | 0.44 | 0.99 | 85.0% | 25.6% | 17.3% |
+| USDJPY 1W | +1.62 | −0.44 | 0.73 | 1.13 | 99.5% | 50.0% | 11.2% |
+| WTI 18h | −0.07 | +0.24 | 0.55 | 1.24 | 29.5% | 13.2% | 13.3% |
+| XAUEUR 1h *(TEST)* | +1.22 | +0.88 | 0.44 | 1.70 | 77.5% | 34.5% | 29.6% |
+| **POOLED** | **+0.73** | **+0.11** | **0.17** | **0.40** | **100.0%** | | 17.5% |
+
+**Pooled, the real result beats all 200 random-shift nulls**, and it does so by a wide margin —
++0.73R against a null of +0.11 ± 0.17. Held-out **BTCUSD is at the 99.5th percentile**. The
+fixed-shift sweep says the same thing without any randomisation:
+
+| k (bars) | 0 | 25 | 50 | 100 | 250 | 500 |
+|---|---|---|---|---|---|---|
+| mean R | **+0.76** | +0.36 | +0.24 | +0.35 | +0.43 | +0.10 |
+
+Moving the trade off the breakout costs half the edge or more at every distance tried. **The
+six-pivot structure is doing work that direction and geometry alone do not do.** This is the
+first result in the entire study that shows the pattern predicting *price* rather than
+predicting *Hunt*, and it is much stronger evidence than any recall number in §8.14–§8.20.
+
+**Result 2 — the direction gate is worth roughly half the edge, and flipping it erases it. [V]**
+
+| variant | trades | win% | mean R | total R |
+|---|---|---|---|---|
+| **A baseline** | 212 | 26.4% | **+0.76** | +161.2 |
+| D direction flipped | 239 | 17.6% | **0.00** | +0.5 |
+| E gate removed (ungated pool) | 246 | 25.6% | **+0.38** | +94.1 |
+
+Mirroring every trade takes +0.76R to **exactly zero** — the edge is entirely directional.
+Selecting from the ungated pool halves it, 0.76 → 0.38, which is what §8.19 is worth **in money**
+rather than in recall. Note flipping yields ~0 rather than a symmetric loss, so the edge is not a
+sign error on a symmetric effect; it is a real asymmetry that direction alignment unlocks.
+
+**Result 3 — the rank remains unvalidated. [V]** §8.22 put it at the 61st percentile of random
+*selection*; nothing here changes that. The three-way attribution is now:
+
+| component | evidence | verdict |
+|---|---|---|
+| funnel structure (§8.14 MEF) | 100th pct vs 200 shift-nulls | **real** |
+| direction at own degree (§8.19) | 0.76 → 0.38 removed, → 0.00 flipped | **real** |
+| scale-prior rank (§8.20) | 61st pct vs 200 selection-nulls | **not established** |
+
+**Result 4 — WTI now fails a test it cannot be argued out of. [V]** At the 29.5th percentile its
+real result is *worse* than randomly shifting it, and XAU/XAG is negative in absolute terms
+(−0.74R) even while beating its own null. These are the same two charts that failed §8.15,
+§8.17, §8.18, §8.19, §8.20 and §8.22. Six independent methods now agree they are outliers; they
+should be excluded from further calibration rather than diagnosed again.
+
+**Standing caveats, unchanged. [D]** Zero costs and zero slippage on a fill §8.21 showed lands a
+median of one bar after `RL3.confirm`; 43 months of a single regime; trades that overlap in time
+and across nested funnels and are therefore not independent draws. The shift null also relocates
+trades into different volatility regimes, which is a partial confound in its favour, not against.
+
+**Decision. [C]** Build it. The two components that survive ablation — MEF detection and the
+degree-scaled direction gate — are the strategy. §8.20's rank should be carried only as a
+tie-break for shortlist length, not credited with edge. The next work is costs and slippage
+against the knife-edge fill, then the exit rule, which §8.21 flagged and nothing has yet touched.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
