@@ -2511,6 +2511,82 @@ credibility of every held-out figure prior to this section — both of which wer
 ours to keep. The honest pooled number is **+0.51R at the 95th percentile**, and the
 honest single-instrument number is **gold at +1.57R and the 99th**.
 
+### 8.30 Out-of-sample in time — the strategy does not survive [V]
+
+`scripts/hvf_v2_mef_oos.py`. Everything from §8.22–§8.29 was measured on
+2023-01-01 onward. This section runs the frozen rule set — universal 0.50% box
+(§8.29), 8.19 direction gate, top-3/month, AMP1 measured move, hard stop at the
+6th pivot — on the years *before* that cut. No parameter was refitted. `FIT`
+(§8.20) is hardcoded from Hunt's own eight funnels, not from returns, so it
+carries across unchanged.
+
+**Data-quality correction first.** A naive run reported gold from 2000 and BTC
+from 2011 with a pooled +0.37R, and that was wrong. These H1 source files carry
+**daily** bars in their early years — gold has ~260 rows/year before 2016 where
+a 2h frame expects ~4,380; BTC ~260/year before 2017. Sixteen of gold's
+twenty-three "years" were junk resolution. The table below is restricted to the
+genuinely dense era per chart, which is the only honest blind window available:
+
+| chart | span | n | win% | mean R | total R | PF | null mean | pctile | /yr |
+|---|---|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | 2016-01..2022-12 | 116 | 26.7% | **+0.31** | 35.9 | 1.42 | 0.17 | **74.0%** | 16.6 |
+| BTCUSD 1h | 2017-01..2022-12 | 106 | 14.2% | **0.00** | 0.0 | 1.00 | 0.16 | **26.5%** | 17.7 |
+| XAU/XAG 8h | 2016-01..2022-12 | 92 | 18.5% | +0.06 | 5.7 | 1.08 | 0.25 | 37.0% | 13.2 |
+| USDJPY 4h | 2011-01..2022-12 | 116 | 17.2% | −0.10 | −11.9 | 0.88 | 0.06 | 34.0% | 9.7 |
+| WTI 18h | 2017-01..2022-12 | 32 | 18.8% | +1.13 | 36.2 | 2.39 | 0.33 | 87.0% | 5.3 |
+| XAUEUR 1h | 2016-01..2022-12 | 94 | 26.6% | +0.54 | 51.0 | 1.74 | 0.22 | 90.0% | 13.5 |
+| **POOLED** | | **556** | | **+0.21** | | | 0.18 | **57.5%** | |
+
+`pctile` is the real result's position in that chart's own 200-seed shift-null
+(§8.23). The bar is the 95th; nothing clears it.
+
+**Read against the pre-committed in-sample benchmarks (§8.29b):**
+
+- Gold was the whole case for building: **+1.57R at the 99th percentile**
+  in-sample. Out-of-sample it is **+0.31R at the 74th** — inside its own null.
+  Seven years and 116 trades say the 2023–2026 figure was regime, not rule.
+- BTC returns **exactly 0.00R**, below its null mean, at the 26.5th percentile.
+- Pooled falls from +0.51R at the 95th to **+0.21R at the 57.5th** — i.e. the
+  full rule set on 556 blind trades is indistinguishable from randomly relocating
+  the same trades in time.
+
+**The decisive detail is the sign of the cross-period correlation.** Ranking the
+six charts by in-sample percentile against out-of-sample percentile gives
+Spearman **ρ = −0.52** (mean R: ρ = −0.43). The two charts that look best in the
+blind window — WTI (87th) and XAUEUR (90th) — are precisely the two that failed
+in-sample (WTI negative under the hindsight box for eight sections; XAUEUR at
+the 22nd percentile under the universal box). Per-instrument performance does not
+merely fail to persist, it *anti-persists*. That is the signature of noise being
+re-sorted, not of an edge with varying strength. It also removes any option to
+salvage the result by trading "the good instruments": there is no stable set.
+
+**Conclusion — no deployable edge. [V]**
+
+Attribution across the whole programme now reads: MEF detection is real and
+parameter-free (§8.11, 8/8); the direction gate is real (§8.19); the 0.5% box is
+Hunt's own stated setting and correct (§8.29). Everything downstream of that —
+§8.20 rank, reward:risk, ATR floor, fourteen exit rules (§8.26), stop buffer and
+TP ladder (§8.28) — was null. §8.29 then showed the per-chart box had leaked
+hindsight into every prior held-out figure, and §8.30 shows what remains does not
+survive contact with unseen years.
+
+The pattern Hunt draws is detectable and his geometry is reproducible. What is
+not established is that trading it makes money. The honest position is that
+eight sections of null results, one leak, and an anti-correlated out-of-sample
+add up to a strategy that should not be built as specified.
+
+**What would change this verdict**, in order of cost:
+1. Genuine tick or minute data pre-2016 for gold, so the blind window is longer
+   than six years and the 116-trade sample stops being the binding constraint.
+2. A selection rule that is *causal and defensible* rather than fitted — the
+   consistent failure mode has been that every selector works in-sample and
+   transfers at zero. Detection is not the bottleneck; picking which funnel to
+   trade is, and nothing tried has beaten "all of them".
+3. Forward paper-trading gold 2h on the frozen rules. ~17 setups/year means a
+   year buys ~17 trades — too slow to resolve +0.31 vs 0.00.
+
+None of these is a reason to place live capital now.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
