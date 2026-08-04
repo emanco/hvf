@@ -2273,6 +2273,81 @@ live decision is costs and slippage against a fill that lands a median of 1 bar 
 `RL3.confirm` — and given how little slack the exit turned out to have, that is now
 the question most likely to decide whether this is tradeable.
 
+### 8.27 Costs — the spread is irrelevant, the financing is not
+
+`scripts/hvf_v2_mef_costs.py`, `scripts/hvf_v2_mef_carry.py`
+
+Everything from 8.22 to 8.26 assumed a fill at the trigger price with zero spread,
+zero commission and zero slippage. 8.26 made that assumption more dangerous rather
+than less: the exit turned out to have no slack in it at all, so there is nothing in
+the trade management to absorb a bad fill. Broker is IC Markets [C].
+
+Rather than plug one spread number in and get one answer, the question is inverted:
+**how much round-trip cost does each instrument absorb before mean R reaches zero?**
+That is a number checkable against a spec sheet instead of guessed at.
+
+| chart | n | median price | median risk | risk % of price | breakeven round trip | published cost | cost as % of risk |
+|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | 40 | 2,628 | 23.94 | 0.83% | **39.89** | ~0.70 | 2.9% |
+| BTCUSD 1h `T` | 49 | 61,779 | 1,335.30 | 2.24% | **893.77** | ~6.46 | 0.5% |
+| XAUEUR 1h `T` | 29 | 2,999 | 35.92 | 1.12% | **40.52** | ~3.27 | 9.1% |
+| USDJPY 4h | 43 | 148.19 | 0.922 | 0.62% | **0.5045** | ~0.002 | 0.2% |
+
+Costs are charged as `net_R = gross_R − C / risk`. Published cost is IC Markets'
+blended average spread plus $7 round-turn commission per standard lot [I — their
+own spec sheets, not measured in our terminal].
+
+**The round trip is a rounding error.** Gold absorbs $39.89 an ounce before the edge
+is gone and costs about $0.70; that is a 57× margin. The reason is structural rather
+than lucky: an HVF stop sits outside the whole sixth pivot, which on this data is
+0.6%–2.2% of price, and no retail spread is a meaningful fraction of a move that
+size. This is the first cost result in the study that the pattern's own geometry
+guarantees rather than the sample happening to allow.
+
+| chart | 0% | 1% | 2% | 5% | 10% | 20% | 30% |
+|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | 1.72 | 1.71 | 1.70 | 1.67 | 1.62 | 1.52 | 1.42 |
+| BTCUSD 1h `T` | 0.85 | 0.84 | 0.83 | 0.80 | 0.75 | 0.65 | 0.55 |
+| XAUEUR 1h `T` | 1.22 | 1.21 | 1.20 | 1.17 | 1.12 | 1.02 | 0.92 |
+| USDJPY 4h | 0.55 | 0.54 | 0.53 | 0.50 | 0.45 | 0.35 | 0.25 |
+
+**Fill quality.** Replacing the trigger fill with the next bar's OPEN — the
+pessimistic case for a resting order at a level price is actively moving through —
+costs 0.07R on gold, 0.12R on BTC and *gains* 0.02R on XAUEUR. It also drops 2–7
+trades per chart that gapped clean through the stop before they could be entered.
+Real but small, and not directional enough to redesign the entry around.
+
+**Financing is the actual cost, and it was nearly missed.** A round trip is charged
+once; financing is charged every night, on notional, and notional here is 45×–120×
+the trade's own risk. That leverage inverts the intuition — a rate that looks small
+per year is large per R per day.
+
+| chart | notional / risk | median hold | mean hold | R lost / day | mean drag | gross → net |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | 120.5 | 6.2 d | 12.3 d | 0.023 | 0.27R | 1.72 → **1.45** |
+| BTCUSD 1h `T` | 44.7 | 2.5 d | 9.8 d | 0.024 | 0.24R | 0.85 → **0.61** |
+| XAUEUR 1h `T` | 89.1 | 3.9 d | 23.5 d | 0.017 | 0.31R | 1.22 → **0.91** |
+
+Crypto financing is published at −20%/yr on notional, tripled Fridays [I]. Gold is
+not published, so it is swept across the 4%–10%/yr implied by broker swap tables at
+current prices: gold nets 1.57R / 1.45R / 1.34R at 4% / 7% / 10%, BTC nets
+0.67R / 0.61R / 0.55R at 15% / 20% / 25%. **The conclusion is rate-insensitive** —
+no plausible financing rate takes either instrument near zero.
+
+**But note where the drag lands.** Median hold is 2.5–6.2 days and mean hold is
+9.8–23.5, so the distribution is long-tailed, and financing scales with time held.
+It therefore taxes precisely the long winners that 8.26 showed carry the entire
+result. Financing costs BTC 28% of its gross edge while costing the median trade
+only 0.05R. This is the one cost that is *not* a rounding error and the one that
+argues, weakly, for preferring the faster instrument at equal edge.
+
+**Verdict: costs do not kill this.** The unknown flagged at the end of 8.26 is now
+closed — gold nets ~1.45R and BTC ~0.61R after realistic spread, commission,
+pessimistic fills and financing. Two figures remain estimates from published sheets
+rather than measurements: the live spread during the hours we actually trade, and
+the current gold swap line. Both should be read out of the terminal before sizing,
+and neither is close enough to a threshold to change the decision.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
