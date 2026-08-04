@@ -1817,6 +1817,77 @@ HYG, and does not on gold, USDJPY 4h, WTI or XAUEUR. Gold must be diagnosed befo
 aggregate expectancy number is quoted, or it will dominate the population and the result will
 mean nothing.
 
+### 8.21 What a funnel is worth — the premise, tested for the first time
+
+Every section from §8.14 to §8.20 measures **agreement with Hunt's annotations**. None measures
+money, and agreement is not a proxy for profit: the object being reproduced has unknown
+expectancy, so a perfect classifier for a break-even pattern is a live possibility. §8.10 has
+been deferred five sections running. This is the cheapest thing that could falsify the whole
+premise — the R-multiple of Hunt's own eight setups. `scripts/hvf_v2_mef_rmultiple.py`.
+
+**Method. [C]** The simulation runs on the **detected** funnel, never the annotation, and arms
+at `RL3.confirm` — the bar the sixth pivot becomes knowable. A live system has nothing earlier.
+Entry is a stop order at the 5th pivot, stop-loss at the 6th, target is a measured move of
+`AMP1` from entry. Intrabar ties resolve to the **stop**, the conservative side of an ambiguity
+OHLC cannot settle. Entry must trigger within the funnel's own span in bars or the setup is
+abandoned.
+
+**Result 1 — the geometry pays, and it is exact rather than anecdotal. [V]** Risk is
+`(rh3 − rl3) · AMP1` by construction, so reward:risk is `1/(rh3 − rl3)` and depends on nothing
+but the funnel's shape:
+
+| chart | dir | AMP1 | risk | AMP1/risk | breakeven win% |
+|---|---|---|---|---|---|
+| GoldCFD 2h | long | 63.68 | 32.37 | 1.97 | 33.7% |
+| BTCUSD 1h *(TEST)* | long | 2849.06 | 1489.50 | 1.91 | 34.3% |
+| XAU/XAG 8h | long | 16.97 | 3.22 | **5.27** | 15.9% |
+| USDJPY 4h | long | 2.331 | 0.860 | 2.71 | 27.0% |
+| USDJPY 1W | long | 22.371 | 5.432 | 4.12 | 19.5% |
+| WTI 18h | short | 38.07 | 17.11 | 2.23 | 31.0% |
+| XAUEUR 1h *(TEST)* | short | 79.93 | 41.51 | 1.93 | 34.2% |
+| HYG 4h | short | 2.19 | 0.80 | 2.74 | 26.8% |
+| **median** | | | | **2.47** | **28.8%** |
+
+The tight-stop-against-a-measured-move structure HVF claims is real: a **28.8% win rate breaks
+even** at the median. That is the sole structural reason this pattern could carry an edge, and
+it survives contact with the annotations.
+
+**Result 2 — the move is usually there; capturing it is the open question. [V]**
+
+| chart | state | bars→fill | held | MFE (R) | MAE (R) | R @ target |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | stopped | 1 | 1 | 1.01 | 2.46 | **−1.00** |
+| BTCUSD 1h *(TEST)* | stopped | 1 | 156 | 3.48 | 1.16 | **+1.91** |
+| XAU/XAG 8h | open | 73 | 122 | 2.72 | 0.85 | open |
+| USDJPY 4h | stopped | 7 | 60 | 1.75 | 5.25 | **−1.00** |
+| USDJPY 1W | open | 1 | 42 | 2.41 | 0.28 | open |
+| WTI 18h | open | 14 | 71 | 1.30 | 0.54 | open |
+| XAUEUR 1h *(TEST)* | stopped | 1 | 176 | 3.36 | 1.20 | **+1.93** |
+| HYG 4h | open | 1 | 12 | 0.26 | 0.23 | open |
+
+All eight filled. **7 of 8 reach ≥1R** of favourable excursion and 4 of 8 reach ≥2R, median MFE
+**2.08R**. Four have resolved at a measured-move target: **mean +0.46R, 2 wins from 4**.
+
+**n=4 resolved is worth nothing statistically and no weight is placed on it.** What §8.21
+establishes is narrower and sufficient: the premise is **not falsified**, so a real backtest is
+justified. Note also the gap between MFE and realised — the excursion exists on 7 of 8 but only
+2 of 4 resolved trades banked it, which makes the **exit rule**, untouched so far, a first-class
+open question rather than a detail.
+
+**Result 3 — fills are knife-edge, and this is mechanical. [V]** Entries fill a **median of one
+bar** after `RL3.confirm`. That is not luck. Gold's risk is 0.74% of price and its detection box
+is 0.71%: the move that *confirms* the sixth pivot is the same size as the move to the entry, so
+confirmation and trigger are near-simultaneous by construction. Any backtest that fills at the
+trigger price is therefore maximally exposed to slippage and latency, and the assumption must be
+stated every time rather than buried. This is a property of the detector's box, so it can be
+traded off against detection quality — but not ignored.
+
+**Verdict. [C]** Proceed to expectancy over a ranked shortlist (§8.22). The two things §8.21
+says must be carried into it: trades come off the shortlist and never the raw population — the
+error §8.12 made twice — and a **random-selection control** is mandatory, because a positive
+result over 2023–2026 could be the pattern, the direction gate, or simply a bull market, and
+without a control it cannot be attributed to the rank.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
