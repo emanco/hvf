@@ -1210,6 +1210,14 @@ number. Ungated distinct funnels per month, against §8.7's detector rates:
 Rates reach §8.7 only at box ≈ 2%, and USDJPY 4h's funnel is gone above 0.47%. At the
 coarsest box that keeps all the intraday matches, the rule emits **10–25×** the old count.
 
+⚠️ **Corrected 2026-08-04 — that table is not like for like, and it understated the
+problem.** §8.7's benchmark rates were measured with the `extreme_of_m(50)` prior-trend
+gate, **over 2026 only**, at the box that reproduces Hunt's setup. The row above is
+ungated, over the whole feed, at boxes of our choosing — three differences at once, and
+averaging 2000–2026 dilutes the emission-dense 2026 window badly. Re-measured under §8.7's
+exact protocol (`scripts/hvf_v2_mef_gated.py`), gold emits **896.7/month** on geometry
+alone against the detector's 1.1. The real gap was ~800×, not 10–25×. See §8.15.
+
 **What this means. [V]** MEF is a **necessary** condition on Hunt's funnels and a very
 strong one — it recovers all eight from a search that had previously found three. It is not
 **sufficient**: it finds Hunt's setup among several thousand structural twins. Detection is
@@ -1231,6 +1239,90 @@ Three of four survived a genuine out-of-sample test; RL3's lower bound did not, 
 to 0.12. `RH2 ≥ 0.77` in all eight is the sharpest of them. This is a *ranking* prior, not
 a detection rule, and with n = 8 it is a lead rather than a result — but it is the obvious
 next lever, and it must be measured on emission rate and on expectancy separately.
+
+### 8.15 Selection — the missing constraint is **scale**, and ATR supplies it
+
+§8.14 left selection as the binding problem. The diagnosis is now specific: **the MEF rule
+is scale-free.** Funnels nest inside funnels, from three-bar wiggles to multi-year
+structures, and every level satisfies the mutual-extreme condition *simultaneously*. That
+is not a flaw in the condition — it is what a self-similar geometric rule does. It means
+the rule can never select on its own, and no refinement of the geometry will fix it.
+
+**First, referencing the funnel to the confirmed prior trend. [V]** §4.2's gate asks only
+that H1 top a 50-bar window. Under §8.7's exact protocol (reproducing box, 2026 only),
+`scripts/hvf_v2_mef_gated.py`:
+
+| prior-trend gate | gold /mo | true? | USDJPY 4h /mo | true? | HYG 4h /mo | true? |
+|---|---|---|---|---|---|---|
+| none (geometry only) | 896.7 | ✅ | 16.2 | ✅ | 0.2 | ✅ |
+| extreme_of_m(100) | 88.6 | ❌ | 6.3 | ✅ | 0.2 | ✅ |
+| **extreme_of_m(50)** | **116.4** | ✅ | **6.8** | ✅ | **0.2** | ✅ |
+| atr_span(k=4,n=100) | 692.3 | ✅ | 15.6 | ✅ | 0.2 | ✅ |
+| slope(n=100,r²=0.5) | 388.3 | ❌ | 12.1 | ✅ | 0.2 | ✅ |
+| *v8.7 detector* | *1.1* | ✅ | *0.4* | ✅ | *0.2* | ✅ |
+
+`extreme_of_m(50)` remains the right choice (§8.7's decision survives) and it cuts gold ~8×.
+It is nowhere near sufficient: 116 against 1.1. **A binary "is H1 a local extreme" test
+cannot select, because it says nothing about how BIG the funnel should be.**
+
+**Second, the shape ratios. [V] — three of four are unusable.** Measured on all eight
+matched funnels (`scripts/hvf_v2_mef_trendref.py`), with the impulse into H1 defined
+parameter-free and in the rule's own idiom (trend origin = extreme opposite pivot between
+H1 and the previous pivot exceeding H1):
+
+| chart | AMP1/trend | AMP1/ATR14 | funnel bars / trend bars |
+|---|---|---|---|
+| GoldCFD 2h | 0.184 | 1.9 | 0.61 |
+| BTCUSD 1h *(TEST)* | 0.459 | 3.5 | 1.15 |
+| XAU/XAG 8h | 0.579 | 4.3 | 8.08 |
+| USDJPY 4h | 0.027 | 10.2 | 0.00 |
+| USDJPY 1W | 0.259 | 8.5 | 0.10 |
+| WTI 18h | 3.221 | 5.1 | 72.00 |
+| XAUEUR 1h *(TEST)* | 0.531 | 4.1 | 1.52 |
+| HYG 4h | 0.826 | 6.8 | 1.29 |
+
+The calibration bands for `AMP1/trend` (120× wide) and the time ratio (29,000× wide) do
+technically contain both held-out values, and that is worth **nothing** — a band that wide
+contains anything, so "it holds out-of-sample" is a tautology, not a validation. Both are
+wrecked by the same two rows: USDJPY 4h's trend spans 22,802 bars and WTI's spans 1, i.e.
+**the parameter-free trend definition fails outright on 2 of 8 charts.** Trend-*referenced*
+shape cannot be judged until that definition is repaired; it has not been ruled out, it has
+not been tested.
+
+**`AMP1/ATR14` at H1 is the exception, and it is the whole result.** Spread 1.9–10.2, only
+**5.4×**, and it needs no trend definition at all. Applied as a band taken from the **six
+calibration charts only** (`scripts/hvf_v2_mef_atrband.py`):
+
+| chart | geometry | + extreme_of_m(50) | + ATR band 1.9–10.2 | Hunt kept? | total cut |
+|---|---|---|---|---|---|
+| GoldCFD 2h | 896.7 | 116.4 | **5.3** | ✅ | 169× |
+| BTCUSD 1h *(TEST)* | 328.2 | 84.6 | **1.8** | ✅ | 182× |
+| XAUEUR 1h *(TEST)* | 3269.7 | 1643.6 | **9.4** | ✅ | 348× |
+| HYG 4h | 0.2 | 0.2 | **0.2** | ✅ | 1× |
+| USDJPY 4h | 16.2 | 6.8 | **0.3** | ❌ | 54× |
+
+Emissions fall by a further **20–170×** beyond the trend gate, landing within an order of
+magnitude of §8.7's rates instead of two to three. Recall survives on 4 of 5 **including
+both pre-committed held-out charts**, whose ratios (3.5 and 4.1) sit mid-band and did not
+set it — that is a genuine blind check on recall.
+
+**The one failure is the informative one.** USDJPY 4h loses its funnel, and its ratio is
+10.2 — exactly the top edge of a band set by six observations. A band whose edge is defined
+by a single chart will lose anything sitting on that edge, and here it did. Two things
+follow: the band is a *scale prior*, not a hard filter, and it belongs in a ranking score
+rather than a gate; and n = 6 is not enough to set its edges. (The ratio is also
+box-dependent in practice — this run uses §8.6's reproducing box and anchor, not the box
+§8.14's acceptance selected — so part of the USDJPY miss may be that, and it is untested.)
+
+**Where this leaves the strategy. [V]** Detection is solved (§8.14, 8/8). Selection has
+gone from *unsolved* to *tractable*: the binding constraint was scale, scale is measurable
+without reference to Hunt, and two filters that are doctrine rather than fitting — prior
+trend, and funnel height in volatility units — recover ~99.5% of the reduction needed.
+The remaining gap is roughly 5× on gold. That is a candidate count a person could look at.
+
+**Still not licensed:** re-running §8.10. The population is now plausible but the ATR band's
+edges rest on n = 6, and the USDJPY 4h miss shows what that costs. Fix the trend definition,
+turn the band into a rank rather than a gate, and only then re-measure expectancy.
 
 ## 9. Open questions
 
