@@ -1314,6 +1314,8 @@ rather than a gate; and n = 6 is not enough to set its edges. (The ratio is also
 box-dependent in practice — this run uses §8.6's reproducing box and anchor, not the box
 §8.14's acceptance selected — so part of the USDJPY miss may be that, and it is untested.)
 
+⚠️ **Every rate in this section is one direction only** — the searches pass Hunt's known `dir`. Both directions give gold **33.0/month**, not 5.3. See §8.16.
+
 **Where this leaves the strategy. [V]** Detection is solved (§8.14, 8/8). Selection has
 gone from *unsolved* to *tractable*: the binding constraint was scale, scale is measurable
 without reference to Hunt, and two filters that are doctrine rather than fitting — prior
@@ -1323,6 +1325,64 @@ The remaining gap is roughly 5× on gold. That is a candidate count a person cou
 **Still not licensed:** re-running §8.10. The population is now plausible but the ATR band's
 edges rest on n = 6, and the USDJPY 4h miss shows what that costs. Fix the trend definition,
 turn the band into a rank rather than a gate, and only then re-measure expectancy.
+
+### 8.16 Direction is not determined — and every §8.14–8.15 count is one-sided
+
+**What the doctrine says.** §2.2 **[V]+[D]**, 13/13 charts: direction follows the *prior
+trend into the exhaustion point*, never the shape of the funnel. That section calls it
+"the single rule the old implementation lacked".
+
+**What the code does.** `detect_hvf` line 378:
+
+```python
+# Direction is set by the prior trend into the exhaustion pivot, so it
+# is decided here and never by window parity (spec 2.2 [V]+[D]).
+direction: Direction = 1 if run[0].kind == "L" else -1
+```
+
+The comment asserts the opposite of what the line does: direction *is* set by window
+parity. The prior-trend test is applied afterwards, at line 386, as a veto. So the real
+design is **parity proposes, prior trend disposes** — strictly better than the retired
+detector, which had no directional evidence anywhere, but it is not §2.2.
+
+**What was never tested.** Every measurement in §8.14 and §8.15 passes `c["dir"]` — Hunt's
+known answer — into `mef_candidates`. Direction determination has therefore never been
+exercised at all. Measured now, both directions, 2026, reproducing box
+(`scripts/hvf_v2_mef_direction.py`):
+
+| chart | Hunt | stage | longs | shorts | both /mo | wrong-way |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | long | geometry | 6,304 | 108,037 | 16,264 | **94.5%** |
+| | | + extreme_of_m(50) | 818 | 16,327 | 2,439 | **95.2%** |
+| | | + ATR band | 37 | 195 | **33.0** | **84.1%** |
+| USDJPY 4h | long | geometry | 114 | 5,658 | 821 | 98.0% |
+| | | + ATR band | 2 | 6 | **1.1** | 75.0% |
+| BTCUSD 1h | long | geometry | 2,307 | 47,736 | 7,118 | 95.4% |
+| | | + ATR band | 13 | 38 | **7.3** | 74.5% |
+| HYG 4h | short | + ATR band | 0 | 1 | **0.2** | 0.0% |
+
+**Three consequences, in order of severity.**
+
+1. **`extreme_of_m(50)` does not decide direction.** On gold it admits 818 longs *and*
+   16,327 shorts over the same 2026 window. A test that passes both directions on the same
+   data is a local-extreme test, not directional evidence. §8.7 chose it on emission count
+   with direction held fixed, so that choice never bore on this question — it is not
+   wrong, it is simply silent here.
+2. **§8.15's rates are one-sided and roughly 6× optimistic.** Gold's headline `5.3/month`
+   is longs only; both directions give **33.0/month** against §8.7's 1.1. The ATR band's
+   20–170× cut is real and unaffected — it is measured within each direction — but the
+   distance still to travel was understated.
+3. **The geometry is grossly direction-asymmetric**, ~17:1 toward shorts on gold and
+   ~21:1 on BTC, both in rising markets, before any gate. Whether that is real structure
+   or a defect in the short-side mirror of `mef_candidates` is **unresolved**, and it must
+   be settled before the wrong-way counts are interpreted: the four contraction conditions
+   were checked by hand and read correctly, but no test exercises the mirror.
+
+**This outranks the scale problem.** §8.15 concluded selection was "tractable, ~5× to go on
+gold". With direction restored that is ~30×, and the dominant failure mode is no longer
+*too many funnels* but *funnels pointing the wrong way*. The next work is to make §2.2
+literal — derive direction from the prior trend and enumerate one direction per anchor
+rather than both — and only then re-measure. §8.10 remains blocked.
 
 ## 9. Open questions
 
