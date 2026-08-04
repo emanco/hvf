@@ -2182,6 +2182,97 @@ cap exposure by position limits rather than by ranking, and stop spending sectio
 choose between them. Costs, slippage and the exit rule are untouched and are now the only
 material unknowns left before a live decision.
 
+### 8.26 The exit rule — the measured move survives, everything else loses money
+
+`scripts/hvf_v2_mef_exit.py`
+
+Every backtest from 8.22 onward used one exit and never questioned it: a measured
+move of `AMP1` from entry, a hard stop at the 6th pivot, ties to the stop, no trail
+and no time limit. 8.21 gave a direct reason to suspect it was leaving money behind
+— **7 of Hunt's 8 setups reach ≥1R of favourable excursion, but only 2 of the 4
+resolved trades banked it** — and I told the user the exit was likely worth more
+than any selector I had tried. That guess was wrong, and usefully so.
+
+Fourteen rules in four families, on the same top-3/month shortlist as 8.22–8.25.
+Chosen on the six calibration charts, reported blind on `BTCUSD 1h` and `XAUEUR 1h`.
+**Position sequencing is re-run per rule** — changing the exit changes when capital
+frees up and therefore which later setups are takeable at all, so a fixed trade list
+would have compared rules on different opportunity sets without saying so.
+
+| rule | calib mean R | held-out mean R | all 8 | n | win% |
+|---|---|---|---|---|---|
+| **AMP1 target (baseline)** | **+0.63** | **+0.98** | **+0.76** | 212 | 26.4% |
+| fixed 1R | +0.14 | +0.34 | +0.22 | 329 | 60.8% |
+| fixed 2R | +0.19 | +0.33 | +0.24 | 297 | 41.4% |
+| fixed 3R | +0.40 | +0.55 | +0.45 | 264 | 36.4% |
+| fixed 4R | +0.51 | +0.68 | +0.58 | 244 | 31.6% |
+| fixed 5R | +0.54 | +0.82 | +0.64 | 216 | 27.3% |
+| AMP1 + BE at 1R | +0.14 | +0.79 | +0.38 | 263 | 15.6% |
+| AMP1 + BE at 2R | +0.46 | +0.81 | +0.59 | 235 | 20.9% |
+| AMP1 + trail 2 ATR | +0.25 | +0.07 | +0.18 | 352 | 45.5% |
+| AMP1 + trail 3 ATR | +0.24 | +0.26 | +0.25 | 331 | 40.2% |
+| AMP1 + trail 5 ATR | +0.22 | +0.49 | +0.33 | 298 | 39.3% |
+| half 2R, rest AMP1+BE | +0.33 | +0.58 | +0.43 | 235 | 42.1% |
+| half 3R, rest AMP1+BE | +0.57 | +0.72 | +0.63 | 226 | 37.6% |
+| AMP1, time stop 3 spans | +0.65 | +1.01 | +0.78 | 217 | 29.0% |
+| AMP1, time stop 10 spans | +0.61 | +0.98 | +0.75 | 212 | 26.4% |
+
+**Not one alternative beats the measured move.** The best on calibration is the
+3-span time stop at +0.65R against +0.63R — a two-hundredth of an R, inside noise
+several times over, and I am not adopting it. It also transfers as noise would
+(+1.01 vs +0.98) and gains nothing anywhere except WTI, which has failed seven
+sections and is already a candidate for exclusion.
+
+The `win%` column is not comparable across families. A breakeven exit scores exactly
+0.00R, which counts as neither a win nor a loss, so `BE at 1R` shows 15.6% wins while
+being *more* likely than baseline to avoid a full stop. Mean R is the only figure
+that means the same thing in every row.
+
+**Why the excursion in 8.21 is a trap.** The rule that banks it — `fixed 1R` — has by
+far the best hit rate in the table, **60.8%**, and by far the worst return, +0.22R.
+The whole distribution is one-sided: the top decile carries the result and every rule
+that clips it (a fixed target, a trail, a breakeven stop, a partial) converts real
+tail into a higher win rate and less money. The trailing stops are the sharpest
+demonstration, a 2-ATR trail lifts hit rate to 45.5% and cuts return to +0.18R. This
+is the same asymmetry the user identified in 8.24, arriving from the opposite side:
+there it said don't fear a low hit rate, here it says don't buy one.
+
+**The other direction.** Every rule above shortens the trade, so "AMP1 wins" could
+have meant only "AMP1 beats cutting it short". Sweeping the target distance itself,
+with 10,000-resample bootstraps of the difference:
+
+| target | n | mean R | total R | Δ mean | 95% CI of difference | P(better) |
+|---|---|---|---|---|---|---|
+| 0.50 × AMP1 | 248 | +0.49 | 121.2 | −0.27 | [−0.82, +0.25] | 16.2% |
+| 0.75 × AMP1 | 233 | +0.56 | 129.9 | −0.20 | [−0.79, +0.37] | 25.3% |
+| **1.00 × AMP1** | **212** | **+0.76** | **161.2** | — | — | — |
+| 1.25 × AMP1 | 191 | +0.95 | 182.1 | +0.19 | [−0.55, +0.92] | 69.3% |
+| 1.50 × AMP1 | 178 | +0.86 | 153.3 | +0.10 | [−0.68, +0.94] | 59.9% |
+| 2.00 × AMP1 | 162 | +0.81 | 131.4 | +0.05 | [−0.83, +1.02] | 53.2% |
+| 3.00 × AMP1 | 129 | +1.10 | 142.5 | +0.34 | [−0.89, +1.78] | 68.4% |
+
+**Every interval straddles zero.** Shorter than the measured move is consistently
+worse and longer is flat-to-noisy — 1.5 and 2.0 dip below 1.25 and 3.0 rises again,
+which is the shape of sampling noise, not of a payoff curve. Mean R also flatters
+the long targets: 3× AMP1 earns the most per trade and less in total (142.5 vs 161.2)
+because far fewer trades ever resolve. **The measured move cannot be beaten in either
+direction on this data**, which is the strongest evidence yet that `AMP1` is a real
+feature of the pattern rather than an arbitrary convention inherited from Hunt — the
+only quantity in the whole study that came from doctrine [D] and then survived being
+optimised against.
+
+The 8.23 shift-null was re-run under the best calibration rule and is unchanged:
++0.75R against +0.09 ± 0.17, **100th percentile pooled**. The edge is still coming
+from where the funnel sits, not from how the trade is managed.
+
+**Verdict: keep the exit exactly as it is.** Three selection ideas (8.20's rank,
+8.24's reward:risk, 8.25's ATR floor) and now fourteen exit rules have all failed to
+add anything to detection plus the direction gate. That is four independent attempts
+to improve the system from the outside, all null. The remaining unknown before any
+live decision is costs and slippage against a fill that lands a median of 1 bar after
+`RL3.confirm` — and given how little slack the exit turned out to have, that is now
+the question most likely to decide whether this is tradeable.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
