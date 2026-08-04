@@ -1888,6 +1888,91 @@ error §8.12 made twice — and a **random-selection control** is mandatory, bec
 result over 2023–2026 could be the pattern, the direction gate, or simply a bull market, and
 without a control it cannot be attributed to the rank.
 
+### 8.22 The first backtest — the pattern pays, the rank is not what pays
+
+§8.21 cleared the premise. This runs expectancy properly for the first time: enumerate funnels,
+impose §8.19's direction, rank by §8.20's prior, trade the top few each month.
+`scripts/hvf_v2_mef_backtest.py`, `scripts/hvf_v2_mef_significance.py`.
+
+**Design. [C]** 2023-01-01 → 2026-08-03, one box per chart, gated population 57,976 candidates.
+Entry is a stop order at the 5th pivot armed from `RL3.confirm`, stop at the 6th, target a
+measured move of `AMP1`; intrabar ties go to the stop; one open position per chart. Trades come
+off a **shortlist, never the raw population** — the error §8.12 made twice. Fills at the trigger
+price, **no costs, no slippage, no financing**, which §8.21 showed is the most exposed
+assumption in the study.
+
+Disclosed leak: §8.20's prior is fitted on six funnels dated 2026, inside the test window. Six
+points setting four constants is small but not zero.
+
+**Result 1 — the system makes money at every shortlist depth. [V]** Pooled across charts:
+
+| top N/month | trades | win% | mean R | total R | PF | | control win% | control mean R |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 156 | 22.4% | +0.40 | +61.9 | 1.51 | | 13.0% | −0.13 |
+| 2 | 186 | 24.2% | +0.47 | +87.4 | 1.62 | | 12.1% | +0.18 |
+| **3** | **212** | **26.4%** | **+0.76** | **+161.2** | **2.03** | | 12.6% | +0.14 |
+| 5 | 249 | 24.9% | +0.54 | +133.9 | 1.72 | | 13.1% | +0.39 |
+| 10 | 266 | 19.9% | +0.26 | +68.7 | 1.32 | | 10.9% | −0.04 |
+
+Bootstrapping the 212 trades at N=3: mean **+0.76R, 95% CI [+0.32, +1.24]**, P(mean>0) = 100%.
+Note the trade count barely moves with N (156 → 266 as the shortlist goes 1 → 10) because the
+one-position-per-chart rule binds long before the shortlist does.
+
+Note also that the **win rate is below the 28.8% breakeven of §8.21 at every depth**. The
+expectancy is carried entirely by dispersion in `AMP1/risk` — the winners are the high-reward
+funnels. That is a real mechanism, not an artefact, but it is a fragile one: it means results
+depend on a minority of trades and the mean is not robust to a few exits going differently.
+
+**Result 2 — and here the honest part. The rank cannot be shown to be what earns it. [V]**
+The first run compared against a single random draw, which at ~30 trades a chart is far too
+noisy. Redrawing the control over **200 seeds** gives a null distribution to place the ranked
+result against:
+
+| chart | rank mean R | null mean | null sd | percentile | rank win% | null win% |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | +1.72 | +0.16 | 0.35 | **100.0%** | 37.5% | 18.2% |
+| BTCUSD 1h *(TEST)* | +0.85 | +1.22 | 1.63 | 54.0% | 26.5% | 6.0% |
+| XAU/XAG 8h | −0.74 | −0.81 | 0.51 | 85.5% | 9.1% | 1.9% |
+| USDJPY 4h | +0.55 | +0.32 | 1.03 | 72.0% | 25.6% | 12.5% |
+| USDJPY 1W | +1.62 | +3.38 | 2.09 | 6.0% | 50.0% | 73.8% |
+| WTI 18h | −0.07 | −0.43 | 0.55 | 80.0% | 13.2% | 6.5% |
+| XAUEUR 1h *(TEST)* | +1.22 | +0.46 | 0.37 | **97.5%** | 34.5% | 20.3% |
+| **POOLED** | **+0.73** | **+0.61** | 0.38 | **61.0%** | | |
+
+**Pooled, the rank sits at the 61st percentile of random selection from the same gated pool.**
+That is not an edge. It is clear on gold (100th) and on held-out XAUEUR (97.5th), absent
+everywhere else, and n=2 makes USDJPY 1W's 6th percentile meaningless.
+
+The rank *does* do one thing consistently and strongly: it roughly **doubles the win rate** on
+every chart (37.5 vs 18.2, 26.5 vs 6.0, 34.5 vs 20.3, 25.6 vs 12.5). That does not convert into
+mean R because random selection occasionally draws a very high `AMP1/risk` funnel and those
+lottery tickets carry the null's mean — BTCUSD's null has mean +1.22 with sd 1.63.
+
+**The conclusion this forces. [V]** The **random control is itself profitable** (+0.61R pooled).
+So the edge measured in Result 1 lives in the parts *upstream* of the rank — the funnel geometry
+of §8.21 and the direction gate of §8.19 — and **not** in §8.20's selection. Five sections were
+spent on selection; the money is in direction and shape.
+
+**Result 3 — two charts are outright negative and it is the same two as ever. [V]** XAU/XAG
+−0.74R with a bootstrap CI of [−1.00, −0.23] entirely below zero, and WTI −0.07R. These are the
+charts that failed §8.15, §8.17, §8.18, §8.19 and §8.20. The failure is now measured in money
+and it is consistent across every method tried.
+
+**What this backtest does NOT establish, and the next test must. [C]** The direction gate makes
+every trade a trend-following breakout, and the window 2023–2026 contains enormous trends in
+gold and BTCUSD. A trend-following breakout system will look good over it whether or not the
+funnel means anything. **The control used here randomises *which funnel* is traded but never
+asks whether a funnel is needed at all.** The decisive test is a control that keeps the entry
+timing, direction and `AMP1/risk` geometry but takes the structure away — random entries, same
+stop and target distances, same regime. Until that runs, the correct statement is:
+
+> A trend-aligned breakout with a ~2.5:1 measured-move target made money on six of eight
+> instruments over 2023–2026, before costs. Whether the *funnel* contributes anything beyond
+> the trend alignment is untested.
+
+Everything else remains subject to zero costs, zero slippage on a fill §8.21 showed is
+knife-edge, overlapping non-independent trades, and 43 months of one regime.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
