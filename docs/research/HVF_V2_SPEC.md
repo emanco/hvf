@@ -1565,6 +1565,139 @@ that both scores 4/7 and has a stated rationale, not because it is well establis
 (this section), scale is a prior not a gate (§8.15), and what remains is repairing the trend
 definition and turning the ATR band into a rank.
 
+### 8.19 The prior-trend definition, repaired — **degree was the missing term**
+
+§8.15 left the parameter-free trend definition broken on 2 of 8 charts, and §8.10 has been
+blocked on it since. It is now fixed, and the fix turns out to settle direction as well.
+
+**The diagnosis. [V]** `trend_of` walked back to `prev_beyond[H1]` — the last pivot exceeding
+H1 — and took the extreme opposite pivot in between. That wall is a *single pivot* and the
+distance to it is unbounded in both directions:
+
+* **USDJPY 4h** — H1 is the highest pivot in the feed, so `prev_beyond = −1`, the wall
+  collapses to bar 0, and the "trend" is the entire **22,802-bar** history back to the
+  all-time low.
+* **WTI 18h** — the pivot immediately before H1 already exceeds it, so the "trend" is
+  **1 bar** and `AMP1/trend = 3.22`: the funnel comes out three times *larger* than the
+  impulse that supposedly produced it, which is not a trend measurement at all.
+
+Both are one defect. The definition has **no notion of degree** — and an impulse is only an
+impulse relative to a scale. The funnel already carries one: `AMP1`.
+
+**The repair. [C], and it is the same move §8.14 made.** Re-run the ZigZag at a box scaled
+to the funnel, and take the last pivot it confirms:
+
+    box = k · AMP1 / anchor_price        trend origin = last coarse pivot known at H1
+
+with `k = 1` pre-committed before the run. Everything inside the funnel is noise at that box
+by construction, so the surviving leg is exactly one degree up. It is bounded above (any
+`k·AMP1` retracement terminates the leg) and below (a shorter leg is never confirmed), it is
+causal, and it introduces no constant that is not derived from the funnel itself.
+`scripts/hvf_v2_mef_trendfix.py`.
+
+**Result 1 — the shape ratio becomes usable, and holds out-of-sample. [V]**
+
+| chart | AMP1 | trend | AMP1/trend | f.bars | t.bars | time ratio |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | 65.02 | 199.60 | 0.326 | 19 | 7 | 2.71 |
+| BTCUSD 1h *(TEST)* | 2801.96 | 6190.44 | **0.453** | 47 | 23 | 2.04 |
+| XAU/XAG 8h | 16.93 | 29.38 | 0.576 | 202 | 22 | 9.18 |
+| USDJPY 4h | 2.32 | 7.79 | 0.298 | 56 | 239 | 0.23 |
+| USDJPY 1W | 21.12 | 34.04 | 0.620 | 63 | 76 | 0.83 |
+| WTI 18h | 40.37 | 54.16 | 0.745 | 72 | 1587 | 0.05 |
+| XAUEUR 1h *(TEST)* | 81.36 | 151.15 | **0.538** | 76 | 27 | 2.81 |
+| HYG 4h | 2.16 | 2.63 | 0.823 | 108 | 85 | 1.27 |
+
+| metric | calib band (n=6) | spread | was (§8.15) | BTCUSD 1h | XAUEUR 1h | holds? |
+|---|---|---|---|---|---|---|
+| **AMP1/trend** | 0.298 – 0.823 | **2.8×** | 120× | 0.453 | 0.538 | ✅ |
+| time ratio | 0.045 – 9.182 | 202× | 29,000× | 2.043 | 2.815 | ✅ |
+
+`AMP1/trend` goes from a 120× band that contained anything to a **2.8× band**, it is now
+bounded in (0, 1) by construction — the funnel can no longer come out bigger than its own
+impulse — and **both held-out charts land mid-band** at 0.45 and 0.54, having played no part
+in setting it. That is a genuine blind check, and unlike §8.15's it is not a tautology.
+
+The time ratio improves by 140× and still fails to be a filter: a 202× band is nearly
+vacuous, so "both held-out values sit inside it" proves little. WTI is again the outlier
+(1,587 bars ≈ 3 years of 18h). **Carry `AMP1/trend`; do not carry the time ratio.**
+
+**Result 2 — the same definition answers direction, at 7/8. [V]** This had never been tested.
+§8.17 tried thirteen rules and every one of them was a *calendar* window — SMA50/200, net
+move over 3m/6m/1y, ZigZag legs — on the daily series; §8.18 added 2y/3y/5y. The best of
+them scored 4/8. None asked doctrine's actual question (§2.2): what was the trend at the
+funnel's **own** degree? Taking the sign of the repaired impulse, direction-free:
+
+| chart | Hunt | k=0.5 | **k=1** | k=2 | k=3 |
+|---|---|---|---|---|---|
+| GoldCFD 2h | long | +83.8 ✅ | **+115.3 / 7b ✅** | +261.8 ✅ | +261.8 ✅ |
+| BTCUSD 1h *(TEST)* | long | +3326 ✅ | **+3326 / 23b ✅** | −5196 ❌ | +6509 ✅ |
+| XAU/XAG 8h | long | +2.94 ✅ | **+12.53 / 22b ✅** | −72.83 ❌ | +12.24 ✅ |
+| USDJPY 4h | long | +7.65 ✅ | **+7.65 / 239b ✅** | +7.65 ✅ | +10.59 ✅ |
+| USDJPY 1W | long | +21.45 ✅ | **+34.48 / 76b ✅** | +86.13 ✅ | +86.13 ✅ |
+| WTI 18h | short | −30.8 ✅ | **+24.87 / 1130b ❌** | +85.28 ❌ | +85.28 ❌ |
+| XAUEUR 1h *(TEST)* | short | +54.0 ❌ | **−42.63 / 27b ✅** | −66.7 ✅ | +535.1 ❌ |
+| HYG 4h | short | −2.35 ✅ | **−2.35 / 85b ✅** | — | — |
+| **recall** | | **7/8** | **7/8** | 4/7 | 5/7 |
+
+**7 of 8 against a previous best of 4 of 8**, and the two pre-committed held-out charts both
+pass at `k = 1`. The sensitivity is the finding, not a nuisance: recall collapses to 4–5/7 by
+`k = 2`. **HVF resolves in the direction of the impulse at its own degree, not the macro
+trend** — which is exactly why §8.17's calendar windows failed, since a 1-year window is an
+enormous `k`. It also explains the counter-trend setups §8.18 could not account for: XAUEUR
+is up +246% over five years and Hunt shorted it, and at `k = 1` the local impulse into that
+funnel is **down**, so the rule agrees with him where every calendar window disagreed.
+
+Honest caveat on `k`: 0.5 and 1 both score 7/8 but fail on *different* charts (WTI vs
+XAUEUR), so the tiebreak between them is that `k = 1` gets both held-out charts right — which
+does spend part of the held-out set's value. WTI fails at every `k ≥ 1`; it is the same chart
+§8.15 flagged for an unreliable anchor and §8.17 and §8.18 both failed on. n = 8, one
+persistent outlier.
+
+**Result 3 — as a gate it destroys the §8.18 bias but does *not* select. [V]**
+The rule is per-candidate, so it is EXCLUSIVE in §8.16's sense: each candidate is admitted in
+exactly one direction, its own. `scripts/hvf_v2_mef_trendgate.py`, live window, distinct
+funnels:
+
+| chart | long | short | S:L | gated long | gated short | **S:L gated** | total cut |
+|---|---|---|---|---|---|---|---|
+| GoldCFD 2h | 6,304 | 108,037 | 17.1 | 5,907 | 783 | **0.13** | 17× |
+| BTCUSD 1h | 2,307 | 47,736 | 20.7 | 1,371 | 3,802 | **2.8** | 9.7× |
+| USDJPY 4h | 114 | 5,658 | 49.6 | 110 | 225 | **2.0** | 17× |
+| HYG 4h | 1 | 1 | 1.0 | 0 | 1 | — | 2× |
+
+The counter-trend bias measured in §8.18 is gone: **gold flips from 17:1 short to 7.5:1
+long**, USDJPY from 49.6:1 to 2.0:1. Recall through this exact code path is **7/8** — the same
+seven, WTI the same miss — so the cut is not bought by discarding Hunt's setups.
+
+**What it does not do is select**, and this must not be overstated. Gold still emits
+**950/month** after the gate (was 16,242), BTCUSD 735, USDJPY 4h 47.6, against §8.7's detector
+rates of 1.1, 0.4 and 0.2. Direction is a *bias* correction, roughly one order of magnitude;
+the remaining three orders are §8.15's job — the prior-trend gate and the scale prior, the
+latter of which `AMP1/trend` can now finally join.
+
+**A lookahead bug found and fixed on the way, worth recording. [V]** The first version of
+`coarse_table` ran one ZigZag over the whole series and then selected the last pivot with
+`index ≤ anchor`. A pivot's `index` is where its extreme *printed*; it is not KNOWN until
+price reverses a box away, which is what `Pivot.confirm` is for and what §4.1 warns about in
+so many words. Keyed by `index` the gate reported a **783× cut on gold (114,341 → 146)** and
+recall of 6/8; keyed by `confirm` the true numbers are a 17× cut and 7/8. The lookahead
+version looked **46× better**. Any future filter measured this way must select on `confirm`.
+
+**Decision. [C] — this supersedes §8.18's direction gate.** The multi-year net-move rule was
+adopted in §8.18 for want of anything better (4/7, chart-level, PERMISSIVE). It is replaced
+by the funnel-degree impulse: 7/8, per-candidate, exclusive, causal, parameter-free given the
+funnel, and it removes the enumerator bias §8.18 existed to correct. §8.18's *reasoning*
+stands unchanged — direction must be imposed because the geometry is biased — only its
+instrument changes. The user's original objection is also now satisfied on its own terms:
+under this gate gold emits **7.5 longs for every short**.
+
+**§8.10 status.** Both of §8.15's blockers are cleared: the trend definition is repaired
+(this section) and direction is settled. What remains before expectancy is meaningful is
+turning the ATR band into a rank rather than a gate, and adding `AMP1/trend` to it — the
+emission rate is still ~3 orders of magnitude above §8.7's, and expectancy over a
+950/month population would repeat §8.12's error a third time.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
