@@ -2057,6 +2057,74 @@ degree-scaled direction gate — are the strategy. §8.20's rank should be carri
 tie-break for shortlist length, not credited with edge. The next work is costs and slippage
 against the knife-edge fill, then the exit rule, which §8.21 flagged and nothing has yet touched.
 
+### 8.24 The payoff asymmetry — real, and it has a ceiling
+
+§8.23 settled attribution but never examined the **engine**. At 26.4% wins and +0.76R the average
+winner is **+5.67R**, far above §8.21's 2.47R median geometry, so expectancy is carried by the
+tight funnels whose risk is small and whose measured move is many multiples of it. The obvious
+inference is to select on reward:risk. `scripts/hvf_v2_mef_payoff.py`.
+
+The inference is only sound if the **hit rate holds as the target recedes**. Under a random walk
+it cannot: the chance of travelling `T` risk-units before travelling one falls as roughly
+`1/(1+T)`, mean R is flat, and sorting on `T` buys nothing. So the question is never "is the
+payoff asymmetric" — it is by construction — but "is the hit rate better than the asymmetry
+demands".
+
+**Result 1 — it is, by a wide margin, at every size. [V]** The 212 baseline trades bucketed by
+`AMP1/risk`, each bucket against the breakeven *it* needs:
+
+| AMP1/risk | n | median T | breakeven | realised win% | **edge** | mean R |
+|---|---|---|---|---|---|---|
+| 1.42 – 3.91 | 53 | 2.92 | 25.5% | 35.8% | **+10.3%** | +0.40 |
+| 3.93 – 5.73 | 53 | 4.72 | 17.5% | 28.3% | **+10.8%** | +0.56 |
+| 5.74 – 9.56 | 53 | 7.06 | 12.4% | 32.1% | **+19.7%** | **+1.65** |
+| 9.70 – 32.19 | 53 | 12.86 | 7.2% | 9.4% | +2.2% | +0.42 |
+| **ALL** | 212 | 5.73 | 14.9% | **26.4%** | **+11.6%** | +0.76 |
+
+**Every bucket beats its own breakeven.** The headline "26.4% wins is below §8.21's 28.8%
+breakeven" was the wrong comparison — 28.8% is the breakeven for a 2.47R target, and these trades
+carry a median target of **5.73R**, needing only 14.9%. The system clears its bar by **+11.6
+points**, and the effect strengthens up to `T ≈ 7`, where a 32.1% hit rate against a 12.4%
+requirement returns **+1.65R a trade**. §8.22's framing of the win rate as "below breakeven and
+therefore fragile" was wrong and is corrected here.
+
+**Result 2 — but it breaks down past `T ≈ 10`, and the reason is mechanical. [V]** The top bucket
+collapses to a +2.2% edge and +0.42R. `corr(AMP1/risk, win) = −0.206`, and the **losers carry the
+higher reward:risk** — mean 8.19 against the winners' 5.67. `AMP1/risk` is `1/(rh3 − rl3)`, so an
+extreme value means the last two pivots are almost coincident: the stop sits a hair from the entry,
+inside single-bar noise, and gets taken out before the structure can resolve. The asymmetry is
+real up to the point where the stop stops being a stop.
+
+**Result 3 — so selecting on reward:risk actively destroys the edge. [V]** Reselecting the
+shortlist by highest `AMP1/risk` instead of §8.20's z-score, against §8.23's shift-null:
+
+| chart | by z (§8.20) | by AMP1/risk | null mean | percentile | n | win% |
+|---|---|---|---|---|---|---|
+| GoldCFD 2h | +1.72 | +0.82 | +0.72 | 65.0% | 36 | 16.7% |
+| BTCUSD 1h *(TEST)* | +0.85 | +2.84 | −0.15 | 100.0% | 22 | 4.5% |
+| XAU/XAG 8h | −0.74 | −1.00 | −0.93 | 0.0% | 10 | 0.0% |
+| USDJPY 4h | +0.55 | +0.81 | +1.17 | 46.0% | 15 | 6.7% |
+| USDJPY 1W | +1.62 | −1.00 | −0.87 | 0.0% | 2 | 0.0% |
+| WTI 18h | −0.07 | −1.00 | +0.55 | 0.0% | 34 | 0.0% |
+| XAUEUR 1h *(TEST)* | +1.22 | +1.46 | +1.08 | 78.0% | 23 | 26.1% |
+| **POOLED** | **+0.73** | **+0.42** | | | | |
+
+Pooled it is **worse than §8.20's rank** (0.42 vs 0.73) and worse than the shift-null on four
+charts, with win rates of 0.0% on three of them. Maximising reward:risk selects precisely the
+degenerate funnels of Result 2. **Do not select on reward:risk. [C]**
+
+**What this points at next. [I]** The failure mode is a stop too tight to survive noise, which is
+a statement about `risk` relative to **volatility**, not relative to `AMP1`. The principled filter
+is therefore a **minimum stop distance in ATR units** — reject a funnel when `risk / ATR14` at the
+anchor is below some threshold — rather than a fitted band on `T`. That is one measurement away
+and it is the most promising selection idea the study has produced, because unlike §8.20's prior
+it has a mechanism behind it. Note honestly that it was suggested *by* this data and so must be
+validated out-of-sample before being credited.
+
+**Caveats unchanged. [D]** Zero costs, zero slippage on a knife-edge fill, one regime, overlapping
+non-independent trades. Bucket boundaries are quartiles of the observed sample, so the `T ≈ 7`
+optimum is in-sample and is not a tuned parameter recommendation.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
