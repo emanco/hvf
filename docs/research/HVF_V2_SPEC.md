@@ -2748,6 +2748,87 @@ geometry and the RRR band — both move the evidence the same way without either
 the bar. The honest position is *unresolved on six charts*, and the next thing that can change
 it is more instruments, not more rules. See §11.
 
+### 8.33 Financing against the blind gross — it does not kill it, it halves it [V]
+
+Script: `scripts/hvf_v2_mef_carry_blind.py`. Blind years (pre-2023), MEF detection,
+direction gate, 0.5% box, `top()` selection — identical pick set to §8.30/§8.32, and the
+gross column reproduces them to the cent (legacy +0.21R, waves +0.11R pooled), which is the
+check that the harness is the same one.
+
+**Why §8.27 had to be re-asked.** §8.27 concluded "costs do not kill this" by setting a drag
+of 0.24–0.31R against a gross of 1.72R (gold) and 0.85R (BTC). Both of those gross figures
+came from the 2023–2026 in-sample window under the legacy exit, and §8.30 then showed the
+blind gross is 0.19–0.31R while §8.31 showed the exit geometry was wrong. **Financing drag is
+an absolute number of R, not a fraction of one.** 0.27R against 1.72R is 16%; the same 0.27R
+against a blind +0.31R is the entire edge. The verdict was arithmetically correct and
+substantively obsolete.
+
+Two things modelled here that §8.27 could not model:
+
+1. **Carry integrated over a decaying position.** Taking a third off at TP1 retires a third
+   of the notional early, so the three-wave exit carries less. §8.27 charged a flat position.
+2. **Per-trade integration** rather than mean-hold × rate. The hold distribution is long-tailed,
+   and drag scales with time, so the mean of the product is not the product of the means.
+
+Financing is charged on calendar days elapsed, `lev = |entry| / risk` marked at entry. Rates
+are the §8.27 sweep: gold-like 4/7/10%/yr, BTC 15/20/25%, USDJPY 0/2/4%.
+
+```
+LEGACY exit                                    WAVES exit (thirds + breakeven)
+chart        n  lev  medd  meand gross  drag   net  |   n  lev  medd  meand gross  drag   net
+GoldCFD 2h 116  161   1.3    3.2  0.31  0.09  0.22  | 142  160   0.5    1.2  0.04  0.02  0.02
+BTCUSD 1h  106  119   0.2    0.8  0.00  0.04 -0.04  | 115  117   0.1    0.4 -0.04  0.01 -0.05
+USDJPY 4h  116  160   4.2   13.1 -0.10  0.10 -0.20  | 139  157   2.2    7.6  0.17  0.03  0.14
+XAUEUR 1h   94  170   2.0    6.4  0.54  0.20  0.34  | 127  170   0.7    1.6  0.00  0.03 -0.03
+XAU/XAG 8h  92  132   2.8    5.3  0.06  0.14 -0.07  | 112  132   1.3    2.7  0.22  0.04  0.18
+WTI 18h     32   37   3.0   30.4  1.13  0.12  1.01  |  47   37   2.2   16.6  0.50  0.03  0.46
+POOLED     556                    0.21  0.11  0.10  | 682                    0.11  0.03  0.08
+```
+(drag/net shown at the central rate; `medd`/`meand` are days held)
+
+**Headline.** Financing takes **52% of the legacy edge** (0.21 → 0.10) and **27% of the
+three-wave edge** (0.11 → 0.08). It does not produce a negative number pooled, so §8.27's
+direction of travel survives — but "costs are a rounding error" does not. At a blind gross of
+0.2R, carry is the second-largest term in the model.
+
+**The three-wave exit is much cheaper to carry, and that is a real point in its favour.**
+Median hold drops from 1.3 → 0.5 days on gold and 4.2 → 2.2 on USDJPY; pooled drag falls
+0.11 → 0.03. Banking a third at TP1 and pulling the stop to breakeven gets most of the
+position off the books quickly. So the two exits land in nearly the same place net
+(+0.10 vs +0.08) from very different directions: legacy earns more and pays more, waves earns
+less and pays almost nothing. **Waves is the more robust of the two** — its net is nearly
+insensitive to the financing rate (0.03R spread across the whole 4–10% sweep, versus 0.08R
+for legacy), and the rate is the input we are least sure of.
+
+**Holds are far shorter than §8.27 reported** — gold median 1.3d here versus 6.2d there. The
+two measure different windows (blind vs in-sample) and different pick sets (`top()` vs
+top-3-by-rank), so this is not a contradiction, but it does mean §8.27's hold distribution
+should not be quoted for the blind period.
+
+**The instrument ranking does not survive the exit change, and this is the most important
+line in the section.** Gold goes 0.31 → 0.04 gross; USDJPY goes −0.10 → +0.17; XAU/XAG goes
+0.06 → 0.22; XAUEUR goes 0.54 → 0.00. Changing *only* the exit rule — leaving detection,
+gate, box and pick set identical — completely reshuffles which instruments make money. That
+is what a six-chart sample of noise looks like, and it is direct evidence against
+`hvf-instrument-pick`'s "GoldCFD 2h ONLY" conclusion, which was reached under the legacy
+exit and does not hold under the corrected one.
+
+**Not modelled, and it matters at this gross.** Spread and commission are charged per leg, and
+the waves exit has three legs plus an entry. §8.27's round-trip costs as a fraction of risk
+were gold 2.9%, XAUEUR 9.1%, BTC 0.5%, USDJPY 0.2%. Against a waves gross of +0.04R on gold,
+a ~0.03–0.06R three-leg spread bill is the whole number. So the gold waves cell above should
+be read as *indistinguishable from zero after dealing costs*, not as +0.02R. The charts where
+the waves exit still clears are USDJPY, XAU/XAG and WTI — none of which is the instrument
+§8.29–§8.32 nominated.
+
+**Verdict.** Financing is not a kill shot; it is a halving. The blind edge after carry is
++0.08 to +0.10R pooled, before per-leg dealing costs, at the 83rd percentile of the
+shift-null (§8.32) where the bar is the 95th. That is not a deployable number — not because
+any single test failed, but because a thin positive that halves under carry, reshuffles under
+a change of exit rule, and never cleared its significance bar has no margin left to survive
+the things still unmodelled. **Do not size this. The next step remains §11: more instruments
+against the frozen spec, not more rules.**
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
