@@ -2587,6 +2587,93 @@ add up to a strategy that should not be built as specified.
 
 None of these is a reason to place live capital now.
 
+### 8.31 The target geometry was wrong — three waves, not one [V]
+
+`scripts/hvf_v2_mef_waves.py`. Two new USD/KRW panels (2h and 1M) print Entry,
+Stop, Target and RRR together, which is enough to solve the projection exactly.
+Every target in §8.22–§8.30 was placed incorrectly.
+
+**The correct construction.** The six pivots are better understood as **three
+waves** — H1→L1, H2→L2, H3→L3 — of contracting amplitude. Each wave is projected
+from **C, the centre of the smallest funnel**, not from the entry:
+
+```
+C   = (H3 + L3) / 2              # midpoint of the tip; entry and stop straddle it
+TP1 = C + d * |H3 - L3|          # = C + risk
+TP2 = C + d * |H2 - L2|
+TP3 = C + d * |H1 - L1|          # = C + AMP1; this is the panel's "Target"
+```
+
+Verified on USD/KRW 2h (fibs 0.86/0.12/0.57/0.38, entry 1484.28, stop 1474.62):
+
+| level | computed | printed on chart | in R |
+|---|---|---|---|
+| TP1 | 1489.11 | **1489.11** | +0.50 |
+| TP2 | 1517.07 | 1517.14 | +3.39 |
+| TP3 | 1530.29 | **1530.30** | +4.76 |
+
+C itself (1479.45) is drawn as its own line on the later panel — the tool plots
+the projection anchor. RRR reproduces exactly: (1530.29−1484.28)/9.66 = 4.76. [V]
+
+**TP1 is always exactly +0.5R.** Entry sits at the top of the tip, C + wave3/2,
+while TP1 projects the *full* tip from C. So TP1 − entry = risk/2 identically,
+on every HVF setup. That is the structural breakeven trigger. [V]
+
+**Projection is linear or log**, per the tool's own `Projection:` field. The
+USD/KRW 1M panel uses Log: solving in log space gives an implied fib span of
+0.238 against a displayed 0.24, and reproduces RRR 5.64 exactly. Linear would
+have given 2286.9 against an actual 2740.15. At intraday scale the two agree to
+~0.01%, so this matters only on multi-year frames. [V]
+
+**What §8.22–§8.30 got wrong:** target anchored at entry rather than C, making
+it half a tip-width — **exactly 0.5R** — too far on every trade, 9.5%–25.5% of
+the target distance. And no TP1, no TP2, no breakeven move. §8.26's fourteen
+exit rules and §8.28's ladders were all specified as multiples of AMP1 from
+entry, so **the actual HVF ladder was never among the variants tested**.
+
+**Re-run of §8.29/§8.30 with the corrected exits.** Same frozen detection,
+direction gate, universal 0.50% box and top-3/month; only the exit changes.
+
+| exit model | IS pooled | blind pooled | blind pctile | ρ(IS, blind) |
+|---|---|---|---|---|
+| legacy — entry+AMP1, hard stop | +0.51 | +0.23 | 65.5% | **−0.66** |
+| TP3 only — C+AMP1, hard stop | +0.51 | +0.19 | — | **−0.66** |
+| TP3 + breakeven at +0.5R | +0.35 | **+0.23** | — | **+0.61** |
+| thirds TP1/TP2/TP3 + breakeven | +0.22 | +0.11 | **87.0%** | **+0.49** |
+
+**The corrected exit does not raise returns.** Trading it Hunt's way — thirds at
+each target, stop to breakeven once TP1 trades — gives a **67.2%** blind win rate
+and the **worst** mean R (+0.11 vs +0.23). This is §8.26's finding for the third
+time: banking early converts winners to scratches faster than it saves losers.
+Gold falls from +0.31R (74th pctile) to +0.04R (34th).
+
+**Two things do improve, and they pull in the opposite direction:**
+
+1. The **shift-null collapses** under the ladder, 0.18 → 0.06 pooled. The legacy
+   result was substantially "a small-stop trade in a trending instrument makes
+   money wherever you put it"; the breakeven stop removes most of that free ride.
+   So the ladder's +0.11R is *more* attributable to funnel location than the
+   legacy +0.23R is — 87.0th percentile vs 65.5th, though still short of 95.
+2. The **sign of cross-period persistence flips**. Both models carrying a
+   breakeven stop persist positively (ρ +0.61, +0.49); both without persist
+   negatively (ρ −0.66). This is the §8.30 verdict's central evidence reversing.
+
+**But (2) is not established. [I]** Six charts, p = 0.16–0.33. A 6-point Spearman
+cannot separate −0.66 from +0.61 at any usable confidence, and with four models
+falling into two groups the grouping itself could be chance. It is a reason to
+extend the chart set, not a result.
+
+**Standing verdict.** §8.30's "no deployable edge" was reached on a materially
+wrong exit model and should not be cited as-is. The corrected picture is *not*
+better in returns — it is worse — but it is better in attribution, and the one
+piece of evidence that made §8.30 decisive (anti-persistence) is exit-dependent
+and therefore not decisive. The honest position is now **unresolved rather than
+negative**, and the binding constraint is the six-chart sample, not the rules.
+
+**Next test that would actually settle it:** more instruments. The persistence
+question needs ~20 charts, not 6. Everything else — costs, financing, detection,
+the box — is already closed.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
