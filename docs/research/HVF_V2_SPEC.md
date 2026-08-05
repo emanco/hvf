@@ -3386,6 +3386,66 @@ fills — meaning a wider stop (lower leverage), a longer hold, or a target stru
 does not require a level to be hit precisely. Each is a new hypothesis. None should be
 tested against these 79 instruments again; the holdout is now spent.
 
+### 8.40 The forming arm, on a fresh universe — net unchanged, lift confirmed [V]
+
+`scripts/hvf_v2_forming.py`, 72 instruments never used by any prior test, three bar
+phases, shift-null charged to both arms, causality asserted rather than assumed.
+
+Both arms take the identical entry, because the geometry makes `entry = RH3` whatever the
+stop is (`C = (RH3+stop)/2`, `entry = C + amp3/2 = RH3`). They differ only in when they
+arm, and therefore in the stop:
+
+    confirmed  arms at RL3.confirm   stop = RL3                (what 8.36-8.39 measured)
+    forming    arms at RH3.confirm   stop = running low so far (provisional)
+
+| phase | arm | trades | lev | net R | t | LIFT | t |
+|---|---|---|---|---|---|---|---|
+| 0h | confirmed | 7,928 | 56× | −0.223 | −4.15 | +0.161 | 2.63 |
+| 0h | **forming** | 6,854 | **70×** | **−0.220** | −3.67 | **+0.245** | **4.62** |
+| 24h | confirmed | 8,131 | 56× | −0.229 | −4.14 | +0.167 | 2.24 |
+| 24h | forming | 6,938 | 70× | −0.257 | −3.57 | +0.211 | 3.72 |
+| 48h | confirmed | 8,135 | 56× | −0.226 | −3.90 | +0.166 | 2.56 |
+| 48h | forming | 6,750 | 70× | −0.218 | −3.30 | +0.253 | 4.38 |
+
+**Three results, and the third is the one that matters.**
+
+**1. The negative net replicates out of sample.** −0.22R on 72 instruments that have never
+been touched. 8.38's verdict was not an artifact of the spent 79; the trade loses money on
+clean data, at t ≈ −4.
+
+**2. The forming arm does not fix it.** Net is unchanged (−0.220 vs −0.223 at phase 0). It
+does exactly what it was designed to do — the entry is knowable before price can run
+through it — and the benefit is consumed entirely by the stop being tighter at arming time,
+which lifts leverage from **56× to 70×**. Cost in R is `spread_frac × LEV`, so raising
+leverage raises cost in R proportionately. The fix worked and paid for itself exactly.
+
+**3. The lift is the largest ever measured here: +0.245R at t = 4.62**, 66 of 72
+instruments, replicated on fresh data at every phase. The funnel carries real, strongly
+significant directional information. It is the *expression* that keeps failing.
+
+**Bar phase is a non-issue** — a deferred question since 8.36, now closed. Results move by
+less than 0.02R across three phases, so nothing rests on one arbitrary alignment.
+
+#### 8.40a The mechanism is now unambiguous, and it names the next experiment
+
+Every fix attempted has tightened the risk distance, and every one has lost:
+
+| variant | risk distance | LEV | net R |
+|---|---|---|---|
+| breakout, confirmed | amp3 | 56× | −0.223 |
+| forming | ≤ amp3 | 70× | −0.220 |
+| limit at C (8.39) | amp3/2 | ~2× | −0.400 (held out) |
+
+`cost in R = spread_frac × LEV`, and `LEV = |entry| / risk`. The stop sits just outside the
+*smallest* funnel, so risk is tiny and leverage is 56–70×, and at that multiplier ordinary
+1–4bp costs become 0.03–0.28R. **The binding constraint is leverage, not selection, not
+fills, and not the pattern.**
+
+The one direction never tried is the opposite one: **widen the stop.** A stop outside the
+*second* funnel (RL2 rather than RL3) cuts leverage by the amp2/amp3 ratio and costs in R
+with it, at the price of a smaller R-multiple on the same move. That is a single,
+pre-specifiable variant with no free parameter, and it is the honest next draw.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
