@@ -2674,6 +2674,80 @@ negative**, and the binding constraint is the six-chart sample, not the rules.
 question needs ~20 charts, not 6. Everything else — costs, financing, detection,
 the box — is already closed.
 
+### 8.32 The RRR band as a selector — improves the null margin, still short of significance [V]
+
+Script: `scripts/hvf_v2_mef_rrrband.py`. Blind years only (pre-2023, per-chart `START` from
+§8.30), legacy exit, MEF detection, direction gate, box 0.5%. `NSEED = 200` shift-null seeds
+per chart per band. Band is applied to the candidate pool *before* `top()` selection, so it
+is a genuine pre-entry filter, not a post-hoc slice of the trade list.
+
+RRR here is TP3 in R: `1/(fib_H3 - fib_L3) - 0.5` (§8.31 geometry).
+
+```
+band     chart            n    win%   meanR    null   pctile
+none     GoldCFD 2h     116   26.7%    0.31    0.17    74.0%
+none     BTCUSD 1h      106   14.2%    0.00    0.16    26.5%
+none     XAU/XAG 8h      92   18.5%    0.06    0.25    37.0%
+none     USDJPY 4h      116   17.2%   -0.10    0.06    34.0%
+none     WTI 18h         32   18.8%    1.13    0.33    87.0%
+none     XAUEUR 1h       94   26.6%    0.54    0.22    90.0%
+none     POOLED         556            0.21    0.18    57.5%
+
+<=4R     GoldCFD 2h      82   30.5%    0.28    0.15    72.5%
+<=4R     BTCUSD 1h       90   24.4%    0.17    0.00    82.0%
+<=4R     XAU/XAG 8h      52   32.7%    0.48    0.06    91.0%
+<=4R     USDJPY 4h       69   21.7%   -0.11    0.07    27.5%
+<=4R     WTI 18h         31   19.4%   -0.13    0.28    13.5%
+<=4R     XAUEUR 1h       77   31.2%    0.35    0.13    82.0%
+<=4R     POOLED         401            0.19    0.10    83.0%
+```
+
+**What the band actually does.** Pooled mean R does *not* improve: 0.21 → 0.19. What improves
+is the shift-null, 0.18 → 0.10, and with it the percentile, 57.5 → 83.0. The band is not
+finding better trades; it is discarding trades whose payoff a randomly-relocated funnel of the
+same shape collects just as well. That is still a real finding — it means the ≤4R region is
+where structure contributes and the >4R region is where the funnel is decoration — but it is
+an argument about attribution, not about expectancy.
+
+Win rate rises on every chart (pooled ~20% → ~27%), exactly as §8.31's bucketing predicted:
+the tight tips that manufacture 10:1 put the stop inside the oscillation.
+
+**Why it is still not a green light.**
+
+1. **83rd percentile, not 95th.** The pre-registered bar (§8.23) is unchanged and unmet. One
+   in six shuffles of the pure-noise null still beats the live rule.
+2. **It is not uniform.** Two charts improve sharply (BTC 26.5 → 82.0, XAU/XAG 37.0 → 91.0),
+   two are flat (Gold 74.0 → 72.5, XAUEUR 90.0 → 82.0), one is unchanged and negative
+   (USDJPY), and **WTI collapses 87.0 → 13.5** — the band removes only 1 of its 32 trades but
+   that one carried its entire +1.13R. A filter whose pooled result depends on which single
+   trade it happens to delete is not a filter, it is a coin.
+3. **The lever is small.** ≤4R keeps 401 of 556 picks. On Gold it removed 34 of 116. This is a
+   mild trim, and the pooled percentile it buys is inside the range that resampling six charts
+   would produce anyway.
+4. **Six charts.** As in §8.30 and §8.31, n=6 instruments is the binding constraint on every
+   pooled statement in this document.
+
+**Relation to the earlier bucketing.** §8.31's bucket table reported +0.295R over 143 trades
+for a narrower 1.5–4R window against a 351-trade baseline; that ran over a different pick
+pool. The figures above supersede it — same script, same pool, both bands, null included.
+
+**Attribution ledger, updated.**
+
+| component | verdict |
+| --- | --- |
+| MEF pivot detection | real (§8.24, 8/8) |
+| Direction gate | real (§8.19) |
+| 0.5% box | Hunt's own stated setting, not fitted (§8.29) |
+| Three-wave exit + breakeven | lowers mean R, flips persistence positive (§8.31), unresolved |
+| **RRR ≤ 4R band** | **improves null margin 57.5 → 83.0 pctile; does not reach 95th; WTI-fragile** |
+| §8.20 rank, reward:risk, ATR floor, stop buffer, 14 exit rules, TP ladder | null |
+
+**Status.** §8.30's "no deployable edge" remains withdrawn (§8.31), and this section does not
+restore it in either direction. Two independent post-§8.30 findings — the corrected exit
+geometry and the RRR band — both move the evidence the same way without either one clearing
+the bar. The honest position is *unresolved on six charts*, and the next thing that can change
+it is more instruments, not more rules. See §11.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
