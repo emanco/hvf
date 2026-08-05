@@ -3110,6 +3110,106 @@ is a thin edge that needs breadth — the whole universe, not a favourite instru
 exit, which is enough to erase the weakest classes entirely. The next work is spread, not
 more instruments.
 
+### 8.37 Spread and commission — the last unmodelled cost [V]
+
+8.36 closed with one thing outstanding: the bid/ask. `scripts/hvf_v2_spread.py`.
+
+**A correction to 8.33 first.** It claimed the three-wave exit "pays the spread four
+times" because it fills four times, and 8.36c repeated it. That is **wrong**. Spread is
+charged on *volume*, not on ticket count — entering one unit and exiting in three thirds
+crosses the spread on exactly the same total volume as a single exit. The three-wave exit
+carries no spread penalty whatever relative to a single exit.
+
+In fact a round trip crosses the spread **exactly once**, taken either way. OHLC feeds
+quote the bid: a long triggers when the bid reaches the entry but *buys at the ask* and
+sells back at the bid — one spread, at entry. A short sells at the bid and buys back at
+the ask — one spread, at exit.
+
+**What cost scales with.** Filling at `e + d·spread` while having sized on the planned
+risk `|e − st|` shifts every outcome identically:
+
+    cost in R  =  spread / risk  =  (spread / price) · (price / risk)  =  spread_frac · LEV
+
+`LEV = |e| / risk` is the same notional-per-unit-risk that made financing expensive in
+8.33. Commission adds `2 · comm_frac · LEV`.
+
+#### 8.37a The measurement that decides it
+
+8.33 reported LEV of **117–170×** and that number has been quoted ever since as evidence
+that HVF is dangerously cost-sensitive. It was measured on six *intraday* charts. Across
+the wide universe, which runs mostly on 3D bars where risk is far larger relative to
+price:
+
+| | LEV |
+|---|---|
+| mean | **75×** |
+| median | **61×** |
+| range | 9× – 163× |
+
+So one basis point of round-trip cost costs **0.0061R** at the median instrument, and the
+universe's +0.124R pre-spread net breaks even at roughly **17 bp** of flat round-trip cost.
+Real costs are nowhere near that outside crypto.
+
+| class | k | LEV | net pre | R/bp | breakeven | IC Raw ≈ | net post |
+|---|---|---|---|---|---|---|---|
+| yield | 4 | 54× | +0.402 | 0.0054 | 74.6bp | 3.0 | +0.386 |
+| metal | 6 | 44× | +0.286 | 0.0044 | 65.1bp | 1.5 | +0.280 |
+| index | 21 | 68× | +0.211 | 0.0068 | 31.2bp | 1.0 | +0.204 |
+| commodity | 10 | 32× | +0.127 | 0.0032 | 39.9bp | 4.0 | +0.115 |
+| fx | 25 | 106× | +0.058 | 0.0106 | **5.5bp** | 0.8 | +0.049 |
+| crypto | 5 | 63× | +0.026 | 0.0063 | **4.1bp** | **25.0** | **−0.132** |
+| etf | 8 | 97× | −0.100 | 0.0097 | — | 2.0 | −0.120 |
+| **universe** | **79** | | **+0.124** | | | | **+0.105** |
+
+Spread and commission take **16%** of the pre-spread net. Sensitivity to a flat cost
+charged to every instrument: 1bp → +0.117R, 3bp → +0.101R, 5bp → +0.086R, 12bp → +0.034R,
+20bp → −0.027R.
+
+**FX is the tight one, not gold.** FX carries the highest leverage in the universe (106×,
+because 3D FX ranges are small relative to price) on the thinnest pre-cost edge
+(+0.058R), leaving only 5.5bp of headroom. It survives at IC Markets Raw's ~0.8bp, but it
+is the class that a wider retail spread would take out first. **Crypto does not survive**
+— at ~25bp round trip its +0.026R becomes −0.132R. The rates ETFs were already negative
+before cost.
+
+#### 8.37b The lift survives, and slightly improves
+
+Cost is close to a constant subtraction, and the shuffles carry similar leverage, so it
+should largely cancel out of 8.36a's lift — but the shuffles land in different price
+regimes, so this was measured rather than assumed. Cost charged to real *and* null alike,
+100 seeds:
+
+| | R |
+|---|---|
+| observed universe net | **+0.105** |
+| shift-null mean (also costed) | +0.017 |
+| null 95th percentile | +0.042 |
+| **observed percentile** | **100.0** (bar 95) |
+| **LIFT** | **+0.088** (was +0.081 pre-spread) |
+| **t on the lift** | **2.75** (bar 1.65) |
+| instruments with positive lift | **62 / 79** |
+
+The lift *rises* slightly, because the shuffled trades carry marginally higher leverage
+and so are charged marginally more. **Spread decides tradeability, not validity** — and
+here it decides both in favour.
+
+Dropping the three classes that should not be traded on this evidence — crypto (killed by
+cost), rates ETFs (negative before cost) and yields (not directly tradeable, and 84% drift
+per 8.36b) — leaves the honest deployable set:
+
+> **62 instruments · net +0.135R after spread, commission and financing · lift +0.093R · t = 2.50**
+
+#### 8.37c What is still not modelled
+
+Slippage on stop exits, and the fact that `COST_BP` is a published-typical table rather
+than measured fills. The repo's MT4 `spread` column was examined as a cross-check and
+**rejected as a basis**: EURUSD_H1 shows a median of 0 points with only 3% of bars
+populated, and four GBP-cross files carry a row index in place of a timestamp (8.35), so
+the column is not reliable enough to price anything. This is why 8.37's primary output is
+the **breakeven in bp**, which is table-independent — anyone can substitute their own
+cost and read off the answer. At 17bp of universe-wide breakeven against 1–4bp of real
+cost, the conclusion is not sensitive to the table being somewhat wrong.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

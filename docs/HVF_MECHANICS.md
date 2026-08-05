@@ -192,7 +192,7 @@ their **entire history out-of-sample**, 8,798 trades:
 | of which drift (own shift-null) | +0.043 |
 | **edge attributable to the funnel** | **+0.081** |
 | t on the lift (N_eff = 15.5) | **2.58** (bar 1.65) |
-| instruments with positive lift | 61 / 79 |
+| instruments with positive lift | 61 / 79 (62 after cost) |
 | universe shift-null percentile | **100th** (bar 95th) |
 
 This is the first result to clear a bar set *before* the result was seen. The six-chart
@@ -206,15 +206,25 @@ ETFs (+0.016). The top-10-by-lift and top-10-by-raw lists barely overlap. "GoldC
 only" (§8.28) is dead twice over: once because changing the exit alone reshuffles the raw
 ranking, once because the raw ranking was mostly measuring drift.
 
-**Breadth is the strategy.** +0.081R against a trade-level sd near 1.15 is thin. It is
+**Breadth is the strategy.** +0.088R against a trade-level sd near 1.15 is thin. It is
 earned across the whole universe, not on a favourite instrument, and it does not license
-sizing up.
+sizing up. The deployable set after §8.37 drops crypto, rates ETFs and the (untradeable)
+yield series: **62 instruments, +0.135R net, lift +0.093R, t = 2.50**.
 
-**Costs (§8.33).** Financing on 117–170× notional takes **52% of the legacy edge** and
-**27% of the three-wave edge**. The three-wave exit is much cheaper to carry (drag 0.03R
-vs 0.11R, median hold roughly halved) because banking a third at TP1 retires notional
-early. **Per-leg spread is still unmodelled and is the next thing to do** — the three-wave
-exit pays it four times, which is enough to erase the weakest classes outright.
+**Costs (§8.33, §8.37) — now fully modelled.** Financing takes **27% of the three-wave
+edge**; the three-wave exit is much cheaper to carry (drag 0.03R vs 0.11R) because banking
+a third at TP1 retires notional early.
+
+Spread does **not** get charged per leg. It is charged on *volume*, so a round trip crosses
+it exactly once however many partials it takes — the earlier "pays it four times" claim was
+wrong. Cost in R is `spread_frac × LEV`, and LEV across the wide universe is **75× mean /
+61× median**, not the 117–170× measured on six intraday charts. One bp of round-trip cost
+is 0.0061R; the universe breaks even at **~17bp** against real costs of 1–4bp.
+
+Net of everything: **+0.105R, lift +0.088R, t = 2.75**, still 100th percentile. **Do not
+trade crypto** (25bp round trip turns +0.026R into −0.132R) or the rates ETFs (negative
+before cost). **FX is the tightest survivor** — highest leverage (106×) on the thinnest
+edge, only 5.5bp of headroom.
 
 **Trade it Hunt's way — the three-wave exit wins on every axis except raw mean R (§8.34).**
 It cuts trade-level dispersion 2.4× (sd 2.80 → 1.15), so edge-per-unit-risk nearly doubles;
