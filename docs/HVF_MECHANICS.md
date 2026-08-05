@@ -173,8 +173,8 @@ The red line on Hunt's charts is the stop loss.
 
 ## Status
 
-**The mechanics above are settled. As of the wide run (§8.36), the strategy has a small,
-statistically real, drift-adjusted edge.**
+**The mechanics above are settled. The pattern is real. The trade as specified loses
+money.** (§8.38, which RETRACTS the §8.36/§8.37 "passed" verdict.)
 
 What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.5% box
 (Hunt's own setting), and this geometry (verified to the cent).
@@ -182,61 +182,49 @@ What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.
 What is null: the §8.20 rank, a reward:risk filter, an ATR floor, a stop buffer, the 14
 exit rules of §8.26, and the TP ladder as tested against entry.
 
-**Where it stands (§8.36).** Run frozen against **79 instruments** chosen to resemble
-Hunt's own universe — US yields, commodities, FX, 15 equity indices, credit ETFs — with
-their **entire history out-of-sample**, 8,798 trades:
+**Where it stands (§8.38).** Run frozen against 79 instruments resembling Hunt's own
+universe, entire history out-of-sample, honest fills, all costs charged, restricted to
+picks whose entry is actually reachable:
 
 | | R |
 |---|---|
-| raw mean net (after financing) | +0.124 |
-| of which drift (own shift-null) | +0.043 |
-| **edge attributable to the funnel** | **+0.081** |
-| t on the lift (N_eff = 15.5) | **2.58** (bar 1.65) |
-| instruments with positive lift | 61 / 79 (62 after cost) |
-| universe shift-null percentile | **100th** (bar 95th) |
+| mean net | **−0.175** |
+| shift-null mean | −0.333 |
+| **lift attributable to the funnel** | **+0.158** |
+| t on the lift (N_eff 15.5) | **3.48** (bar 1.65) |
+| instruments with **lift** > 0 | **65 / 79** |
+| instruments with **net** > 0 | **17 / 79** |
 
-This is the first result to clear a bar set *before* the result was seen. The six-chart
-"unresolved" verdict is superseded.
+Read both rows. The funnel carries real, strongly significant information — the largest
+and most significant lift measured in the programme. And the strategy still loses money,
+because entering on a breakout 0.5R beyond the anchor with a 1R stop at 61–75× leverage
+bleeds more to fills than the pattern earns. **The problem is the expression, not the
+detection.**
 
-**Rank instruments by lift, never by raw R.** The classes that look best raw are almost
-entirely drift: yields +0.402R is **84% drift**, metals +0.286R is **82% drift**. Strip
-drift out and the funnel's contribution is flat across asset classes — roughly +0.05 to
-+0.11R everywhere, best in commodities (+0.114) and FX (+0.087), essentially zero in rates
-ETFs (+0.016). The top-10-by-lift and top-10-by-raw lists barely overlap. "GoldCFD 2h
-only" (§8.28) is dead twice over: once because changing the exit alone reshuffles the raw
-ranking, once because the raw ranking was mostly measuring drift.
+**Why the earlier verdict was wrong.** `simulate_detail` filled every level *at the
+level*. A bar that opens through a level never offered that fill. Worse, **34.1% of picks
+had the entry already breached at the arming bar** (`d·e_off ≤ 0` — for a long, the entry
+sat *below* the close), so the model was buying below market: an impossible fill granted
+free on a third of all trades. That was the edge. Cause is **ZigZag confirmation lag** —
+the 6th pivot is not knowable until price has retraced by the box amount, by which time it
+has often passed the entry.
 
-**Breadth is the strategy.** +0.088R against a trade-level sd near 1.15 is thin. It is
-earned across the whole universe, not on a favourite instrument, and it does not license
-sizing up. The deployable set after §8.37 drops crypto, rates ETFs and the (untradeable)
-yield series: **62 instruments, +0.135R net, lift +0.093R, t = 2.50**.
+**Two remedies were tested and both fail.** Refusing to chase gapped entries is
+monotonically *worse* (−0.140 → −0.174 as the threshold tightens), so gapped entries are
+not the bad trades. Smaller bars do not help: 4h nets −0.114 with a 30.1% entry-gap rate
+against 3D's −0.148 and 41.6%. The entry sits ~0.5R above the anchor close, which is
+inside one bar''s opening move at every timeframe tested.
 
-**Costs (§8.33, §8.37) — now fully modelled.** Financing takes **27% of the three-wave
-edge**; the three-wave exit is much cheaper to carry (drag 0.03R vs 0.11R) because banking
-a third at TP1 retires notional early.
+**Do not tune the entry until it turns positive.** The lift is the asset. Any new
+expression of it — limit entry at the funnel centre, a stop outside the second funnel, a
+longer hold — is a new hypothesis needing its own pre-registered out-of-sample test.
+§8.20''s rank, §8.26''s fourteen exit rules and §8.32''s RRR band all died exactly that way.
 
-Spread does **not** get charged per leg. It is charged on *volume*, so a round trip crosses
-it exactly once however many partials it takes — the earlier "pays it four times" claim was
-wrong. Cost in R is `spread_frac × LEV`, and LEV across the wide universe is **75× mean /
-61× median**, not the 117–170× measured on six intraday charts. One bp of round-trip cost
-is 0.0061R; the universe breaks even at **~17bp** against real costs of 1–4bp.
+**Costs are fully modelled (§8.33, §8.37)** and are *not* what killed it. Spread is charged
+on volume, not per leg — a round trip crosses it exactly once, so the earlier "pays it four
+times" claim was wrong. LEV is 75× mean / 61× median (not the 117–170× from six intraday
+charts), so 1bp of round-trip cost is 0.0061R against ~17bp of breakeven headroom.
+Financing takes 27% of the three-wave edge.
 
-Net of everything: **+0.105R, lift +0.088R, t = 2.75**, still 100th percentile. **Do not
-trade crypto** (25bp round trip turns +0.026R into −0.132R) or the rates ETFs (negative
-before cost). **FX is the tightest survivor** — highest leverage (106×) on the thinnest
-edge, only 5.5bp of headroom.
-
-**Trade it Hunt's way — the three-wave exit wins on every axis except raw mean R (§8.34).**
-It cuts trade-level dispersion 2.4× (sd 2.80 → 1.15), so edge-per-unit-risk nearly doubles;
-it costs a third as much to carry; and it needs a third as many instruments to prove.
-§8.31 called it "worse" only because it looked at mean R alone.
-
-**Live trading cannot settle anything here.** At ~16 trades per instrument-year, the
-sample that produced the result above would take decades to accumulate live. Backtesting
-is not the weaker substitute — it is the only instrument that can answer the question.
-
-**Two traps worth remembering.** Assert on the data you *got*, never what you asked for:
-Yahoo silently serves quarterly bars for `range=max`, as H1 files silently held daily bars
-(§8.30a). And a shift-null needs price-regime-relative offsets — BTCUSD's null was
-nonsense (median −12.6R) because absolute entry/stop offsets were displaced across a
-$0.05-to-$100k history.
+**Procedural lesson.** Every rule was shift-null-tested; the assumption that a limit price
+is obtainable never was. The fill model deserved the same scepticism as the entry rules.

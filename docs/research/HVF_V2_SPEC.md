@@ -3210,6 +3210,125 @@ the **breakeven in bp**, which is table-independent — anyone can substitute th
 cost and read off the answer. At 17bp of universe-wide breakeven against 1–4bp of real
 cost, the conclusion is not sensitive to the table being somewhat wrong.
 
+### 8.38 Honest fills — the wide-run verdict is RETRACTED [V]
+
+8.37c listed slippage on stop exits as the last unmodelled cost, and 8.36c/8.37b declared
+the strategy passed. Modelling the fills properly (`scripts/hvf_v2_gapfill.py`) shows both
+statements were wrong, and in a way that matters more than any cost term.
+
+`simulate_detail` filled every level *at the level*:
+
+    if (d > 0 and lo[i] <= stop) or (d < 0 and hi[i] >= stop):
+        banked += size * d * (stop - e) / risk
+
+A bar that *opens* through a level never offered that fill. Correcting all three fill
+points — entry (breakout stop, gap fills worse), stop (gap fills worse), targets (limits,
+gap fills better) — against the very same picks and costs:
+
+| model | net R | positive |
+|---|---|---|
+| 8.37 baseline, all fills at the level | **+0.105** | 54 / 79 |
+| + entry gap only | **−0.146** | 19 / 79 |
+| + stop gap only | +0.057 | 50 / 79 |
+| + TP gap only (favourable) | +0.159 | 57 / 79 |
+| **all three = honest fills** | **−0.140** | **18 / 79** |
+
+**The stop gap was never the problem.** It costs 0.048R and is survivable — which is what
+8.37c had flagged, and it was the wrong worry. The entry gap alone is fatal.
+
+#### 8.38a The real defect: 34% of entries were never executable
+
+The gap rate looked implausibly high (38.9% of entries), so it was decomposed rather than
+accepted:
+
+| | |
+|---|---|
+| picks examined | 53,594 |
+| **entry already breached at the arming bar** (`d·e_off ≤ 0`) | **18,286 = 34.1%** |
+| median `\|e_off\| / risk` | 0.490 |
+| fills on the very next bar | 64.5% |
+
+For a long, `d·e_off ≤ 0` means the entry sits **below** the close at the arming bar. The
+old model filled it at the entry price — buying below the market, a fill nobody can
+obtain. This is not slippage. It is a **free favourable entry granted on a third of all
+trades**, and it is where the wide run's edge came from.
+
+The cause is **ZigZag confirmation lag**. The 6th pivot is not knowable until price has
+retraced by the box amount, and by then price has frequently passed the entry. 8.19 was
+careful about lookahead in the *coarse* ZigZag used by the direction gate; the entry fill
+was never subjected to the same check. A median `|e_off|/risk` of 0.490 confirms the
+geometry is as specified (entry at `C + risk/2`, so TP1 = +0.5R) — the geometry is right,
+the *reachability* of it was never tested.
+
+#### 8.38b Two remedies, both fail
+
+**Refuse to chase** (stop-limit entry, skip fills worse than X·risk beyond the level):
+
+| max chase | net R | positive |
+|---|---|---|
+| no limit | −0.140 | 18/79 |
+| 1.0 × risk | −0.144 | 16/79 |
+| 0.25 × risk | −0.148 | 18/79 |
+| 0 (skip every gapped entry) | −0.174 | 20/79 |
+
+Monotonically *worse*. The gapped entries are not the bad trades; removing them removes
+better-than-average outcomes. There is no threshold that rescues it.
+
+**Use smaller bars**, since Hunt's own charts are intraday and 3D bars span weekends:
+
+| subset | k | baseline | honest | Δ | entry gap rate |
+|---|---|---|---|---|---|
+| 4h (H1-sourced) | 18 | +0.028 | **−0.114** | −0.142 | 30.1% |
+| 3D (D1-sourced) | 61 | +0.127 | **−0.148** | −0.275 | 41.6% |
+
+4h fails too. This is not a 3D-versus-intraday artifact — the entry sits ~0.5R above the
+anchor close, and that distance is inside a single bar's opening move at every timeframe
+tested.
+
+#### 8.38c The executable subset: the pattern is real, the trade is not
+
+Keeping only picks whose entry is genuinely still ahead of price (`d·e_off > 0`) and
+filling honestly — the strategy as it could actually be traded. 65.9% of picks retained,
+7,127 trades, 79 instruments, all costs charged, shift-null charged identically:
+
+| | R |
+|---|---|
+| mean net | **−0.175** |
+| shift-null mean | −0.333 |
+| **LIFT** | **+0.158** |
+| **t on the lift (N_eff 15.5)** | **3.48** |
+| instruments with **net** > 0 | **17 / 79** |
+| instruments with **lift** > 0 | **65 / 79** |
+
+This is the sharpest result in the programme and it points both ways at once. **The funnel
+carries real, strongly significant information** — the lift is +0.158R at t = 3.48, larger
+and more significant than anything measured before, and 65 of 79 instruments show it. A
+detected funnel genuinely predicts direction better than the same trade placed elsewhere.
+
+**And the strategy loses money anyway.** Both the real trades and their shuffles are
+deeply negative; the funnel merely loses less. Entering on a breakout 0.5R beyond the
+anchor with a stop 1R wide, at 61–75× leverage, bleeds more to fills than the pattern
+earns.
+
+#### 8.38d Status
+
+**8.36c and 8.37b are retracted.** `hvf-wide-run-verdict` claimed a pass on the strength of
+a fill model that granted impossible entries on 34% of trades. The corrected position:
+
+> **The HVF pattern is real and measurable (lift +0.158R, t = 3.48, 65/79 instruments).
+> The trade as specified is unprofitable after honest fills (−0.175R, 17/79 positive).
+> The problem is the expression, not the detection.**
+
+What this does *not* license is tweaking the entry until the number turns positive. The
+lift is the asset here; any new expression of it — a limit entry at the funnel centre, a
+wider stop outside the second funnel, a longer hold — is a **new hypothesis needing its own
+pre-registered out-of-sample test**, not an adjustment to this one. 8.20's rank, 8.26's
+fourteen exit rules and 8.32's RRR band all died exactly that way.
+
+The immediate lesson is procedural and cost nothing to have applied earlier: **the fill
+model deserved the same scepticism as the entry rules.** Every parameter was
+shift-null-tested; the assumption that a limit price is obtainable never was.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
