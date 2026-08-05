@@ -3446,6 +3446,85 @@ The one direction never tried is the opposite one: **widen the stop.** A stop ou
 with it, at the price of a smaller R-multiple on the same move. That is a single,
 pre-specifiable variant with no free parameter, and it is the honest next draw.
 
+### 8.41 The stop WAS too tight — and the cost model was pointing at the wrong cost [V]
+
+Two diagnostics on 59,141 fresh-universe picks motivated this:
+
+* stop distance in ATR14 at the arming bar: p10 0.67, p25 0.90, **p50 1.25**, p75 1.90,
+  p90 3.23. **33.1% of setups have a stop inside a single bar's range**, 2.9% inside half
+  a bar. Those cannot survive to resolution regardless of whether the funnel is real.
+* the shift-null at RL3 is −0.380 (confirmed) / −0.468 (forming). The *same geometry at
+  random times* loses ~0.4R. A structure with that random-placement expectancy is broken
+  structurally, not badly selected.
+
+**The variant.** Stop moves from RL3 to RL2 — outside the *second* funnel. Targets are
+held fixed at the three-wave projection from the small funnel's centre (§8.31, validated
+against Hunt's published levels to 0.02R in `hvf_signal_parity`), so widening the stop
+cannot drag the targets out with it. `scripts/hvf_v2_widestop.py` therefore carries its
+own simulator: `simulate_gap` derives its legs from `C = (e+st)/2` and would have moved
+them. Entry stays at RH3 in every arm, so all four cells are exactly paired on the same
+detected funnels. 2×2, arming {confirmed, forming} × stop {RL3, RL2}, decided before
+running. **Second draw on the fresh 72.**
+
+| arm | stop | trades | lev | net R | t | null | LIFT | t | net>0 |
+|---|---|---|---|---|---|---|---|---|---|
+| confirmed | RL3 | 7,928 | 56× | −0.223 | −4.15 | −0.380 | +0.157 | 2.63 | 10/72 |
+| confirmed | RL2 | 6,796 | 37× | −0.125 | −3.23 | −0.177 | +0.053 | 1.21 | 13/72 |
+| forming | RL3 | 6,854 | 70× | −0.220 | −3.67 | −0.468 | +0.247 | 3.49 | 11/72 |
+| **forming** | **RL2** | **5,637** | **38×** | **−0.016** | **−0.39** | −0.176 | +0.159 | 3.44 | **29/72** |
+
+`forming/RL2` is **the first arm in this programme that is not significantly negative**.
+It is not positive either: se ≈ 0.041, so the interval spans roughly [−0.10, +0.07].
+
+**Correction 1 — spread was never the binding cost.** §8.38–8.40 attributed the loss to
+`cost in R = spread_frac × LEV` and treated leverage as the constraint. Decomposing the
+same trades says otherwise:
+
+| arm/stop | trades | gross | financing | spread | net | TP1 (R) | TP3 (R) |
+|---|---|---|---|---|---|---|---|
+| confirmed/RL3 | 7,928 | −0.118 | −0.103 | −0.007 | −0.228 | 0.50 | 7.62 |
+| confirmed/RL2 | 6,796 | −0.046 | −0.076 | −0.004 | −0.126 | 0.28 | 3.33 |
+| forming/RL3 | 6,854 | −0.139 | −0.096 | −0.009 | −0.244 | 0.50 | 9.25 |
+| forming/RL2 | 5,637 | **+0.046** | −0.074 | −0.005 | −0.033 | 0.26 | 3.69 |
+
+Spread is **0.005–0.009R** — an order of magnitude below financing and two below the
+structural loss. Leverage does matter, but through *financing*, not spread. Every "cost
+in R = spread × LEV" argument in §8.38–8.40 was directionally right for the wrong reason.
+
+**Correction 2 — and financing is not the residual either.** `forming/RL2` gross is
+**+0.046R, the first positive gross figure recorded here**; financing (−0.074R) is what
+puts it back under water. The obvious inference — trade the low-carry classes — fails its
+own test:
+
+| class | rate | n | net | >0 |
+|---|---|---|---|---|
+| commodity | 7% | 11 | −0.078 | 3/11 |
+| etf | 5% | 10 | +0.059 | 7/10 |
+| **fx** | **2%** | **36** | **−0.067** | 8/36 |
+| **index** | **5%** | **15** | **+0.101** | 11/15 |
+
+FX has the *lowest* financing rate and the *worst* net; indices and ETFs pay 5% and are
+the only positive classes. So the cross-section is not carry-driven. The likelier reading
+is trend persistence — `direction_for` makes indices and ETFs near-uniformly long and
+gives the direction gate (§8.13/8.16) something real to bite on, while FX crosses are
+range-bound and it bites on nothing. **[I], and a post-hoc split of four classes with
+n=10–15. It is a hypothesis for a pre-registered test, not a result.**
+
+**What this does and does not change.** §8.40's NO GO stands on its own terms: at the RL3
+stop the strategy is unprofitable out of sample, replicated. But the cause was misdiagnosed
+as an unfixable fill/leverage problem, and it is not — it was stop placement, and moving
+the stop recovers ~0.20R of the 0.22R gap. The verdict moves from **NO GO** to **not yet;
+one identified drag left**, with the caveat that `forming/RL2` is the best of four cells
+chosen after seeing all four.
+
+**Next test, pre-registerable, one mechanism.** With an RL2 stop, TP1 sits at **0.26R**
+(it was structurally +0.50R against the tight stop). The exit rule banks a third there and
+then moves the stop to breakeven — capping the runner at a quarter-R gain while leaving
+the full downside open until it triggers. That exit was designed for a geometry that no
+longer exists. Test `forming/RL2` with the TP1 leg and its breakeven move removed, against
+`forming/RL2` as run here. **This must go on a third universe: the fresh 72 has now taken
+two draws.**
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
