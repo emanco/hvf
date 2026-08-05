@@ -2894,6 +2894,83 @@ it stands, and change nothing else. If that data cannot be assembled, the honest
 is that the question is not answerable with the resources available and the strategy should
 not be traded — not that it should be traded on six charts' worth of hope.
 
+### 8.35 Hunt's own instrument universe, and what we actually have [V]
+
+All 18 charts read. Instruments Hunt is demonstrably trading, with the timeframe he drew
+them on — **every one is H1 or above**, which settles the resolution question:
+
+| category | instruments | timeframes drawn |
+| --- | --- | --- |
+| **Sovereign bond yields** | **US 5Y, US 10Y, US 20Y, US 30Y, Australia 10Y, Norway 3Y** | **3D, 1W** |
+| Precious metals | XAUUSD, XAUEUR, XAU/XAG ratio | 1h, 2h, 8h |
+| Energy | WTI / XTI crude | 2h, 18h |
+| FX | USDJPY, USD/KRW | 2h, 4h, 1W, 1M |
+| Crypto | BTCUSD | 1h |
+| Credit | HYG (iShares $ HY corporate bond ETF) | 4h |
+
+Feeds are mixed — TVC, OANDA, Tickmill, Bitstamp, NYSE Arca — so he is not tied to one
+broker's series.
+
+**The finding: bond yields are his single largest category — 6 of 14 distinct instruments,
+43% — and we hold none of them.** Every §8.x result to date has been measured on the
+*other* 57%. He draws them at 3D and 1W, which means **daily source bars are sufficient**;
+no intraday acquisition is needed for the biggest block of the expansion.
+
+**Two incidental confirmations from the panels.**
+
+1. The USDJPY 1W chart carries the tool's own stats box: **`Box Size 0.5%`, `Source H/L`**.
+   That is §8.29's universal box and §2.2's high/low pivot source, printed by Hunt's own
+   tool. Neither was fitted by us and both are now directly evidenced rather than inferred.
+2. The same box reports **`Trades 18`, `winRate 38.89%`, `avgRR 0.23`**. If `avgRR` is mean
+   realised R, **Hunt's own tool reports an edge of +0.23R** — against our blind pooled
+   +0.21R (legacy) and +0.19R (§8.32). That is close enough to be worth stating plainly:
+   we are not failing to reproduce his results; we are reproducing them, and *his* edge is
+   also thin. Caveat — this is one panel, n=18, and the semantics of `avgRR` are inferred
+   from position in the layout, not documented.
+3. The Gold 2h `.gif` annotates a head-and-shoulders neckline at $4,360 with A1/A2 labels,
+   which is exactly the counter-trend legitimisation described in §4.2. Doctrine confirmed.
+
+**Data audit** (`scripts/hvf_v2_data_audit.py`). Every H1 file checked for the §8.30a trap
+— daily bars sitting in an hourly file. 30 files present, **24 with ≥6 genuinely dense
+years**:
+
+| category | usable now | earliest dense |
+| --- | --- | --- |
+| FX | USDJPY, EURUSD, GBPUSD, EURJPY, GBPJPY, EURGBP, EURAUD, CHFJPY, NZDUSD, USDCHF (10) | USDJPY 2010, rest 2018 |
+| Crypto | BTCUSD, ETHUSD, LTCUSD, ADAUSD, BNBUSD, DOGUSD (6) | BTC 2017 |
+| Indices | US500, DE40, UK100, JP225 (4) | 2016 |
+| Metals | XAUUSD, XAGUSD, XAUEUR (3) + XAU/XAG derived | 2016 |
+| Energy | XTIUSD (1) | 2016 |
+
+Rejected: `GBPAUD/GBPCAD/GBPCHF/GBPNZD_H1` — their `time` column is a **row index (1, 2,
+3…)**, not a timestamp, so they carry no calendar at all and cannot support the direction
+gate, monthly bucketing or financing. `SOLUSD` has 2 years. `HYG_NYSE_H1` has 909 rows
+total, which is why §8.22 onward could only ever find it one trade.
+
+**So the universe stands at ~25 of the ~50 §8.34 requires.** The gap is ~25, and the
+cheapest, most Hunt-faithful way to close it is the bond-yield block at daily resolution.
+
+**The caveat that matters more than the count.** *Fifty tickers are not fifty independent
+draws.* US 5Y/10Y/20Y/30Y yields correlate above 0.95 — they are close to one draw, not
+four. The six crypto series are one crypto draw. The GBP and EUR crosses share legs. The
+four equity indices move together. §8.34's design effect already inflates the requirement
+for within-chart clustering; stacking correlated instruments inflates it further instead of
+satisfying it, and would let us assemble "50 instruments" while gaining almost nothing.
+
+**Therefore the acceptance criterion for the expanded universe is not a ticker count.** It
+is the *effective* number of independent draws, estimated from the cross-correlation of the
+instruments' returns over the common window. Build the universe, then report both the
+nominal N and the effective N, and size the conclusion on the latter. A realistic target is
+~50 nominal for perhaps 15–20 effective — which, against §8.34's requirement, means the
+honest expectation is a *narrowing* of the confidence interval, not necessarily a verdict.
+
+**Order of work.** (a) Acquire the ~20 sovereign yield series at D1 — US 2/5/10/20/30Y,
+DE 2/10/30Y, UK 2/10/30Y, JP 10Y, AU 3/10Y, NO 3/10Y, CA/FR/IT/ES/CH/NZ 10Y. (b) Add
+Brent, natural gas, copper, platinum. (c) Re-source the four broken GBP crosses with real
+timestamps. (d) Compute the correlation matrix and the effective N *before* running
+anything, so the power question is answered in advance rather than rationalised after.
+(e) Only then run the frozen spec, three-wave exit, and report once.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
