@@ -2829,6 +2829,71 @@ a change of exit rule, and never cleared its significance bar has no margin left
 the things still unmodelled. **Do not size this. The next step remains §11: more instruments
 against the frozen spec, not more rules.**
 
+### 8.34 How big a backtest would settle this — and why live trading never will [V]
+
+Script: `scripts/hvf_v2_mef_power.py`. Trade-level dispersion of the **net** (post-financing,
+§8.33) blind returns, inverted through the standard one-sided power formula at α=0.05,
+power=0.90.
+
+```
+                       LEGACY                       WAVES
+chart           n   net R      sd      n   net R      sd
+GoldCFD 2h    116    0.22    2.28    142    0.02    0.89
+BTCUSD 1h     106   -0.04    2.73    115   -0.05    0.92
+USDJPY 4h     116   -0.20    2.08    139    0.14    1.40
+XAUEUR 1h      94    0.34    3.09    127   -0.03    0.84
+XAU/XAG 8h     92   -0.07    2.31    112    0.18    1.15
+WTI 18h        32    1.01    5.84     47    0.46    1.97
+
+                          LEGACY     WAVES
+pooled net edge            0.101     0.079  R
+trade-level sd             2.802     1.153  R
+observed t (naive)          0.85      1.79   (need ~1.65)
+design effect               2.29      3.13
+trades needed (corrected)  15,129     5,706
+=> INSTRUMENTS needed         163        50   (have 6)
+```
+
+**Neither is significant.** The waves exit's naive t=1.79 does clear 1.65, but HVF trades
+overlap and cluster in regime, so they are not independent draws. Deflating by the design
+effect gives an effective t of 1.79/√3.13 ≈ **1.01**. This is the same conclusion the
+shift-null reached from a completely different direction (§8.32: 83rd percentile, bar is
+95th), which is at least reassuring about the diagnosis.
+
+**The three-wave exit cuts dispersion by 2.4×, and that is its real advantage.** sd falls
+2.802 → 1.153 for a nearly unchanged net edge, so edge-per-unit-risk almost doubles
+(0.036 → 0.069 per trade). §8.31 read the waves exit as *worse* because it looked only at
+mean R. On a risk-adjusted basis it is much better, it costs a third as much to carry
+(§8.33), and it needs **a third as many instruments to prove**. Every axis except raw mean R
+prefers it. Trade it Hunt's way.
+
+**Correction to §11 and to the running recommendation.** The figure quoted repeatedly as
+"~20 instruments" was a guess and it was too low by 2.5×. At the observed net effect size,
+settling this needs **~50 instruments** on the three-wave exit — 163 on the legacy one,
+which is a further reason to drop legacy. The requirement scales as 1/effect², so it is very
+sensitive: a true edge of 0.15R would need ~14 instruments, one of 0.05R would need ~125.
+The point estimate is the planning number, not a promise.
+
+**Live trading cannot settle this, and that is decisive for how to proceed.** The blind data
+yields ~16 trades per instrument-year. Six instruments traded live produce ~96 trades/year,
+against a 5,706-trade requirement — **roughly 60 years**. Even 50 instruments running live
+would take ~7 years. A paper-trading or small-size "let's just see" phase is therefore not a
+cheap experiment that resolves the question slowly; it resolves nothing on any horizon that
+matters. **Backtesting is not the inferior substitute for live evidence here. It is the only
+instrument that can answer the question at all.**
+
+**Caveat on the design effect.** It is estimated from between- versus within-chart variance
+on six charts, so it is itself a noisy statistic, and it is pulled upward by WTI (net +0.46R
+on n=47). Treat 2–3× as the plausible range rather than 3.13 as a measurement.
+
+**So: is another backtest worth running?** Not on these six charts — that adds no
+information and is precisely the path that produced the old implementation's `MIN_RRR`
+tuned on eighteen trades. The only backtest worth building is a **wider** one: expand the
+instrument universe toward ~50 with genuine intraday history, run the spec frozen exactly as
+it stands, and change nothing else. If that data cannot be assembled, the honest conclusion
+is that the question is not answerable with the resources available and the strategy should
+not be traded — not that it should be traded on six charts' worth of hope.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

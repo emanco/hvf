@@ -195,10 +195,24 @@ median hold roughly halved) because banking a third at TP1 retires notional earl
 net is nearly insensitive to the financing rate. Per-leg spread and commission are still
 unmodelled and are material at these levels.
 
-The binding constraint is the sample: six charts. The next thing that can move the answer
-is **more instruments run against this frozen spec** — not more rules. Generating further
-candidate rules on six charts is how the previous implementation ended up tuning
-`MIN_RRR` on eighteen trades.
+**Trade it Hunt's way — the three-wave exit wins on every axis except raw mean R (§8.34).**
+It cuts trade-level dispersion 2.4× (sd 2.80 → 1.15), so edge-per-unit-risk nearly doubles;
+it costs a third as much to carry; and it needs a third as many instruments to prove.
+§8.31 called it "worse" only because it looked at mean R alone.
+
+**Sample size (§8.34).** The binding constraint is six charts. Settling this at the observed
+net effect needs **~50 instruments** on the three-wave exit (163 on legacy) — the figure
+quoted earlier as "~20" was a guess and too low by 2.5×. It scales as 1/effect², so treat
+it as a planning number, not a promise.
+
+**Live trading cannot settle it.** At ~16 trades per instrument-year, six instruments
+traded live would take ~60 years to reach the required sample; even 50 would take ~7.
+Backtesting is not the weaker substitute for live evidence here — it is the only instrument
+that can answer the question at all.
+
+The next thing that can move the answer is **more instruments run against this frozen
+spec** — not more rules. Generating further candidate rules on six charts is how the
+previous implementation ended up tuning `MIN_RRR` on eighteen trades.
 
 **Do not trust any per-instrument ranking yet.** Changing only the exit rule — same
 detection, gate, box and pick set — reshuffles which charts make money (gold +0.31 →
