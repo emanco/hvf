@@ -173,8 +173,9 @@ The red line on Hunt's charts is the stop loss.
 
 ## Status
 
-**The mechanics above are settled. The pattern is real. The trade as specified loses
-money.** (§8.38, which RETRACTS the §8.36/§8.37 "passed" verdict.)
+**The mechanics above are settled. The pattern is real. Every trade built on it that has
+been tested loses money. Verdict: NO GO** (§8.38, §8.39 — which RETRACT the §8.36/§8.37
+"passed" verdict). Do not trade this live.
 
 What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.5% box
 (Hunt's own setting), and this geometry (verified to the cent).
@@ -228,3 +229,20 @@ Financing takes 27% of the three-wave edge.
 
 **Procedural lesson.** Every rule was shift-null-tested; the assumption that a limit price
 is obtainable never was. The fill model deserved the same scepticism as the entry rules.
+
+## Verdict (§8.39)
+
+**NO GO.** Every fill-honest measurement is negative: gap-aware run −0.140R, executable
+subset −0.175R, and on held-out instruments −0.258R (breakout entry) and −0.400R (limit
+entry at C). Net is negative on 73–79 of 79 instruments.
+
+The limit-entry fix was well motivated — it removes the only gap-exposed leg — and it made
+things **worse**, because moving the entry from `C + risk/2` to `C` halves the risk
+distance, doubling leverage and therefore doubling spread and financing in R. Removing gap
+exposure buys less than the leverage penalty costs.
+
+The lift survives (positive in every cell, 57–65 of 79 instruments) but its magnitude moves
+with simulator details (+0.158R at t 3.48 in one, +0.121R at t 1.61 in another, 0.75 on the
+holdout). Real and small — not something to size positions from.
+
+**The holdout is spent.** Any further hypothesis needs fresh instruments or a fresh period.

@@ -3329,6 +3329,63 @@ The immediate lesson is procedural and cost nothing to have applied earlier: **t
 model deserved the same scepticism as the entry rules.** Every parameter was
 shift-null-tested; the assumption that a limit price is obtainable never was.
 
+### 8.39 Limit entry at the funnel centre — tested, rejected. **NO GO** [V]
+
+8.38 diagnosed the breakout entry as the sole gap-exposed leg in the trade (targets, being
+limits, *gained* +0.054R from gaps while the entry lost −0.251R) and proposed entering at
+`C` instead. `scripts/hvf_v2_limit_entry.py` tests it under pre-registered discipline: a
+third of the universe held out on a fixed seed before the file was first run, two arms
+only, chosen on the other two thirds and validated once.
+
+Entering at `C` is well motivated and not fitted: it is where the three waves project
+from, it is reachable by construction so ZigZag confirmation lag stops mattering, and
+measured on the data `C − close[arm]` has a median of −0.01·risk, so "limit at C" is
+simply "take the trade when the funnel completes".
+
+It still fails.
+
+| | net R | lift | lift t | net > 0 |
+|---|---|---|---|---|
+| **train (53)** breakout | −0.351 | +0.114 | 1.62 | 3 / 53 |
+| **train (53)** centre | **−0.468** | +0.183 | 1.47 | 6 / 53 |
+| **held out (26)** breakout | −0.258 | +0.135 | 0.75 | 3 / 26 |
+| **held out (26)** centre | **−0.400** | +0.109 | 0.33 | 5 / 26 |
+| full (79) breakout | −0.320 | +0.121 | 1.61 | 6 / 79 |
+| full (79) centre | −0.445 | +0.159 | 1.16 | 7 / 79 |
+
+The centre entry is **worse on net in every cell**, and the reason is structural rather
+than incidental: moving the entry from `C + risk/2` to `C` halves the risk distance, so
+leverage doubles, so spread and financing in R double, and every adverse fill costs twice
+as much. Removing the gap exposure buys less than the leverage penalty costs. The fix
+addressed the right defect and lost anyway.
+
+**A sizing trap worth recording.** The first run sized on the *realised* fill distance
+`|op[arm+1] − st|`, which can be arbitrarily small when the open lands near the stop; the
+shift-null diverged to 7.1e8 — the same failure mode as BTCUSD's null in 8.36a. Both arms
+now size on the planned geometry, so a bad fill costs more than 1R rather than silently
+resizing the position. This is the third time in the programme that an unbounded
+denominator has manufactured a number: **always bound the risk denominator by construction.**
+
+#### 8.39a Verdict
+
+**NO GO.** Across every fill-honest measurement taken — 8.38's gap-aware run (−0.140R),
+its executable subset (−0.175R), and both arms here on held-out instruments (−0.258R,
+−0.400R) — net expectancy after costs is **negative, deeply, and on 73 to 79 of 79
+instruments**. There is no configuration in evidence that a live account should trade.
+
+**What remains true, and what it is worth.** The lift is positive in every cell and on
+57–65 of 79 instruments, so a detected funnel really does predict direction better than
+the same trade placed elsewhere. But its *magnitude* moves with simulator details — 8.38's
+executable subset put it at +0.158R (t 3.48), this stricter simulator at +0.121R (t 1.61)
+and only 0.75 on the held-out third. A signal whose significance depends on how the legs
+are filtered is not one to size positions from. The honest statement is: **the pattern is
+real and small; the trade built on it is not viable.**
+
+**What would change the answer** is a way to express the lift that does not pay 0.4R to
+fills — meaning a wider stop (lower leverage), a longer hold, or a target structure that
+does not require a level to be hit precisely. Each is a new hypothesis. None should be
+tested against these 79 instruments again; the holdout is now spent.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
