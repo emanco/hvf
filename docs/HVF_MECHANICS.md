@@ -173,7 +173,8 @@ The red line on Hunt's charts is the stop loss.
 
 ## Status
 
-**The mechanics above are settled. Whether the strategy makes money is not.**
+**The mechanics above are settled. As of the wide run (§8.36), the strategy has a small,
+statistically real, drift-adjusted edge.**
 
 What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.5% box
 (Hunt's own setting), and this geometry (verified to the cent).
@@ -181,40 +182,51 @@ What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.
 What is null: the §8.20 rank, a reward:risk filter, an ATR floor, a stop buffer, the 14
 exit rules of §8.26, and the TP ladder as tested against entry.
 
-Where it stands: blind (pre-2023) pooled expectancy is a positive but small **+0.19 to
-+0.23R** over ~400–560 trades, reaching the **83rd percentile** against the shift-null
-where the pre-registered bar is the 95th. §8.30's "no deployable edge" verdict was
-**withdrawn** — it rested on the wrong exit geometry — but nothing has replaced it with a
-pass. The honest position is **unresolved on six instruments**.
+**Where it stands (§8.36).** Run frozen against **79 instruments** chosen to resemble
+Hunt's own universe — US yields, commodities, FX, 15 equity indices, credit ETFs — with
+their **entire history out-of-sample**, 8,798 trades:
 
-**Costs (§8.33).** Financing on 117–170× notional takes **52% of the legacy edge**
-(+0.21 → +0.10R) and **27% of the three-wave edge** (+0.11 → +0.08R). Not a kill shot, but
-"costs are a rounding error" is false at this gross — carry is the second-largest term in
-the model. The three-wave exit is much cheaper to carry (pooled drag 0.03R vs 0.11R,
-median hold roughly halved) because banking a third at TP1 retires notional early, and its
-net is nearly insensitive to the financing rate. Per-leg spread and commission are still
-unmodelled and are material at these levels.
+| | R |
+|---|---|
+| raw mean net (after financing) | +0.124 |
+| of which drift (own shift-null) | +0.043 |
+| **edge attributable to the funnel** | **+0.081** |
+| t on the lift (N_eff = 15.5) | **2.58** (bar 1.65) |
+| instruments with positive lift | 61 / 79 |
+| universe shift-null percentile | **100th** (bar 95th) |
+
+This is the first result to clear a bar set *before* the result was seen. The six-chart
+"unresolved" verdict is superseded.
+
+**Rank instruments by lift, never by raw R.** The classes that look best raw are almost
+entirely drift: yields +0.402R is **84% drift**, metals +0.286R is **82% drift**. Strip
+drift out and the funnel's contribution is flat across asset classes — roughly +0.05 to
++0.11R everywhere, best in commodities (+0.114) and FX (+0.087), essentially zero in rates
+ETFs (+0.016). The top-10-by-lift and top-10-by-raw lists barely overlap. "GoldCFD 2h
+only" (§8.28) is dead twice over: once because changing the exit alone reshuffles the raw
+ranking, once because the raw ranking was mostly measuring drift.
+
+**Breadth is the strategy.** +0.081R against a trade-level sd near 1.15 is thin. It is
+earned across the whole universe, not on a favourite instrument, and it does not license
+sizing up.
+
+**Costs (§8.33).** Financing on 117–170× notional takes **52% of the legacy edge** and
+**27% of the three-wave edge**. The three-wave exit is much cheaper to carry (drag 0.03R
+vs 0.11R, median hold roughly halved) because banking a third at TP1 retires notional
+early. **Per-leg spread is still unmodelled and is the next thing to do** — the three-wave
+exit pays it four times, which is enough to erase the weakest classes outright.
 
 **Trade it Hunt's way — the three-wave exit wins on every axis except raw mean R (§8.34).**
 It cuts trade-level dispersion 2.4× (sd 2.80 → 1.15), so edge-per-unit-risk nearly doubles;
 it costs a third as much to carry; and it needs a third as many instruments to prove.
 §8.31 called it "worse" only because it looked at mean R alone.
 
-**Sample size (§8.34).** The binding constraint is six charts. Settling this at the observed
-net effect needs **~50 instruments** on the three-wave exit (163 on legacy) — the figure
-quoted earlier as "~20" was a guess and too low by 2.5×. It scales as 1/effect², so treat
-it as a planning number, not a promise.
+**Live trading cannot settle anything here.** At ~16 trades per instrument-year, the
+sample that produced the result above would take decades to accumulate live. Backtesting
+is not the weaker substitute — it is the only instrument that can answer the question.
 
-**Live trading cannot settle it.** At ~16 trades per instrument-year, six instruments
-traded live would take ~60 years to reach the required sample; even 50 would take ~7.
-Backtesting is not the weaker substitute for live evidence here — it is the only instrument
-that can answer the question at all.
-
-The next thing that can move the answer is **more instruments run against this frozen
-spec** — not more rules. Generating further candidate rules on six charts is how the
-previous implementation ended up tuning `MIN_RRR` on eighteen trades.
-
-**Do not trust any per-instrument ranking yet.** Changing only the exit rule — same
-detection, gate, box and pick set — reshuffles which charts make money (gold +0.31 →
-+0.04, USDJPY −0.10 → +0.17, XAU/XAG +0.06 → +0.22). Earlier "GoldCFD 2h only"
-conclusions were reached under the wrong exit geometry and do not survive it.
+**Two traps worth remembering.** Assert on the data you *got*, never what you asked for:
+Yahoo silently serves quarterly bars for `range=max`, as H1 files silently held daily bars
+(§8.30a). And a shift-null needs price-regime-relative offsets — BTCUSD's null was
+nonsense (median −12.6R) because absolute entry/stop offsets were displaced across a
+$0.05-to-$100k history.

@@ -2971,6 +2971,145 @@ timestamps. (d) Compute the correlation matrix and the effective N *before* runn
 anything, so the power question is answered in advance rather than rationalised after.
 (e) Only then run the frozen spec, three-wave exit, and report once.
 
+### 8.36 The wide run — Hunt's own universe, frozen spec [V]
+
+8.34 put the sample requirement at ~50 effective instruments and showed live trading can
+never reach it (~16 trades/instrument-year: six instruments would need sixty years).
+8.35 then found that our six-chart holding was not merely small but *unrepresentative* —
+sovereign bond yields are 43% of Hunt's charts and we held none. This closes both gaps.
+
+Five steps, run strictly in order so that each one's answer was fixed before the next
+could see it.
+
+**Steps 1–3 — build the universe** (`scripts/hvf_v2_fetch_universe.py`). 56 symbols
+fetched, 0 failed: US yields (13W/5Y/10Y/30Y), 12 commodities, 16 FX including Hunt's own
+USD/KRW, 15 equity indices, 7 credit/rates ETFs, VIX. Combined with what the repo already
+held, 80 instruments with decades of daily history each.
+
+Two sourcing notes worth keeping. Yahoo's `range=max` is a **trap**: it silently
+downgrades `dataGranularity` to `3mo` while still echoing back the requested interval, so
+the first attempt returned ~168 quarterly bars per symbol labelled as daily and every
+symbol "succeeded". Explicit `period1`/`period2` plus an assertion on the granularity
+actually returned is the only safe form. This is the same family of defect as 8.30a's
+daily bars sitting in an H1 file — *always assert on what came back, never on what was
+asked for*. And the non-US yields Hunt trades (AU 10Y, NO 3Y) are **excluded for a
+structural reason, not a sourcing one**: German, Swiss and Japanese yields traded below
+zero, and a fixed-*percentage* ZigZag is undefined across zero. Recorded as a real gap.
+
+**Step 4 — count the draws, not the tickers** (`scripts/hvf_v2_effective_n.py`), run
+*before* any return was computed precisely so the number could not be negotiated
+afterwards. Mean |pairwise r| 0.163; participation ratio **N_eff = 15.7 of 79**;
+equicorrelation 5.8; block count 53. The participation ratio is the defensible figure —
+equicorrelation understates badly here because the structure is blocky, not uniform
+(`{DE40, DJI, RUT, SPX, TSX, UK100, US500}` is one bet; so is
+`{AGG, IEF, TIP, TLT, US05Y, US10Y, US30Y}`; so is the crypto complex). 15.7 is used for
+every inference below.
+
+**Step 5 — the run** (`scripts/hvf_v2_wide_run.py`). Nothing tuned: detection, direction
+gate, 0.5% box, entry at the 5th pivot, stop at the 6th, three-wave centre-anchored exit
+with breakeven at TP1. D1-sourced instruments at 3D (Hunt's own bond-yield timeframe),
+H1-sourced at 4h, one timeframe each, no sweep. The new instruments' **entire history is
+out-of-sample**. 8,798 trades, mean net +0.125R per instrument, 58/80 positive,
+t = 2.21 against the pre-registered 1.65.
+
+**A box scare that resolved to nothing.** The run appeared to hang; the diagnosis was that
+a 0.5% box on 3D bars makes nearly every bar a pivot (US10Y: 5,620 pivots from 6,749
+bars), which is both slow and, apparently, evidence the box was wrong for the timeframe.
+It is not. Hunt's *own* charts span 14% to 99.9% pivot density at 0.5% — USDJPY 1W and
+WTI 18h both sit at 99.9%, and WTI produced the largest per-chart edge in 8.33. The new
+instruments at 92–99.9% are inside the range Hunt himself trades. **No box change was
+made**; a volatility-scaled box would have added a fitted degree of freedom to fix a
+problem the evidence says does not exist. The run was slow, not broken.
+
+#### 8.36a The shift-null over the wide universe — the test that matters [V]
+
+`t = 2.21` tests the wrong null. It asks only whether the mean differs from zero, and
+there is an obvious way to clear that without the funnel meaning anything: the direction
+gate is trend-following, so on an asset that rose for twenty years it says "long" and
+collects drift. 58/80 positive with indices and metals leading is exactly what pure drift
+looks like. Buy-and-hold has drift; it is not edge.
+
+`scripts/hvf_v2_wide_null.py` applies 8.23's control to all 80: same direction, same
+entry/stop offsets, same targets, same wait window — only the anchor bar moves, 50–1500
+bars at random, 199 seeds. If the geometry carries information the real placement beats
+its own shuffles; if we are harvesting drift the shuffles score the same, because they are
+long in the same rising market.
+
+| | value |
+|---|---|
+| observed universe mean net | **+0.125 R** |
+| shift-null mean | −0.136 R |
+| null 95th percentile | +0.007 R |
+| **observed percentile** | **100.0** (bar: ≥95) |
+
+**One contaminated series, found and removed.** The crypto null mean came back at
+−2.414R, which is not a possible trade outcome. It is **BTCUSD alone** (null median
+−12.6R, worst draw −52R): its D1 history spans $0.05 to $100k, so displacing the anchor
+1,500 bars puts the *absolute* entry/stop offsets into a different price regime and the
+risk denominator becomes meaningless. The other five crypto series are clean. BTCUSD is
+therefore dropped, and its appearance in the "beats its own 95th" list was an artifact —
+the honest count is 15, not 16.
+
+The verdict survives every robustness check: ex-crypto mean +0.131 vs null +0.047 (100th);
+median-across-instruments +0.130 vs +0.005 (100th); ex-crypto median (100th).
+
+#### 8.36b Drift-adjusted edge — the honest headline [V]
+
+Subtracting each instrument's own null mean from its own result gives the part
+attributable to the funnel, with drift removed instrument by instrument. 79 instruments,
+BTCUSD dropped:
+
+| | R |
+|---|---|
+| raw mean net | +0.124 |
+| of which shift-null (drift) | +0.043 |
+| **lift attributable to the funnel** | **+0.081** |
+| sd of lift across instruments | 0.124 |
+| **t on the lift (N_eff = 15.5)** | **2.58** |
+| instruments with positive lift | **61 / 79** |
+
+Also 15/79 instruments beat their *own* 95th percentile — 20% where 5% is expected;
+scaled to N_eff that is a binomial p ≈ 0.04. Two independent framings, both clearing.
+
+**The finding that changes how instruments get picked:**
+
+| class | k | raw | drift | lift | drift as % of raw |
+|---|---|---|---|---|---|
+| commodity | 10 | +0.127 | +0.014 | **+0.114** | 11% |
+| index | 21 | +0.211 | +0.113 | +0.098 | 54% |
+| fx | 25 | +0.058 | −0.029 | +0.087 | — |
+| crypto | 5 | +0.026 | −0.040 | +0.065 | — |
+| yield | 4 | **+0.402** | +0.339 | +0.064 | **84%** |
+| metal | 6 | +0.286 | +0.234 | +0.052 | **82%** |
+| etf | 8 | −0.100 | −0.116 | +0.016 | — |
+
+The classes that look best raw are the ones that are almost entirely drift. Yields at
++0.402R and metals at +0.286R — the two headline winners, and yields are Hunt's largest
+category — are ~84% and ~82% drift respectively. Strip it out and the funnel's own
+contribution is remarkably *flat* across asset classes, roughly +0.05 to +0.11R
+everywhere, with commodities and FX contributing the most real structure and the rates
+ETFs contributing essentially none.
+
+This retro-justifies 8.33's warning that per-chart rankings were six-chart noise, and
+sharpens it: **ranking instruments by raw R is mostly ranking them by drift.** The
+top-10-by-lift list (XAUEUR +0.363, NATGAS +0.358, USDCAD +0.292, USDTRY +0.271, BNBUSD
++0.243, SENSEX +0.237, COPPER +0.230, NZDUSD +0.226, SOYBEAN +0.224, BRENT +0.223) shares
+almost nothing with the top-10-by-raw list. The instrument pick recorded in 8.28 —
+"GoldCFD 2h only" — is dead twice over.
+
+#### 8.36c Status
+
+This is the first result in the programme to clear a bar that was set before the result
+was seen, on a universe chosen for resemblance to Hunt's rather than for performance, with
+the specification frozen and the entire history out-of-sample. The edge is **+0.081R per
+trade after financing**, small, positive, and roughly uniform across asset classes.
+
+What it is not: it is not a licence to size up. +0.081R against a trade-level sd near 1.15
+is a thin edge that needs breadth — the whole universe, not a favourite instrument — and
+8.33's unmodelled cost still stands, per-leg spread charged four times by the three-wave
+exit, which is enough to erase the weakest classes entirely. The next work is spread, not
+more instruments.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
