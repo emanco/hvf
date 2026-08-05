@@ -3525,6 +3525,70 @@ longer exists. Test `forming/RL2` with the TP1 leg and its breakeven move remove
 `forming/RL2` as run here. **This must go on a third universe: the fresh 72 has now taken
 two draws.**
 
+### 8.42 The detector has not been finding the pattern [V] — found by rendering, not by arithmetic
+
+Drawing the detected funnels (`scripts/hvf_v2_figures.py`, `docs/research/figs/`) showed
+immediately what forty sections of numbers had not: **the structures being backtested do
+not look like Hunt's**. Measuring the shape confirms it. Hunt's eight, taken from the
+pivots `hvf_v2_mef.search` matches to his own drawings, against all 776,564 MEF candidates
+on the fresh 72:
+
+| | span H1→L3 | wave3/wave1 (TIME) | amp3/amp1 (PRICE) |
+|---|---|---|---|
+| Hunt, median of 8 | **68 bars** | **0.35** | **0.41** |
+| Hunt, range | 19–202 | 0.14–0.55 | 0.20–0.52 |
+| ours, median | **430 bars** | **0.01** | **0.06** |
+| ours, p25–p75 | 169–964 | 0.00–0.03 | 0.04–0.12 |
+
+**Our median third wave is ONE bar long.** That is not a wave; it is a single-bar wiggle
+at the end of a multi-year swing. Our median funnel spans 430 bars against his 68, and
+contracts to 6% of its first leg against his 41%.
+
+**Why the MEF rule degenerates.** §8.35 validated it 8/8 — but that was *recognition*: given
+a chart Hunt had drawn on, it recovers his six pivots. Turned loose on unconstrained history
+it is a purely ordinal rule (nested mutual extremes) with no scale, so the cheapest way to
+satisfy it is a huge first leg plus an arbitrarily tiny final retracement. Nothing in the
+rule says the three waves must be *comparable*. 776,564 candidates on 72 instruments is
+itself the tell.
+
+**This explains every symptom, and it is one cause, not five.** `amp3` is the risk
+denominator and the unit of every level:
+
+* stops inside 1 ATR for 33.1% of setups (§8.41) — because `amp3` is a one-bar range;
+* leverage 56–70× — same reason, `LEV = |entry|/risk`;
+* financing −0.07 to −0.10R — leverage × holding time;
+* TP3 projects from `amp1`, so at `amp3/amp1 = 0.06` it sits **~16R away** and is
+  effectively unreachable. The "high RRR" the strategy is traded for is arithmetic, not
+  attainable. Hunt's 0.41 puts TP3 at ~2.4R, which is a real target.
+* widening the stop to RL2 helped (§8.41) precisely because it partially undoes the
+  degeneracy — it substitutes a *bigger* wave's amplitude for the collapsed one.
+
+**Hunt already told us.** §6 records his invalidation criterion as **"low time and price
+symmetry"**, and §2.1 records "highly-slung". We encoded slung and never encoded time
+symmetry — it was filed as vague. It is not vague: it is `wave3/wave1` in bars, and it is
+the single discriminator that separates his eight from our 776,564.
+
+**Status of the 8.36–8.41 numbers.** They are not wrong, but they measure the wrong object.
+Every net, null and lift in that series was computed over structures that are HVF only in
+pivot ordering. §8.41's conclusion that the stop was too tight survives — it is a symptom
+of this — but its framing as *the* fix does not.
+
+**What this does NOT license.** The bounds above are eight charts, and turning them into a
+filter is exactly the move that §6's No-True-Scotsman warning and §2.1's [C] note against
+gating exist to stop. They are *doctrine-derived* (Hunt states time symmetry as a criterion;
+the numbers only put a scale on it), which is the same standing the direction gate had —
+but the direction gate was then tested. So must this be.
+
+**Pre-registered next test, on a THIRD universe (the fresh 72 has taken two draws).**
+Gate on shape — `wave3/wave1 ∈ [0.14, 0.55]` and `amp3/amp1 ∈ [0.20, 0.52]`, bounds fixed
+now from Hunt's eight and not to be adjusted — against ungated, on the same instruments,
+shift-null charged to both. Report leverage, TP3 in R, and hit rate per target alongside
+net. One look.
+
+Figures: `figs/8_42_shape.png` (the three distributions), `figs/8_42_setups.png` (six
+shape-matching funnels rendered with entry, both stops and all three targets),
+`figs/8_41_results.png`, `figs/8_41_stop_width.png`, `figs/8_41_equity.png`.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

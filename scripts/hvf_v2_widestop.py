@@ -174,7 +174,9 @@ def simulate(frame, picks):
                 break
         if size > 1e-9:
             continue
-        out.append((banked, carry, lev))
+        # `arm` is carried so callers can date a trade: this loop skips picks that
+        # overlap an open position, so the output is NOT aligned with `picks`.
+        out.append((banked, carry, lev, arm))
     return out
 
 
