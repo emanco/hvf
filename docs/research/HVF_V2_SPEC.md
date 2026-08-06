@@ -3797,6 +3797,65 @@ gross and net, the per-frame decomposition, the leverage/hold trade-off that kil
 cross-section, and a rendered gated setup (H1..L3 with entry, RL2 stop and the three
 targets) because 8.42 was found by drawing detections and not by arithmetic.
 
+### 8.46 PRE-REGISTRATION — the confirmatory run 8.44 declared unnecessary [C]
+
+**Written and committed before the data was pulled and before any return was computed.**
+8.45 suspended the 8.44 NO GO by showing its decisive cost input was wrong. Suspension is
+not a result. This is the single confirmatory test that decides the question, and it is
+specified here in full so that nothing about it can be chosen after seeing an outcome.
+
+**Universe.** IC Markets **single-stock CFDs** — NYSE, Nasdaq, EU, UK. None of the 211
+names used in the three prior universes is a single stock, so disjointness holds by
+construction and is asserted programmatically at load. Selection is deterministic and
+performance-blind: symbols sorted alphabetically inside each exchange, sampled at a fixed
+stride, `-24` relistings dropped (weeks of history), floor of 1,200 D1 bars.
+
+Stocks are the only genuinely untouched instruments the broker offers with deep history —
+the survey found 7,277 of them against 60 FX, 30 commodities and 26 indices, nearly all of
+which are already spent. Two limitations are recorded now rather than discovered later:
+
+  1. **External validity.** Hunt trades macro, not single names. A result here tests
+     whether the HVF geometry is a general property of price series, which is the claim
+     that has to hold for any of this to be real, but it is not a direct test of his
+     practice.
+  2. **Carry regime.** A long stock CFD pays roughly −7%/yr and the short side is usually
+     negative too, so this is a HARSHER carry environment than gold (−4.8%/+3.3%) or
+     GBPJPY (+2.0%). A net-negative outcome would therefore confound geometry with carry.
+     That confound is exactly why the gross/LIFT split below is pre-specified, and why the
+     verdict rule has three branches rather than two.
+
+**Configuration, frozen, identical to 8.45.** Forming arm · RL2 stop · 8.42 shape gate at
+`t3/t1 ∈ [0.14, 0.55]`, `amp3/amp1 ∈ [0.20, 0.52]` (untouched) · Hunt exit, half at TP2,
+breakeven, run TP3 · causal 500-bar trend · signed per-symbol carry and live spread read
+from `symbol_info` · `MIN_TRADES = 25` per instrument · frames **H24 (PRIMARY)** and
+**H48 (robustness only, not a second shot)**.
+
+**Statistic.** Per-instrument mean net R, then the mean across instruments.
+`t = mean / (sd / sqrt(N_eff))` with the design effect measured, not assumed:
+`N_eff = n / (1 + (n − 1) · rho_bar)`, `rho_bar` the mean pairwise correlation of
+per-instrument annual net-R series. Single stocks are heavily co-moving, so `N_eff` will
+be far below `n` and the honest t will be much smaller than a naive one. Reported either
+way.
+
+**VERDICT RULE, declared in advance. One look. No re-runs, no parameter changes, no
+post-hoc subsetting, no added frames.**
+
+| branch | condition | conclusion |
+|---|---|---|
+| **GO** | H24 net > 0 **and** t ≥ 2 **and** H48 net > 0 **and** ≥ 55% of instruments net-positive | tradeable edge; proceed to build |
+| **PARTIAL** | net ≤ 0, but LIFT over the shift-null > 0 with t ≥ 2 | geometry generalises, this carry regime does not support it |
+| **NO GO** | LIFT not distinguishable from 0 | the geometry does not generalise; the programme ends |
+
+**PARTIAL is explicitly NOT a GO** and must not be reported as one. It licenses exactly one
+further pre-registered test — the same rules restricted to instruments whose intended
+direction is cheap or paid to carry — and nothing else. It is written down now so that a
+negative net cannot later be explained away as "wrong instruments" on the strength of an
+argument invented after the fact.
+
+Prediction on the record, so the result can embarrass it: I expect **PARTIAL** — LIFT
+positive, net negative — because every section since 8.42 has found a positive lift and
+because stock CFD carry is worse than anything tested so far.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
