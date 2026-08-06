@@ -3652,6 +3652,69 @@ after the ungated version failed to. Whatever happens to HVF, `wave3/wave1` and 
 belong in the detector, and §6's "low time and price symmetry" should no longer be filed as
 vague.
 
+### 8.44 Hunt's own exit rule, and the end of the RRR argument [V]
+
+The last pre-specified idea from §8.43, run on the gated RL2 picks so every arm is exactly
+paired. Baseline reproduced at −0.055 exactly, confirming no simulator drift. Second draw
+on the third universe.
+
+| exit | trades | lev | hit | net R | t | null | LIFT | t | net>0 |
+|---|---|---|---|---|---|---|---|---|---|
+| thirds (8.43 baseline) | 1,914 | 46× | — | −0.055 | −0.90 | −0.193 | +0.139 | 2.43 | 34/69 |
+| **hunt** — half TP2, BE, run TP3 | 1,700 | 45× | — | **−0.067** | −0.80 | −0.232 | +0.166 | 1.91 | 31/68 |
+| split: TP2 only | 1,748 | 45× | **52%** | −0.066 | −0.83 | −0.217 | +0.152 | 1.88 | 32/68 |
+| split: TP3 only, BE at TP2 | 1,700 | 45× | **29%** | −0.065 | −0.70 | −0.239 | +0.177 | 1.76 | 28/68 |
+| split: both legs | 3,448 | | | −0.065 | −0.78 | | | | |
+
+Hunt's exit is **not better** than the thirds exit — −0.067 against −0.055, a difference
+well inside the noise. Dropping TP1 removes a leg that was banking ~0.1R, and removes the
+early breakeven move that was protecting it; the two cancel. Modelling the legs as two
+independent positions on the same entry (each with its own R, holding time and spread)
+gives the same −0.065, as it must: mean R per trade is (X+Y)/2 either way. **Pre-registered
+verdict: it does not clear zero net, so the answer is no.**
+
+**The RRR argument, settled.** This is the important number in this section, and it
+disposes of the premise the whole strategy was defended on:
+
+| | reward | hit rate | breakeven hit rate needed |
+|---|---|---|---|
+| TP2 | **1.01R** (mean 1.12) | **52%** | 50% |
+| TP3 | **2.03R** (mean 2.17) | **29%** | 33% |
+
+**Once the funnel is actually a funnel, the reward:risk is 1:1 and 2:1 — not the 8–16:1 the
+ungated detections showed.** §8.42 identified that inflation as an artifact of a collapsed
+`amp3`; here is its consequence in trading terms. TP2 clears its breakeven hit rate by two
+points. TP3 misses its own by four. "Even at 50/50 we are deeply in the green" is true only
+if the payoff is several R; at a 1R target, 50/50 *is* breakeven by definition, and costs
+decide the sign. They do:
+
+```
+TP3 leg, 1,740 trades:  gross +0.067   financing -0.144   spread -0.005   net -0.081
+  outcomes:  target 29%   stopped 53%   breakeven 18%
+```
+
+The runner is gross-positive only because the breakeven move converts 18% of losers into
+scratches — and financing at 45× leverage over a long hold takes twice that back. **The
+runner is where the carry is spent.** Letting it run is the most expensive part of the
+trade and it does not pay for itself.
+
+**Cumulative position.** Four defects were diagnosed and all four removed: the impossible
+fill (§8.40), the stop inside the noise (§8.41), the degenerate funnel shape (§8.42/8.43)
+and the mismatched exit (§8.44). On unseen data the result is gross ≈ 0 and net ≈ −0.06R.
+The shape-gated **lift is genuine and stable across all four exits** (+0.14 to +0.18,
+t 1.8–2.4) — the funnel does time entries better than chance — but the effect is ~0.15R and
+the cost of carrying the position that harvests it is ~0.06R more than that.
+
+**NO GO, and this one is not provisional in the way §8.40's was.** Every cause identified
+was fixed before this measurement, on data never used to form the hypothesis, with the
+verdict declared in advance.
+
+**Where a real edge would have to come from**, if this is ever revisited: not from entry
+selection — that is now solved and measured — but from carrying less. Financing is 45× ×
+holding time and is the single largest negative term in every table since §8.41. A version
+with materially lower leverage or materially shorter holds is a different strategy, not a
+tweak to this one, and would need its own hypothesis.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

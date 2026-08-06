@@ -121,8 +121,18 @@ def picks_for(frame, direction, arm_on, stop_at, gate=None):
     return out
 
 
-def simulate(frame, picks):
-    """Gap-aware fills, explicit targets. Mirrors simulate_gap's fill discipline."""
+def simulate(frame, picks, exit_style="thirds"):
+    """Gap-aware fills, explicit targets. Mirrors simulate_gap's fill discipline.
+
+    exit_style:
+      "thirds"  a third at each of TP1/TP2/TP3, stop to breakeven once TP1 trades.
+                What 8.36-8.43 measured.
+      "hunt"    no TP1 leg. Half at TP2, stop to breakeven there, the rest runs to
+                TP3. This is the rule the trader actually described.
+
+    The breakeven trigger is the NEAREST live leg either way, so it follows the leg
+    structure automatically rather than being a second knob.
+    """
     op = frame["open"].to_numpy(float)
     hi = frame["high"].to_numpy(float)
     lo = frame["low"].to_numpy(float)
@@ -150,11 +160,18 @@ def simulate(frame, picks):
         if fill is None:
             continue
 
-        legs = [(1 / 3, close[arm] + t) for t in s_["tps"]]
+        if exit_style == "hunt":
+            legs = [(0.5, close[arm] + s_["tps"][1]), (0.5, close[arm] + s_["tps"][2])]
+        else:
+            legs = [(1 / 3, close[arm] + t) for t in s_["tps"]]
         legs = [(f, t) for f, t in legs if d * (t - e) > 0]
         if not legs:
             continue
         legs.sort(key=lambda x: d * x[1])
+        # NOT renormalised. If a target sits the wrong side of entry its leg is
+        # dropped, residual size never exits, and the trade is discarded by the
+        # `size > 1e-9` check below. That is the semantics 8.36-8.43 measured, and
+        # both exit styles inherit it so the arms stay comparable.
         tp1 = legs[0][1]
 
         lev = abs(e) / risk
