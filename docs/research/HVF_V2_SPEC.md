@@ -3888,6 +3888,27 @@ against 14d on XAUUSD — because the TP3 runner has no time stop. The financing
 computed per trade from `carry` and is unaffected by which summary is printed, but the
 median badly understates how long capital is actually committed, so both are shown.
 
+**(d) EU and UK are not obtainable, so the universe is US-only.** Probed with a hard 75s
+timeout per symbol, in its own process so a hang costs one symbol rather than the run:
+
+```
+EU  1COV.ETR  0.4s KEEP (already cached)   AALB.AMS AC.PAR ACS.MAD AD.AMS
+                                           ADV.ETR AF.PAR AGN.AMS  -- all TIMEOUT
+UK  3LVO.LSE AAIF.LSE AAL.LSE AAS.LSE ABDN.LSE ABF.LSE ADM.LSE -- all TIMEOUT
+```
+
+1 of 16 returned, and that one was served from local cache in 0.4s rather than downloaded.
+The IC Markets terminal will not serve uncached LSE/Euronext/Xetra daily history at all,
+so no amount of waiting produces an EU or UK universe. The confirmatory run therefore uses
+the **131 NYSE + Nasdaq names** already on disk, selected by the same deterministic stride
+before any return existed.
+
+The cost is real and is a power cost, not a bias one: US large caps co-move far harder
+than the 79-instrument macro universe of 8.44, so `rho_bar` will be higher and `N_eff`
+lower. That is precisely the failure mode 8.46.1(b) was written to catch one paragraph
+before this one, and it is why the UNDERPOWERED branch exists. If it fires, the honest
+report is that this test could not resolve the question — not that the strategy failed.
+
 **Harness verified before use.** Pointed at 8.45's XAUUSD data it reproduces the recorded
 result exactly — net +0.1953R, 55x, 60 trades, LIFT +0.2735 — so the carry, spread and
 shift-null wiring is known good independently of anything this universe produces.
