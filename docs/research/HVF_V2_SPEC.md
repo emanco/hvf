@@ -3589,6 +3589,69 @@ Figures: `figs/8_42_shape.png` (the three distributions), `figs/8_42_setups.png`
 shape-matching funnels rendered with entry, both stops and all three targets),
 `figs/8_41_results.png`, `figs/8_41_stop_width.png`, `figs/8_41_equity.png`.
 
+### 8.43 The shape gate works as designed, and the strategy still does not pay [V]
+
+§8.42's pre-registered test, run once on a **third universe** (79 fetched, 75 used;
+`scripts/hvf_v2_fetch_third.py`). GOLD, SILVER, WTI and USDJPY are excluded by name — they
+are the underlyings of Hunt's own charts, which is where the gate's bounds came from, and
+leaving them in would have tested the filter on its own calibration data. Gate bounds were
+fixed in §8.42 before this ran and were not adjusted. Forming arm throughout.
+
+| stop | gate | trades | lev | TP3 (R) | net R | t | null | LIFT | t | net>0 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RL3 | off | 6,643 | 78× | 8.5 | −0.307 | −3.76 | −0.272 | −0.035 | −0.09 | 10/73 |
+| RL3 | on | 2,054 | 72× | 3.5 | −0.276 | −3.52 | −0.412 | +0.136 | 2.03 | 12/70 |
+| RL2 | off | 5,503 | 43× | 3.5 | −0.071 | −1.25 | −0.093 | +0.022 | 0.11 | 21/72 |
+| **RL2** | **on** | 1,914 | 46× | **2.0** | **−0.055** | −0.90 | −0.187 | **+0.132** | **2.71** | **34/69** |
+
+**The gate does exactly what §8.42 said it would.** TP3 falls from 8.5R to 3.5R at the RL3
+stop and from 3.5R to 2.0R at RL2 — Hunt's ~2.4R, arrived at from his shape bounds rather
+than fitted. Instruments in profit go 21/72 → 34/69. It discards 65% of candidates.
+
+**And it rescues the lift, which had otherwise failed to replicate.** This is the result
+that matters and it cuts both ways. Ungated, the lift over the shift-null is **zero on the
+third universe** (−0.035, t −0.09 at RL3; +0.022, t 0.11 at RL2) — against +0.16 to +0.25
+with t 2.6–4.6 on the fresh 72 in §8.40/8.41. That prior lift did **not** replicate. Gated,
+it comes back at +0.13 with t 2.03 and 2.71. So the funnel does carry information, but only
+when it is actually funnel-shaped; the ungated "edge" of §8.36–8.41 was noise that happened
+to survive one universe.
+
+**Net is still negative, and the decomposition says why:**
+
+| stop/gate | trades | gross | financing | spread | net |
+|---|---|---|---|---|---|
+| RL3/off | 6,645 | −0.201 | −0.104 | −0.008 | −0.312 |
+| RL3/on | 2,071 | −0.226 | −0.062 | −0.007 | −0.296 |
+| RL2/off | 5,519 | **+0.018** | −0.081 | −0.004 | −0.068 |
+| RL2/on | 1,945 | **+0.005** | −0.056 | −0.005 | −0.056 |
+
+**Gross is zero.** §8.41's +0.046R on the fresh 72 did not replicate either — it is +0.018
+ungated and +0.005 gated here. The gate halves financing (−0.081 → −0.056) by cutting
+leverage-days, but it trims gross by about as much, so net barely moves. Every RL2 cell
+lands at −0.06 ± 0.06 whatever we do to it.
+
+**Reading, stated plainly.** Three defects were identified and all three are now fixed:
+the impossible fill (§8.40, forming arm), the stop inside the noise (§8.41, RL2), and the
+degenerate funnel shape (§8.42/8.43, gate). After all three, on data never touched before,
+the strategy is **gross flat and net −0.06R**. The pattern is not nothing — the gated lift
+is positive at t 2.71 and 34/69 instruments are in profit — but the information in it is
+smaller than the cost of holding the position that harvests it. **This is a NO GO, and
+unlike §8.40's it is one where the diagnosed causes were actually removed first.**
+
+**One idea remains, and it should be the last.** TP1 is pinned at half the small funnel and
+now sits near 0.3R against a 2R structure, yet the exit still banks a third there and moves
+the stop to breakeven — capping the runner at ~0.1R of realised gain while leaving the full
+downside open until it triggers. That exit was built for the pre-8.41 geometry. Removing the
+TP1 leg and its breakeven move is mechanically motivated and pre-specifiable. It would be a
+**second draw on the third universe**, and it should be run with the verdict declared in
+advance: if it does not clear zero net, the answer is no.
+
+**What is worth keeping regardless.** The shape gate is the first filter in this programme
+that is doctrine-derived, parameter-free at test time, and replicated a lift on unseen data
+after the ungated version failed to. Whatever happens to HVF, `wave3/wave1` and `amp3/amp1`
+belong in the detector, and §6's "low time and price symmetry" should no longer be filed as
+vague.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

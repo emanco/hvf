@@ -50,8 +50,13 @@ SCRATCH = Path("/private/tmp/claude-501/-Users-manu-Dev-atspass/"
                "a663a16a-0df5-4d89-a954-fdf163a2a14e/scratchpad")
 
 
-def picks_for(frame, direction, arm_on, stop_at):
-    """Picks carrying EXPLICIT target prices, so the stop can move and they cannot."""
+def picks_for(frame, direction, arm_on, stop_at, gate=None):
+    """Picks carrying EXPLICIT target prices, so the stop can move and they cannot.
+
+    `gate` is an optional predicate on the six pivots (spec 8.42's shape filter). It is
+    applied to the CONFIRMED window in both arms, so gating never depends on the
+    provisional pivot and cannot smuggle in lookahead.
+    """
     piv = zigzag_pct(frame, DEFAULT_BOX_PCT)
     if len(piv) < 6:
         return []
@@ -65,6 +70,8 @@ def picks_for(frame, direction, arm_on, stop_at):
         w = [piv[j] for j in idx]
         h1, rl1, rh2, rl2, rh3, rl3 = w
         entry = rh3.price
+        if gate is not None and not gate(w):
+            continue
 
         if arm_on == "confirmed":
             arm, small_stop, dep = rl3.confirm, rl3.price, idx
