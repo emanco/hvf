@@ -206,6 +206,25 @@ class HVFTrader:
                 )
                 self.btc_donchian_scanners.append(scanner)
 
+        # ─── HVF v2 (Hunt Volatility Funnel) ─────────────────────────
+        # Ships with dry_run=True: detects, sizes, alerts and logs, places
+        # nothing. See config.HVF_V2 for why the research verdict is open.
+        self.hvf_v2_scanners = []
+        if config.HVF_V2.get("enabled"):
+            from hvf_trader.hvf_v2_scanner import HvfV2Scanner
+            for instance_cfg in config.HVF_V2.get("instances", []):
+                merged_cfg = {**config.HVF_V2, **instance_cfg}
+                merged_cfg.pop("instances", None)
+                scanner = HvfV2Scanner(
+                    order_manager=self.order_manager,
+                    trade_logger=self.trade_logger,
+                    connector=self.connector,
+                    circuit_breaker=self.circuit_breaker,
+                    alerter=self.alerter,
+                    cfg=merged_cfg,
+                )
+                self.hvf_v2_scanners.append(scanner)
+
         # ─── NR7 breakout on equity indices ──────────────────────────
         self.nr7_scanners = []
         if config.NR7_BREAKOUT.get("enabled"):
@@ -402,6 +421,18 @@ class HVFTrader:
             t.start()
             self._btc_donchian_threads.append(t)
             logger.info(f"BTC Daily Donchian scanner started: {sym}")
+
+        # Start HVF v2 scanners (one daemon thread per instrument)
+        self._hvf_v2_threads = []
+        for scanner in self.hvf_v2_scanners:
+            sym = scanner._cfg.get("instrument", "?")
+            t = threading.Thread(
+                target=scanner.start,
+                daemon=True, name=f"HvfV2-{sym}",
+            )
+            t.start()
+            self._hvf_v2_threads.append(t)
+            logger.info(f"HVF v2 scanner started: {sym}")
 
         # Start NR7 breakout scanners (one daemon thread per index)
         self._nr7_threads = []
@@ -3073,6 +3104,8 @@ class HVFTrader:
         for scanner in self.quantum_london_scanners:
             scanner.stop()
         for scanner in self.btc_donchian_scanners:
+            scanner.stop()
+        for scanner in self.hvf_v2_scanners:
             scanner.stop()
         for scanner in self.nr7_scanners:
             scanner.stop()

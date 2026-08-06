@@ -850,6 +850,60 @@ TRAILING_STOP_ATR_MULT_BY_PATTERN["NR7_BREAKOUT"] = 0
 MIN_STOP_PIPS_BY_PATTERN["NR7_BREAKOUT"] = 0
 PATTERN_FRESHNESS_BARS["NR7_BREAKOUT"] = 1
 
+# ─── HVF v2 (Hunt Volatility Funnel, rebuilt) ────────────────────────────────
+# Six pivots read as three contracting waves after a trend exhaustion, resolving
+# in the direction of the prior trend. All geometry lives in
+# hvf_trader/detector/hvf_rules.py — the SAME module the backtests import, pinned
+# by scripts/hvf_v2_rules_parity.py. Do not re-parameterise the rules here; this
+# block only chooses instruments, size and arming.
+#
+# The parameters below are spec 8.45's config, the one run on IC's own data with
+# IC's own swap and spread. They are not free knobs:
+#   arm_on "forming"  — entry rests at RH3 while the sixth pivot still forms.
+#   stop_at "rl2"     — 8.41. A DEVIATION from the user's spec, which puts the
+#                       stop just outside the tiny funnel (RL3). Not free:
+#                       on XAUUSD D1, same 134 gate-passing funnels,
+#                         RL3: TP3 median 3.42R, 42% win, net -0.109R, -8.7R total
+#                         RL2: TP3 median 2.02R, 62% win, net +0.195R, +11.7R total
+#                       The 8:1 RRR is real; what fails is the assumption that
+#                       RRR and win rate move independently. Set "rl3" to trade
+#                       the spec as written and accept the measured cost.
+#   exit_style "hunt" — no TP1 leg. Half at TP2, breakeven, the rest to TP3.
+#
+# STATUS, stated plainly: 8.44 returned NO GO, 8.45 SUSPENDED that after finding
+# financing was mis-modelled, and 8.46 came back UNDERPOWERED on a design error
+# of mine (MIN_TRADES=25 against 6.7-year series). The question is OPEN, not
+# settled either way. dry_run=True until live outcomes say otherwise — the point
+# of shipping it disarmed is to accumulate them against a rule frozen in advance.
+HVF_V2 = {
+    "enabled": True,                   # Scanner runs and alerts; dry_run gates orders
+    "pattern_type": "HVF_V2",
+    "arm_on": "forming",               # spec 8.40 — see hvf_rules
+    "stop_at": "rl2",                  # spec 8.41 — "rl3" is the user's own spec
+    "exit_style": "hunt",              # spec 8.43
+    "entry_wait_bars": 20,             # resting entry expires after 20 D1 bars
+    "max_age_bars": 3,                 # ignore setups staler than this after a restart
+    "risk_pct": 1.0,                   # entry-to-stop, on LIVE equity
+    "poll_interval_sec": 300,          # D1 strategy; no reason to poll harder
+    "magic": 20260806,                 # distinct from other strategies
+    "dry_run": True,                   # DISARMED — detection, sizing, alerts, logs only
+    "alert_on_detection": True,
+    "instances": [
+        # The three the broker-terms work in 8.45 actually covered. XAUUSD is the
+        # instrument every figure quoted above was measured on; EURUSD is the
+        # cheapest to carry; GBPJPY pays to hold short (+swap) rather than costing.
+        {"instrument": "XAUUSD"},
+        {"instrument": "EURUSD"},
+        {"instrument": "GBPJPY"},
+    ],
+}
+
+RISK_PCT_BY_PATTERN["HVF_V2"] = HVF_V2["risk_pct"]
+MIN_RRR_BY_PATTERN["HVF_V2"] = 0.0     # RRR is set by the geometry, not filtered on
+TRAILING_STOP_ATR_MULT_BY_PATTERN["HVF_V2"] = 0   # breakeven-on-TP2, not an ATR trail
+MIN_STOP_PIPS_BY_PATTERN["HVF_V2"] = 0
+PATTERN_FRESHNESS_BARS["HVF_V2"] = HVF_V2["max_age_bars"]
+
 # ─── Pip Values ──────────────────────────────────────────────────────────────
 PIP_VALUES = {
     "EURUSD": 0.0001,
@@ -901,6 +955,7 @@ def active_strategy_map() -> dict:
             out[name] = [cfg["instrument"]]
     for name, cfg in (("BTC_DONCHIAN", BTC_DONCHIAN),
                       ("NR7_BREAKOUT", NR7_BREAKOUT),
+                      ("HVF_V2", HVF_V2),
                       ("QUANTUM_LONDON", QUANTUM_LONDON)):
         if cfg.get("enabled"):                                # "instances" dicts
             out[name] = sorted(

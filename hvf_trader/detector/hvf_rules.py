@@ -52,7 +52,18 @@ TREND_LOOKBACK = 500        # bars; on H24 that is about two years
 
 # --- spec 8.41, the stop ---------------------------------------------------------------
 DEFAULT_STOP_AT = "rl2"
-DEFAULT_ARM_ON = "confirmed"
+
+# --- spec 8.40, arming -----------------------------------------------------------------
+# "forming": arm when RH3 confirms, while the sixth pivot is still forming, and take the
+# running extreme since RH3 as the funnel tip. Entry then sits ABOVE the market for a long,
+# so live this is a resting STOP order, not a market order. This is what 8.44/8.45 measured
+# -- `confirmed` waits for RL3 to confirm and misses fills.
+DEFAULT_ARM_ON = "forming"
+
+# Bars a resting entry stays valid for before the setup is abandoned. Both arms in the
+# research were given the same window, so it is part of the measured result, not a
+# live-only convenience.
+DEFAULT_ENTRY_WAIT = 20
 
 # --- spec 8.43, the exit ---------------------------------------------------------------
 # Hunt's own rule: no TP1 leg, half off at TP2, stop to breakeven there, the rest runs.
@@ -93,6 +104,23 @@ class Setup:
                     s_off=self.stop - close_at_arm,
                     tps=[t - close_at_arm for t in self.tps],
                     wait=wait, w=list(self.pivots))
+
+
+def bar_times(frame):
+    """The frame's timestamps, whichever shape it arrives in.
+
+    The research path builds frames with a `dt` COLUMN and a RangeIndex (`load_ohlc`,
+    `resample_ohlc`), which is also what `zigzag_pct` requires. Anything reading bars
+    straight off MT5 naturally produces a DatetimeIndex instead. Accept both here so a
+    caller cannot silently index a setup by row number and think it has a date.
+    """
+    if "dt" in getattr(frame, "columns", ()):
+        return frame["dt"]
+    return frame.index.to_series()
+
+
+def bar_time(frame, i: int):
+    return bar_times(frame).iloc[i]
 
 
 def shape_metrics(w) -> tuple[float, float]:
@@ -220,6 +248,11 @@ def find_setups(frame, direction: int | None = None, *,
             out.append(Setup(direction=d, arm=int(arm), entry=entry, stop=stop, tps=tps,
                              risk=risk, small_stop=small_stop, centre=centre,
                              t3_t1=t3_t1, amp3_amp1=amp3_amp1, pivots=tuple(w)))
+    if direction is None:
+        # Both directions were scanned, so the raw order is longs-then-shorts rather than
+        # chronological. Sort only here: with an explicit direction the order is the one
+        # the research simulator consumed, and the parity guard pins it.
+        out.sort(key=lambda s: s.arm)
     return out
 
 
