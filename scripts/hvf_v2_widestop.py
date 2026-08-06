@@ -117,7 +117,7 @@ def picks_for(frame, direction, arm_on, stop_at, gate=None):
         seen.add(key)
         out.append(dict(arm=int(arm), d=direction,
                         e_off=entry - close[arm], s_off=stop - close[arm],
-                        tps=[t - close[arm] for t in tps], wait=WAIT))
+                        tps=[t - close[arm] for t in tps], wait=WAIT, w=w))
     return out
 
 
@@ -200,7 +200,10 @@ def simulate(frame, picks, exit_style="thirds"):
             continue
         # `arm` is carried so callers can date a trade: this loop skips picks that
         # overlap an open position, so the output is NOT aligned with `picks`.
-        out.append((banked, carry, lev, arm))
+        # `d` is carried because real swap is direction-dependent -- IC Markets pays
+        # +3.3%/yr to hold gold short and charges -4.8%/yr to hold it long (8.45).
+        # Callers that index x[0..2] only are unaffected.
+        out.append((banked, carry, lev, arm, d))
     return out
 
 

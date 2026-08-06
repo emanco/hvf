@@ -3715,6 +3715,88 @@ holding time and is the single largest negative term in every table since §8.41
 with materially lower leverage or materially shorter holds is a different strategy, not a
 tweak to this one, and would need its own hypothesis.
 
+### 8.45 The broker's own terms, and two errors in 8.44's cost model [V]
+
+MT5 is Windows-only, so the Strategy Tester cannot run on the laptop. The terminal is on
+the VPS (`ssh hvf-vps`, ICMarketsSC-Demo 52774919, $37,232, build 6061). Bars and
+instrument terms were pulled from it read-only — no order call, no bot state touched — and
+the simulation ran here on the same 8.36–8.44 harness so the numbers stay comparable.
+
+**Reading `symbol_info` exposed two mistakes in the cost model that decided 8.41–8.44.**
+
+| | 8.36–8.44 assumed | IC Markets actually charges |
+|---|---|---|
+| XAUUSD financing | −7.0%/yr, both directions | **−4.80%/yr long, +3.29%/yr SHORT** |
+| XAUUSD spread | 4 bp modelled | 21 pts = $0.21 = 0.005% of price |
+
+The second row is the smaller error and goes the wrong way — real spread is worse than
+modelled — but spread was never binding, so it changes nothing. **The first row is a
+material error made twice.** Financing was overstated by about half, and it was charged
+symmetrically when in fact the broker *pays* to hold gold short. Every short in every table
+from 8.36 onward was debited a carry that is really a credit. `simulate` now carries `d` so
+financing can be signed correctly.
+
+Sub-daily frames also needed a data fix: every MT5 H1 export is a **splice**, serving sparse
+pre-2016 history off the same endpoint. Resampled to H4 that yields one "4h" bar per
+trading day for the first third of the series. Frames finer than a day now trim to
+sustained 3600s spacing; a day or coarser reads D1, which is genuine throughout.
+
+**XAUUSD, 8.44 config, real terms, causal 500-bar trend** (the global `direction_for` is
+lookahead and was replaced):
+
+| frame | trades | lev | hold | win | gross | fin | spread | NET | t | LIFT | total |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H4 | 97 | 98× | 27d | 58% | +0.223 | −0.387 | −0.012 | **−0.176** | −1.41 | +0.16 | −17.0R |
+| H8 | 59 | 84× | 21d | 59% | +0.402 | −0.242 | −0.010 | **+0.150** | 0.95 | +0.39 | +8.9R |
+| H12 | 47 | 81× | 20d | 53% | +0.246 | −0.200 | −0.011 | +0.036 | 0.21 | +0.27 | +1.7R |
+| **H24** | 60 | 55× | 14d | 62% | +0.290 | −0.077 | −0.018 | **+0.195** | 1.23 | +0.27 | +11.7R |
+| H48 | 43 | 39× | 21d | 58% | +0.143 | −0.061 | −0.010 | +0.071 | 0.42 | +0.07 | +3.1R |
+| H72 | 30 | 36× | 16d | 60% | +0.222 | −0.083 | −0.006 | +0.134 | 0.66 | +0.05 | +4.0R |
+
+Five of six frames are net positive, where the modelled-cost version was negative
+throughout. **The "shorter holds" escape hatch named in 8.44 is nevertheless disproved, and
+sharply.** H4 is the worst cell, not the best. Halving the frame does not halve the hold —
+27d at H4 against 14d at H24 — it *raises leverage*, 98× against 55×, because a finer
+funnel has a tighter tip and `lev = |entry|/risk`. Carry is leverage × time, so the finer
+frame pays more on both terms. The useful direction is coarser, not finer.
+
+**Cross-section at H24, every instrument on the terminal** (context, not a universe test):
+
+| | XAUUSD | GBPJPY | EURUSD | XAGUSD | US500 | DE40 | XTIUSD | BTCUSD |
+|---|---|---|---|---|---|---|---|---|
+| carry, long | −4.8% | **+2.0%** | −2.6% | −4.9% | −8.5% | −7.0% | +4.8% | **−20.0%** |
+| net R | **+0.195** | **+0.190** | **+0.179** | −0.035 | −0.089 | −0.182 | −0.218 | −0.248 |
+| trades | 60 | 69 | 51 | 56 | 16 | 25 | 15 | 42 |
+
+Three of eight positive. The ordering is close to the carry ordering: the cheapest-to-carry
+instruments finish top, BTCUSD at −20%/yr finishes last, and the two thin cells are the two
+with the fewest trades. That is the 8.41–8.44 mechanism intact — **carry decides the sign**
+— but now with a correctly-signed carry, some instruments land on the right side of it.
+
+**What this does and does not do to the 8.44 verdict.**
+
+It does not reverse it. Nothing here is significant: no t-statistic reaches 2, the best cell
+is 60 trades over 28 years, gold is one of the eight charts the 8.42 gate was calibrated
+on, and six frames on used data is a multiple comparison. The shape-gated LIFT is again
+positive everywhere (+0.05 to +0.39), consistent with every section since 8.42 — the funnel
+times entries better than chance — and that was never the disputed part.
+
+But 8.44's NO GO rested on "gross ≈ 0, and carry takes more than the edge is worth", and
+**half of that sentence was an artifact of a wrong cost input**. With the broker's real
+terms the same trades on the same rules come out positive on gold, EURUSD and GBPJPY. That
+is not a result; it is grounds for the confirmatory test that 8.44 declared unnecessary.
+
+**Status: the NO GO is suspended, not overturned.** What would settle it is one
+pre-registered run — fresh instruments not used to form any hypothesis, gold/silver/WTI/
+USDJPY excluded as gate calibration, correctly-signed per-symbol broker carry, H24 and H48
+only, one look, verdict declared in advance. Until that runs, 8.44's conclusion should be
+read as "not demonstrated" rather than "refuted", and no capital should follow it.
+
+Figure: `docs/research/figs/8_45_mt5_xauusd.png` — equity by frame, the carry wedge between
+gross and net, the per-frame decomposition, the leverage/hold trade-off that kills H4, the
+cross-section, and a rendered gated setup (H1..L3 with entry, RL2 stop and the three
+targets) because 8.42 was found by drawing detections and not by arithmetic.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder

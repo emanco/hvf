@@ -24,3 +24,6 @@ backtests/data/hvf_v2/
 
 # enumeration caches (hundreds of MB, rebuildable)
 scripts/*.pkl
+
+# MT5 broker exports pulled from the VPS terminal (regenerate with scripts/hvf_v2_mt5_*)
+backtests/data/mt5/
