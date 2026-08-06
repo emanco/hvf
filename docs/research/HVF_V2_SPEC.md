@@ -3964,6 +3964,76 @@ just the decision rule. A verdict rule guards against choosing the answer after 
 does nothing about a design that could never have produced an answer at all. Checking that
 the floor was reachable would have cost one query against the bar counts already on disk.
 
+### 8.48 BUILT -- the live scanner, disarmed [C]
+
+The research cannot resolve the question with the data it has. 8.44 said NO GO, 8.45
+suspended that on mis-modelled financing, 8.46 returned UNDERPOWERED on a design error of
+mine, and the fresh-universe supply is now partly spent. Sitting on it produces nothing.
+The one thing no re-analysis can manufacture is live outcomes against a rule frozen in
+advance, so the strategy is built and shipped **detecting but not trading**.
+
+**One definition of the geometry.** `hvf_trader/detector/hvf_rules.py` is now the only
+place the rules exist. `scripts/hvf_v2_widestop.picks_for` -- which produced every number
+in 8.36-8.47 -- is a thin adapter over it, and the live scanner imports the same module.
+Before this the live path had its own copy in `hvf_v2.detect_hvf`, which meant the demo
+account would have validated something other than what was measured.
+`scripts/hvf_v2_rules_parity.py` pins the module to commit `55976d4`: **212 instruments x 2
+arming modes x 2 stops x gated/open = 484,922 picks, zero mismatches.** Run it after any
+change to the rules, the zigzag or `mef_candidates`; a mismatch voids the backtest figures
+until it is explained.
+
+**What ships** (`hvf_trader/hvf_v2_scanner.py`, `config.HVF_V2`), which is 8.45's config:
+
+```
+arm_on   forming     stop_at  rl2      gate  8.42 shape     trend  causal 500-bar
+exit     hunt        wait     20 bars  risk  1% of equity   frame  D1
+instruments  XAUUSD, EURUSD, GBPJPY        enabled True, dry_run TRUE
+```
+
+Detection, sizing, a charted Telegram alert and a database record all run. No broker call
+is made. Frequency on 28 years of IC D1: **138 / 98 / 130 setups** on the three, about five
+per instrument per year, so this accumulates evidence slowly and honestly.
+
+**Three implementation decisions worth recording.**
+
+*Entry is a resting stop order.* Arming on `forming` means RH3 has confirmed while the
+sixth pivot is still forming, so the entry sits ABOVE the market for a long. That is a
+BUY_STOP expiring after `WAIT = 20` bars -- the same window both arms were given in the
+research, so it is part of the measured result and not a live convenience. A market order
+here would be a different strategy.
+
+*Two orders, one setup.* Hunt banks half at TP2 and runs the rest to TP3 on a breakeven
+stop. MT5 has no partial take-profit, so the user's own suggestion is used: two orders at
+the same entry with different exits, and the TP2 leg closing IS the breakeven trigger. If
+only one leg can be placed, the other is withdrawn -- half the exit is not the strategy,
+and a mutant that silently runs is worse than no trade.
+
+*The stop stays a flagged deviation.* `stop_at` defaults to `rl2` because that is what was
+measured, but `rl3` -- the user's spec, just outside the tiny funnel -- is a first-class
+option in the config, with the cost stated where the choice is made:
+
+| stop | TP3 median | 90th pct | win | gross | net | total |
+|---|---|---|---|---|---|---|
+| RL3, as specified | 3.42R | 8.44R | 42% | +0.003R | -0.109R | -8.7R |
+| RL2, as shipped | 2.02R | 3.27R | 62% | +0.290R | +0.195R | +11.7R |
+
+The 8:1 reward-to-risk the charts show is real. What does not survive contact with the data
+is the assumption that reward-to-risk and win rate move independently: pulling the stop in
+to the funnel tip takes the hit rate to 42% and gross expectancy to zero.
+
+**Three defects the wiring exposed, none of which the backtests could have caught.**
+`zigzag_pct` requires a `dt` COLUMN over a RangeIndex, so a frame read straight off MT5
+with a DatetimeIndex silently made pivot indices and row numbers interchangeable.
+`find_setups` scanned longs then shorts, so the live both-directions path returned
+non-chronological results -- now sorted, but only when direction is `None`, since with an
+explicit direction the order is the one the simulator consumed. And the chart labelled
+every setup long-centrically, inverting H and L on every short.
+
+**What this is NOT.** It is not a GO. Nothing here re-opens 8.44; the verdict is still
+suspended and still unresolved. Turning `dry_run` off is a separate decision that needs its
+own pre-registered bar -- and per 8.46's lesson, that bar must have its POWER checked
+before the data is spent, not after.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
