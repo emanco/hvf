@@ -418,7 +418,7 @@ def fig_equity(frames):
             det = simulate(f, pk)
             if len(det) < 15:
                 continue
-            for b, carry, lev, a in det:
+            for b, carry, lev, a, _d in det:      # _d added by 8.45 (signed financing)
                 net = (b - carry * RATE[c] / 100 / 365 - lev * COST_BP[c] * 1e-4)
                 rows.append((ts[min(a, len(ts) - 1)], net))
         if not rows:
