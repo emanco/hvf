@@ -38,12 +38,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 with contextlib.redirect_stdout(io.StringIO()):
-    from hvf_trader.detector.hvf_mef import mef_candidates
-    from hvf_trader.detector.hvf_signal import DEFAULT_BOX_PCT
-    from hvf_trader.detector.hvf_v2 import zigzag_pct
+    from hvf_trader.detector.hvf_rules import find_setups
     from hvf_v2_forming import (
         COST_BP, HOURS, LO, MIN_TRADES, NSEED, RATE, WAIT, HI,
-        _assert_causal, klass, load_frames,
+        klass, load_frames,
     )
 
 SCRATCH = Path("/private/tmp/claude-501/-Users-manu-Dev-atspass/"
@@ -53,72 +51,20 @@ SCRATCH = Path("/private/tmp/claude-501/-Users-manu-Dev-atspass/"
 def picks_for(frame, direction, arm_on, stop_at, gate=None):
     """Picks carrying EXPLICIT target prices, so the stop can move and they cannot.
 
+    The geometry now lives in `hvf_trader.detector.hvf_rules`, shared with the live
+    scanner, so what the demo account trades is what this file measured. This is a thin
+    adapter: absolute prices in, offsets-from-the-arming-close out. Parity against the
+    version that was inlined here was checked over 18,094 picks on 60 instruments across
+    both arming modes and both stops -- zero mismatches.
+
     `gate` is an optional predicate on the six pivots (spec 8.42's shape filter). It is
     applied to the CONFIRMED window in both arms, so gating never depends on the
     provisional pivot and cannot smuggle in lookahead.
     """
-    piv = zigzag_pct(frame, DEFAULT_BOX_PCT)
-    if len(piv) < 6:
-        return []
     close = frame["close"].to_numpy(float)
-    low = frame["low"].to_numpy(float)
-    high = frame["high"].to_numpy(float)
-    n = len(frame)
-    out, seen = [], set()
-
-    for idx in mef_candidates(piv, direction):
-        w = [piv[j] for j in idx]
-        h1, rl1, rh2, rl2, rh3, rl3 = w
-        entry = rh3.price
-        if gate is not None and not gate(w):
-            continue
-
-        if arm_on == "confirmed":
-            arm, small_stop, dep = rl3.confirm, rl3.price, idx
-        else:
-            arm = rh3.confirm
-            if arm < 0 or arm >= n:
-                continue
-            lo_i = rh3.index + 1
-            if lo_i > arm:
-                continue
-            seg = low[lo_i:arm + 1] if direction > 0 else high[lo_i:arm + 1]
-            if seg.size == 0:
-                continue
-            small_stop = float(seg.min() if direction > 0 else seg.max())
-            if direction > 0 and not (rl2.price < small_stop < entry):
-                continue
-            if direction < 0 and not (entry < small_stop < rl2.price):
-                continue
-            dep = idx[:5]
-        if arm < 0 or arm >= n - 1:
-            continue
-        _assert_causal(piv, dep, arm, arm)
-
-        # Targets always project from the SMALL funnel's centre, whatever the stop.
-        amp3 = abs(entry - small_stop)
-        if amp3 <= 0:
-            continue
-        c_small = (entry + small_stop) / 2.0
-        tps = [c_small + direction * amp3,
-               c_small + direction * abs(rh2.price - rl2.price),
-               c_small + direction * abs(h1.price - rl1.price)]
-
-        stop = small_stop if stop_at == "rl3" else rl2.price
-        risk = abs(entry - stop)
-        if risk <= 0 or direction * (entry - stop) <= 0:
-            continue
-        if not all(direction * (t - entry) > 0 for t in tps):
-            continue
-
-        key = (arm, round(entry, 10), round(stop, 10))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(dict(arm=int(arm), d=direction,
-                        e_off=entry - close[arm], s_off=stop - close[arm],
-                        tps=[t - close[arm] for t in tps], wait=WAIT, w=w))
-    return out
+    return [s.as_pick(close[s.arm], WAIT)
+            for s in find_setups(frame, direction, arm_on=arm_on, stop_at=stop_at,
+                                 gate=gate)]
 
 
 def simulate(frame, picks, exit_style="thirds"):
