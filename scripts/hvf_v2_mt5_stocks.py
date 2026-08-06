@@ -252,9 +252,18 @@ def summarise(res, label):
                 neff=neff, rho=rho)
 
 
+MIN_NEFF = 8   # below this the run cannot resolve anything -- see spec 8.46.1(b)
+
+
 def verdict(pri, rob):
-    """The pre-registered rule, applied verbatim. See spec 8.46."""
+    """The pre-registered rule, applied verbatim. See spec 8.46 and 8.46.1."""
     print("\n" + "=" * 78)
+    if pri["neff"] < MIN_NEFF:
+        print(f"  N_eff {pri['neff']:.1f} < {MIN_NEFF}: this universe co-moves too hard to")
+        print("  resolve an effect of this size either way.")
+        print("\n  VERDICT: UNDERPOWERED -- no conclusion. 8.44 stays suspended.")
+        print("=" * 78)
+        return "UNDERPOWERED"
     go = pri["net"] > 0 and pri["t_net"] >= 2 and rob["net"] > 0 and pri["pos"] >= 0.55
     partial = (not go) and pri["lift"] > 0 and pri["t_lift"] >= 2
     print(f"  H24 net {pri['net']:+.4f} (>0? {pri['net'] > 0})   "

@@ -3856,6 +3856,42 @@ Prediction on the record, so the result can embarrass it: I expect **PARTIAL** �
 positive, net negative — because every section since 8.42 has found a positive lift and
 because stock CFD carry is worse than anything tested so far.
 
+#### 8.46.1 Amendments, made before any return was computed
+
+Three changes to the pre-registration above. All were forced by infrastructure or by a
+defect in the original design, none by an outcome — at the time of writing no return on
+this universe has been computed, and the verdict rule is unchanged except where stated.
+
+**(a) Fetch order, not eligibility.** Symbols the terminal has never cached take ~45s each
+to download and two (`MSFT.NAS`, one other) block `copy_rates_range` indefinitely. The
+fetcher is now resumable and blacklists whatever it was probing when killed, and it now
+probes EU and UK before the remaining US names, because NYSE and Nasdaq already have 128
+between them and the non-US names carry the cross-sectional independence `N_eff` depends
+on. This changes which symbols are reached first under a wall-clock budget. It does not
+change which are eligible, and it cannot be steered by returns.
+
+**(b) A POWER FLOOR, which the original rule was missing.** As written, the NO GO branch
+fires when LIFT is "not distinguishable from 0" — which is also exactly what an
+underpowered test produces. That conflates *no effect* with *no evidence*, and given how
+hard single stocks co-move it was a live risk rather than a hypothetical: at `rho_bar` =
+0.30 and n = 130, `N_eff` is 3.3 and NOTHING could reach t = 2 regardless of truth. The
+8.44 universe of 79 gave `N_eff` 15.7, so a comparable floor is the right guard.
+
+> **If `N_eff` < 8, the run is declared UNDERPOWERED and no verdict is drawn from it.**
+> Figures are reported, the 8.44 NO GO stays suspended, and the question stays open.
+
+This is deliberately the branch that lets me conclude *nothing*, which is why it is being
+added before the numbers exist rather than after.
+
+**(c) Hold is reported as a median**, matching 8.45's table. The mean is 5-6x larger — 92d
+against 14d on XAUUSD — because the TP3 runner has no time stop. The financing charge is
+computed per trade from `carry` and is unaffected by which summary is printed, but the
+median badly understates how long capital is actually committed, so both are shown.
+
+**Harness verified before use.** Pointed at 8.45's XAUUSD data it reproduces the recorded
+result exactly — net +0.1953R, 55x, 60 trades, LIFT +0.2735 — so the carry, spread and
+shift-null wiring is known good independently of anything this universe produces.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
