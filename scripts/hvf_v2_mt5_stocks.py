@@ -79,10 +79,20 @@ USED = _prior_symbols()   # 211 names, all macro or ETF -- no single stock among
 
 
 def load_terms():
+    """Load broker terms, dropping anything that is not fresh.
+
+    The pre-registration assumed disjointness held by construction because no prior
+    universe contained a single stock. That was wrong in one direction: IC files a handful
+    of ETFs under "Stock CFD's", and EMB, EWZ and GDX are all in the earlier 211. They are
+    removed on the name, before any return is computed -- enforcing the freshness rule,
+    not selecting on outcome.
+    """
     terms = json.loads(TERMS.read_text())
-    bare = {k: t["symbol"].split(".")[0] for k, t in terms.items()}
-    clash = sorted({v for v in bare.values()} & USED)
-    assert not clash, f"universe is not fresh, overlaps prior work: {clash}"
+    drop = {k for k, t in terms.items() if t["symbol"].split(".")[0] in USED}
+    if drop:
+        print(f"  dropped {len(drop)} not-fresh: "
+              f"{sorted(terms[k]['symbol'] for k in drop)}")
+        terms = {k: v for k, v in terms.items() if k not in drop}
     return terms
 
 
@@ -259,8 +269,17 @@ def verdict(pri, rob):
     """The pre-registered rule, applied verbatim. See spec 8.46 and 8.46.1."""
     print("\n" + "=" * 78)
     if pri["neff"] < MIN_NEFF:
-        print(f"  N_eff {pri['neff']:.1f} < {MIN_NEFF}: this universe co-moves too hard to")
-        print("  resolve an effect of this size either way.")
+        # Distinguish the two ways power can fail. 8.46.1(b) anticipated co-movement; the
+        # run actually failed the other way, on instrument count, and saying so matters.
+        if pri["n"] < MIN_NEFF:
+            print(f"  Only {pri['n']} instruments cleared MIN_TRADES={MIN_TRADES}, so N_eff "
+                  f"{pri['neff']:.1f} < {MIN_NEFF}")
+            print(f"  is a shortage of INSTRUMENTS, not co-movement (rho_bar "
+                  f"{pri['rho']:+.3f}).")
+        else:
+            print(f"  N_eff {pri['neff']:.1f} < {MIN_NEFF} from rho_bar {pri['rho']:+.3f}: "
+                  f"this universe co-moves")
+            print("  too hard to resolve an effect of this size either way.")
         print("\n  VERDICT: UNDERPOWERED -- no conclusion. 8.44 stays suspended.")
         print("=" * 78)
         return "UNDERPOWERED"

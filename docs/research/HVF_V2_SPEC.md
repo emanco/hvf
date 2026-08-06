@@ -3913,6 +3913,57 @@ report is that this test could not resolve the question — not that the strateg
 result exactly — net +0.1953R, 55x, 60 trades, LIFT +0.2735 — so the carry, spread and
 shift-null wiring is known good independently of anything this universe produces.
 
+### 8.47 RESULT of the 8.46 confirmatory run: UNDERPOWERED, no conclusion [V]
+
+The run executed once, exactly as pre-registered in 8.46 and amended in 8.46.1, on 128
+fresh US single-stock CFDs. `EMB`, `EWZ` and `GDX` were dropped on the name because IC
+files a few ETFs under "Stock CFD's" and all three appear in the earlier 211 — the
+pre-registration's claim that disjointness held by construction was wrong in that one
+direction, and the guard caught it before any return was computed.
+
+| | instruments | trades | hold | lev | gross | net | t | pos | LIFT | t |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **H24 primary** | 6 | 249 | 21d | 35x | +0.110 | **−0.057** | −0.55 | 33% | **+0.189** | 1.90 |
+| H48 robustness | 2 | 56 | 18d | 29x | −0.244 | −0.352 | −1.90 | 0% | −0.106 | −0.62 |
+
+**`N_eff` 6.0 < 8, so the power floor fires and NO VERDICT IS DRAWN.** The 8.44 NO GO
+remains suspended and the question remains open.
+
+**The design failed, and it failed on my error, not on the market.** 8.46.1(b) guessed the
+power risk would be co-movement. It was the opposite: `rho_bar` came out **−0.121**, which
+is *favourable*, and the run died on instrument count instead. `MIN_TRADES = 25` was
+carried over unexamined from universes of 28-year macro series, and applied to stock CFDs
+whose median history is **1,680 D1 bars, about 6.7 years**:
+
+```
+D1 bars per instrument   median 1680   min 1240   max 6278
+trades per instrument    median 10     mean 11.3  max 51
+instruments with >=25 trades:  6 of 128      >=10: 70      >=1: 128
+total trades available: 1445        used by the pre-registered statistic: 249
+```
+
+The floor discarded **122 of 128 instruments and 1,196 of 1,445 trades**. XAUUSD clears 25
+easily because it has 7,000+ daily bars; a 6.7-year stock cannot, and I should have checked
+that when the floor was written rather than after the test consumed the universe.
+
+**What is NOT concluded here.** The H24 LIFT of +0.189 at t 1.90 sits exactly where every
+shape-gated figure since 8.42 has sat (+0.14 to +0.19), and net is negative in a carry
+regime predicted to be harsh. Both are *consistent* with the PARTIAL branch. Neither is
+evidence: n = 6, and 6 instruments chosen by a history-length threshold is not a sample
+anyone should update on. The H48 row is 2 instruments and means nothing at all.
+
+**Cost of the failure.** This universe is now partially spent. A pooled re-analysis with a
+floor that fits the data — no per-instrument minimum, trades pooled with instrument-level
+clustering, which would use all 1,445 — is the obvious repair and would have been the right
+design from the start. But it would be a SECOND look at data whose 6-instrument subset is
+already seen, so it is **exploratory and cannot return a GO** whatever it shows. It needs
+its own pre-registration and an explicit acknowledgement of the contamination.
+
+**Procedural lesson, added to the three in 8.44:** pre-register the *power* calculation, not
+just the decision rule. A verdict rule guards against choosing the answer after the fact; it
+does nothing about a design that could never have produced an answer at all. Checking that
+the floor was reachable would have cost one query against the bar counts already on disk.
+
 ## 9. Open questions
 
 ### 9.1 AMP2 / the target ladder
