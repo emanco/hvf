@@ -99,7 +99,15 @@ the backtests from §8.22 to §8.30 and invalidated the exit ladder those sectio
 The stop is the smallest structure on the chart. That is the entire economic case: you
 risk the compression and get paid the expansion.
 
-### TP1 is always exactly +0.5R
+**What ships uses the 4th pivot instead.** `w[5]` is Hunt's stop and is described here
+because this file documents the pattern, but 33% of those stops sit inside a single bar's
+range and are taken out by noise before the structure can resolve. `config.HVF_V2` defaults
+to `stop_at="rl2"`, the 4th pivot, which trades reward:risk for survival. See
+[Status](#status) for the measured cost of each. Everything below — the projections, TP1 at
++0.5R, the RRR formula — is derived from the *tip*, and does **not** move when the stop
+does.
+
+### TP1 is always exactly half the tip height
 
 Not approximately. Structurally, on every HVF setup that has ever existed:
 
@@ -111,6 +119,13 @@ TP1   = C + d · risk            (TP1 projects the FULL wave 3 from C)
 
 This falls out of the construction, so it needs no measuring — and it is what makes TP1
 the natural, non-arbitrary breakeven trigger.
+
+**Only against the tip stop.** `risk` in that derivation is the tip height, `|entry − w[5]|`.
+With the shipped RL2 stop the denominator is the wider distance, so TP1 lands *below* +0.5R
+— it read +0.50, +0.45 and +0.31R on the three live instruments at the last scan. Every R
+figure the scanner reports is against the stop actually in use, so expect TP1 < 0.5R and
+TP3 near 2R rather than the 3–8R the tip stop produces. Same geometry, different
+denominator.
 
 ### Reward:risk
 
@@ -125,13 +140,22 @@ structure contributes, above ~6R it is decoration (§8.31, §8.32).
 ## 5. Management
 
 1. Enter at the 5th pivot. Stop at the 6th.
-2. **TP1 (+0.5R) — take a third. Move the stop to breakeven.** The trade can no longer
-   lose.
-3. **TP2 — take a third.** Let the rest run.
-4. **TP3 — take the last third.**
+2. **TP2 — take half. Move the stop to breakeven.** The trade can no longer lose.
+3. **TP3 — the remainder runs to the far target.**
 
-The breakeven move at TP1 is what pays for holding to the far target without bleeding on
-whipsaw. It also retires a third of the notional early, which matters for carry (§8.33).
+There is **no TP1 leg**. This is Hunt's own rule as the trader described it, and §8.43
+measured it against the thirds ladder that used to be documented here (a third at each of
+TP1/TP2/TP3, breakeven at TP1). Taking a third off at +0.5R retires notional so early, and
+so close to entry, that it clips the distribution's right tail — which is where a
+contraction pattern earns. TP1 is still worth computing and still lands at exactly +0.5R;
+it is a structural landmark, not an exit.
+
+The breakeven move at TP2 is what pays for holding to the far target without bleeding on
+whipsaw.
+
+Live this needs a partial take-profit, which MT5 does not have, so it goes out as **two
+orders at the same entry** — a TP2 leg and a TP3 leg, half the size each — and the TP2 leg
+closing is what triggers the breakeven move on the TP3 leg.
 
 ## 6. Two details that bite
 
@@ -171,17 +195,65 @@ The red line on Hunt's charts is the stop loss.
 
 ---
 
+## Where the code lives
+
+The mechanics above exist in exactly one module: **`hvf_trader/detector/hvf_rules.py`**.
+The live scanner and the research scripts both import it, and
+`scripts/hvf_v2_rules_parity.py` pins it to the pre-extraction commit (484,922 picks, zero
+mismatches). If you change the rules, the zigzag or `mef_candidates`, run that script. A
+mismatch means the backtest figures no longer describe the live code, and they are void
+until it is explained.
+
+This file is canonical for the mechanics; that module is canonical for the implementation.
+They are meant to agree.
+
 ## Status
 
-**The mechanics above are settled. The pattern is real. Every trade built on it that has
-been tested loses money. Verdict: NO GO** (§8.38, §8.39 — which RETRACT the §8.36/§8.37
-"passed" verdict). Do not trade this live.
+**BUILT and shipped disarmed (§8.48, 2026-08-06).** `config.HVF_V2` runs on XAUUSD, EURUSD
+and GBPJPY at D1 with **`dry_run=True`** — it detects, sizes at 1% of equity, sends a
+charted Telegram alert and writes a record, and places no order. About five setups per
+instrument per year.
+
+**The research verdict is OPEN, not favourable and not settled.** Do not read the build as
+a GO. The sequence: §8.39 said NO GO; §8.41 widened the stop and turned gross positive;
+§8.42 found the shape gate; §8.44 said NO GO again; **§8.45 SUSPENDED that** after finding
+financing was mis-modelled (gold, EURUSD and GBPJPY turn positive on real broker terms);
+§8.46 was pre-registered to settle it and came back **UNDERPOWERED** on a design error — a
+`MIN_TRADES = 25` floor applied to 6.7-year series admitted 6 of 128 instruments. So the
+question was never answered, and the fresh-universe supply is partly spent.
+
+It ships disarmed because live outcomes against a rule frozen in advance are the one thing
+no re-analysis of the spent universes can manufacture. Turning `dry_run` off is a separate
+decision needing its own pre-registered bar — and per §8.46's lesson, that bar's **power**
+must be checked before the data is spent, not after.
+
+**The stop is a known deviation from Hunt's spec.** He puts it just outside the tiny funnel
+(RL3). §8.41 moved it to RL2 because 33% of RL3 stops sat inside a single bar's range. On
+XAUUSD D1, the same 134 gate-passing funnels:
+
+| stop | TP3 median | 90th pct | win | gross | net | total |
+|---|---|---|---|---|---|---|
+| RL3, as Hunt describes it | 3.42R | 8.44R | 42% | +0.003R | −0.109R | −8.7R |
+| RL2, as shipped | 2.02R | 3.27R | 62% | +0.290R | +0.195R | +11.7R |
+
+The 8:1 reward:risk visible in Hunt's charts is real. What fails is the assumption that
+reward:risk and win rate move independently — pulling the stop in to the funnel tip takes
+the hit rate to 42% and gross expectancy to zero. Both stops are first-class options in
+`config.HVF_V2`.
 
 What has survived testing: MEF pivot detection (8/8), the direction gate, the 0.5% box
-(Hunt's own setting), and this geometry (verified to the cent).
+(Hunt's own setting), this geometry (verified to the cent), and the §8.42 shape gate —
+`t3/t1 ∈ [0.14, 0.55]` and `amp3/amp1 ∈ [0.20, 0.52]`, the only filter that replicated out
+of sample.
 
 What is null: the §8.20 rank, a reward:risk filter, an ATR floor, a stop buffer, the 14
 exit rules of §8.26, and the TP ladder as tested against entry.
+
+### How we got here — the §8.38/§8.39 NO GO, superseded
+
+Everything from here to the end of the file is the reasoning that produced the §8.39 NO GO.
+It is kept because the mechanism it identified is still true and still the thing to beat.
+It is **superseded** as a verdict by §8.45, which found two errors in its cost model.
 
 **Where it stands (§8.38).** Run frozen against 79 instruments resembling Hunt's own
 universe, entire history out-of-sample, honest fills, all costs charged, restricted to
@@ -230,7 +302,7 @@ Financing takes 27% of the three-wave edge.
 **Procedural lesson.** Every rule was shift-null-tested; the assumption that a limit price
 is obtainable never was. The fill model deserved the same scepticism as the entry rules.
 
-## Verdict (§8.39)
+## Verdict (§8.39) — SUPERSEDED by §8.45, kept for the reasoning
 
 **NO GO.** Every fill-honest measurement is negative: gap-aware run −0.140R, executable
 subset −0.175R, and on held-out instruments −0.258R (breakout entry) and −0.400R (limit
@@ -246,3 +318,12 @@ with simulator details (+0.158R at t 3.48 in one, +0.121R at t 1.61 in another, 
 holdout). Real and small — not something to size positions from.
 
 **The holdout is spent.** Any further hypothesis needs fresh instruments or a fresh period.
+
+---
+
+*Postscript.* Two of the numbers above were wrong. §8.45 pulled IC Markets' actual swap and
+spread and found the §8.44 cost model mis-denominated financing — it is direction-dependent,
+and shorts are often a **credit** rather than a charge. That is why the NO GO is suspended
+rather than upheld. The mechanism this section identifies — leverage from a tight stop
+converting small per-trade costs into large costs in R — is still correct, and is exactly
+what widening the stop to RL2 in §8.41 addresses.
